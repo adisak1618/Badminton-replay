@@ -254,8 +254,9 @@ describe('the link and its relay credentials', () => {
     let offer: Desc | null = { gen: 1, sdp: WITH_RELAY, fresh: true };
     const helper = {
       getIce: async (): Promise<IceReply> => ({ relay: 'ok', iceServers: [{ urls: CF_URLS, username: `user-${++n}`, credential: 'c' }], ttl: 3600 }),
-      getOffer: async (_s: Session, gen: number) => (offer && offer.gen > gen ? offer : null),
+      poll: async (_s: Session, gen: number) => (offer && offer.gen > gen ? { offer } : null),
       postAnswer: async () => {},
+      end: async () => {},
     } as unknown as HelperClient;
     const sb = new PeerLink({
       role: 'scoreboard',
@@ -295,7 +296,8 @@ describe('the link and its relay credentials', () => {
     const helper = {
       getIce: async (): Promise<IceReply> => ({ relay: 'ok', iceServers: [{ urls: CF_URLS, username: `user-${++n}`, credential: 'c' }], ttl: 3600 }),
       postOffer: async (_s: Session, d: Desc) => void offers.push(d),
-      getAnswer: async () => null,
+      poll: async () => null,
+      end: async () => {},
     } as unknown as HelperClient;
     const logged: string[] = [];
     const cam = new PeerLink({
@@ -319,7 +321,7 @@ describe('the link and its relay credentials', () => {
     });
     links.push(cam);
     cam.rejoin();
-    await vi.advanceTimersByTimeAsync(300); // a fresh offer, gen 2
+    await vi.advanceTimersByTimeAsync(600); // a look at the helper (nothing), then a fresh offer, gen 2
     expect(offers.map((o) => [o.gen, o.fresh])).toEqual([[2, true]]);
     (cam as any).attempt.answeredAt = Date.now(); // the answer arrived
     const dc = (cam as any).dc as FakeDc;

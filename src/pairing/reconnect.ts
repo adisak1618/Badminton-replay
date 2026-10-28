@@ -6,7 +6,12 @@
 //   10 s without pongs, and builds a fresh connection when the channel is gone or a restart did not bring
 //   the link back;
 // - the waiting side polls the helper every 2 s for the first minute, then every 5 s, and every 5 s while
-//   the helper is unreachable ("offline").
+//   the helper is unreachable ("offline"); the camera polls faster while a link is down (1 s for the first
+//   two minutes) because a scoreboard coming back may have posted its own offer;
+// - a phone whose page comes back (screen on, `pageshow`, `online`) probes the link with one ping: no pong
+//   within PROBE_MS, or a connection that already says it failed, and the link counts as dead at once. iOS
+//   suspends the page while the screen is locked, so a connection from before is not trusted: the scoreboard
+//   answers the camera's waiting offer when it is a fresh one, else offers a fresh connection itself.
 import type { LinkState } from '../link/source';
 
 export const PING_EVERY_MS = 2000;
@@ -20,6 +25,14 @@ export const POLL_SLOW_MS = 5000;
 export const FAST_FOR_MS = 60_000;
 /** While the link is up the scoreboard still looks for a new offer now and then, in case only the camera saw a drop. */
 export const POLL_IDLE_MS = 15_000;
+/** The camera while a link is down, for CAMERA_FAST_FOR_MS, then 2 s up to CAMERA_SLOW_AFTER_MS, then 5 s. */
+export const POLL_DOWN_MS = 1000;
+export const CAMERA_FAST_FOR_MS = 2 * 60_000;
+export const CAMERA_SLOW_AFTER_MS = 10 * 60_000;
+/** A phone that posted its own offer looks for the answer this often while the attempt is young. */
+export const POLL_ANSWER_MS = 500;
+/** On resume: the one ping's deadline. */
+export const PROBE_MS = 1000;
 
 /** Why the link is down: missed pongs, ICE `failed`, or the channel/connection is gone (or the peer left). */
 export type DownCause = 'pongs' | 'ice-failed' | 'closed';
@@ -59,6 +72,46 @@ export function pollEvery(now: number, down: Down | null, offline: boolean): num
   if (offline) return POLL_SLOW_MS;
   if (!down) return POLL_IDLE_MS;
   return now - down.since < FAST_FOR_MS ? POLL_FAST_MS : POLL_SLOW_MS;
+}
+
+/** The camera's cadence while a link is down: a returning scoreboard's own offer is picked up within a second. */
+export function cameraPollEvery(now: number, down: Down | null, offline: boolean): number {
+  if (offline) return POLL_SLOW_MS;
+  if (!down) return POLL_IDLE_MS;
+  const d = now - down.since;
+  return d < CAMERA_FAST_FOR_MS ? POLL_DOWN_MS : d < CAMERA_SLOW_AFTER_MS ? POLL_FAST_MS : POLL_SLOW_MS;
+}
+
+/** A phone waiting for the answer to its own offer: every 500 ms while the attempt is young. */
+export function answerPollEvery(now: number, startedAt: number, fallback: number): number {
+  return now - startedAt < ATTEMPT_TIMEOUT_MS ? POLL_ANSWER_MS : fallback;
+}
+
+export interface ConnectionFacts {
+  /** The data channel is open and the last check found the link alive. */
+  channelOpen: boolean;
+  connectionState: RTCPeerConnectionState | 'none';
+  iceConnectionState: RTCIceConnectionState | 'none';
+}
+
+/**
+ * The page is visible again (screen on, `pageshow`, `online`): 'probe' with one ping and a PROBE_MS deadline
+ * when the connection still says it is up, else 'recover' at once.
+ */
+export function resumeAction(f: ConnectionFacts): 'probe' | 'recover' {
+  if (!f.channelOpen) return 'recover';
+  if (f.connectionState === 'none' || f.connectionState === 'failed' || f.connectionState === 'closed' || f.connectionState === 'disconnected') return 'recover';
+  if (f.iceConnectionState === 'failed' || f.iceConnectionState === 'disconnected' || f.iceConnectionState === 'closed') return 'recover';
+  return 'probe';
+}
+
+/**
+ * A scoreboard recovering after a resume, given the camera's newest offer: a fresh one is answered (the
+ * quickest way back); an ICE restart of the connection from before the screen locked is not trusted, the
+ * scoreboard offers a fresh connection instead, as it does when there is no offer at all.
+ */
+export function resumeReply(offer: { fresh: boolean } | null): 'answer' | 'offer' {
+  return offer?.fresh ? 'answer' : 'offer';
 }
 
 /** The pongs have stopped: the last one (or the channel opening) is older than three ping intervals. */

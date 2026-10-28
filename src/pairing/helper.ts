@@ -1,8 +1,11 @@
 // Client for the signaling helper (api/signal.ts, technical-design.md §4.2). Every call times out quickly so
 // "no internet" shows within 5 s (R-PAIR-1); the helper's error codes become one of a few kinds the UI words.
-import type { Offer, TurnServer } from '../../api/signal';
+import type { Offer, Side, TurnServer } from '../../api/signal';
 
-export type Desc = Pick<Offer, 'gen' | 'sdp' | 'fresh'>;
+export type Desc = Pick<Offer, 'gen' | 'sdp' | 'fresh' | 'by'>;
+
+/** What the other phone posted for this one: its newer offer, or the answer to this phone's offer. */
+export type PollReply = { offer: Desc } | { answer: Desc } | null;
 
 export type HelperErrorKind =
   | 'offline' // no internet, or the helper cannot be reached
@@ -10,6 +13,7 @@ export type HelperErrorKind =
   | 'no-session' // the pairing expired (6 h without a write) or never existed
   | 'rate-limited'
   | 'stale' // another description for this session is newer
+  | 'ended' // the other phone unpaired
   | 'helper'; // the helper answered with an error: store not configured, store down
 
 export class HelperError extends Error {
@@ -67,6 +71,7 @@ export class HelperClient {
     const code: string | undefined = json?.error;
     if (res.status === 404 && (code === 'no-room' || code === 'no-session')) throw new HelperError(code, 404);
     if (res.status === 429) throw new HelperError('rate-limited', 429);
+    if (res.status === 410 && code === 'ended') throw new HelperError('ended', 410);
     if (res.status === 409) throw new HelperError('stale', 409, code, typeof json?.gen === 'number' ? json.gen : undefined);
     // A gateway error or an HTML page instead of JSON: the helper is not reachable as such.
     if (!code || res.status === 502 || res.status === 504) throw new HelperError('offline', res.status);
@@ -84,27 +89,26 @@ export class HelperClient {
   }
 
   async postOffer(s: Session, d: Desc): Promise<void> {
-    await this.call('POST', `/sessions/${s.session}/offer`, { secret: s.secret, gen: d.gen, offer: d.sdp, fresh: d.fresh });
+    await this.call('POST', `/sessions/${s.session}/offer`, { secret: s.secret, gen: d.gen, offer: d.sdp, fresh: d.fresh, by: d.by });
+  }
+
+  /** The other phone's offer newer than `gen`, or the answer to this phone's offer `gen`, or null. */
+  async poll(s: Session, gen: number, side: Side): Promise<PollReply> {
+    const r = await this.call('GET', `/sessions/${s.session}/poll?gen=${gen}&role=${side}`, undefined, s.secret);
+    return r.json?.offer ? { offer: r.json.offer } : r.json?.answer ? { answer: r.json.answer } : null;
+  }
+
+  /** This phone unpaired: the other one learns it at its next poll, whatever became of the goodbye. */
+  async end(s: Session): Promise<void> {
+    await this.call('POST', `/sessions/${s.session}/end`, { secret: s.secret });
   }
 
   async postAnswer(s: Session, d: Desc): Promise<void> {
     await this.call('POST', `/sessions/${s.session}/answer`, { secret: s.secret, gen: d.gen, answer: d.sdp, fresh: d.fresh });
   }
 
-  /** The answer to offer `gen`, or null while there is none. */
-  async getAnswer(s: Session, gen: number): Promise<Desc | null> {
-    const r = await this.call('GET', `/sessions/${s.session}/answer?gen=${gen}`, undefined, s.secret);
-    return r.json?.answer ?? null;
-  }
-
   /** Short-lived TURN credentials for this session (api/signal.ts, mintTurn). */
   async getIce(s: Session): Promise<IceReply> {
     return (await this.call('GET', `/sessions/${s.session}/ice`, undefined, s.secret)).json;
-  }
-
-  /** The camera's offer when it is newer than `gen`, else null. */
-  async getOffer(s: Session, gen: number): Promise<Desc | null> {
-    const r = await this.call('GET', `/sessions/${s.session}/offer?gen=${gen}`, undefined, s.secret);
-    return r.json?.offer ?? null;
   }
 }

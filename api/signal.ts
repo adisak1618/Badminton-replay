@@ -8,6 +8,10 @@
 //
 // It also mints short-lived TURN credentials for a live session (GET sessions/:id/ice), so two phones that
 // share no network can still connect through a relay; the TURN key never reaches the phones.
+//
+// Either phone may offer a new connection (the camera to reconnect, a scoreboard coming back from a locked
+// screen); GET sessions/:id/poll gives each side what the other one posted. POST sessions/:id/end marks a
+// pairing one phone ended, so the other learns it even when the goodbye on the channel was lost.
 import { Redis } from '@upstash/redis';
 
 export const ROOM_TTL_S = 600; // a room code lives 10 minutes and is deleted on first read
@@ -208,17 +212,23 @@ export async function mintTurn(cfg: TurnConfig, ttlS: number, fetchImpl: Fetch =
 
 // ---- protocol of the mailbox ----
 
+export type Side = 'camera' | 'scoreboard';
+
 export interface Offer {
   gen: number;
   sdp: string;
   /** A description for a new RTCPeerConnection rather than an ICE restart of the current one. */
   fresh: boolean;
   at: number;
+  /** Which phone made it; offers before this field were the camera's. */
+  by?: Side;
 }
 export type Answer = Offer;
 
 interface Session {
   secret: string;
+  /** One phone unpaired: every later call on the session answers 410 `ended`. */
+  ended?: boolean;
 }
 
 export interface HandlerOptions {
@@ -316,6 +326,7 @@ export function createHandler(getStore: () => SignalStore | null, opts: HandlerO
     if (!raw) throw new HttpError(404, 'no-session');
     const s = JSON.parse(raw) as Session;
     if (typeof secret !== 'string' || !sameSecret(secret, s.secret)) throw new HttpError(403, 'bad-secret');
+    if (s.ended) throw new HttpError(410, 'ended');
     return s;
   };
 
@@ -378,6 +389,7 @@ export function createHandler(getStore: () => SignalStore | null, opts: HandlerO
         const gen = genOf(body.gen);
         const sdp = sdpOf(c === 'answer' ? body.answer : body.offer);
         const desc: Offer = { gen, sdp, fresh: body.fresh === true, at: now() };
+        if (c === 'offer') desc.by = body.by === 'scoreboard' ? 'scoreboard' : 'camera';
         const current = await readDesc(store, `offer:${b}`);
         if (c === 'answer' && current?.gen !== gen) throw new HttpError(409, 'stale', { gen: current?.gen ?? 0 });
         if (c === 'offer' && current && gen <= current.gen) throw new HttpError(409, 'stale', { gen: current.gen });
@@ -394,6 +406,32 @@ export function createHandler(getStore: () => SignalStore | null, opts: HandlerO
         return ready ? json(200, { [c]: desc }) : json(204);
       }
       throw new HttpError(405, 'method');
+    }
+
+    if (a === 'sessions' && b && c === 'poll') {
+      if (m !== 'GET') throw new HttpError(405, 'method');
+      await session(store, b, headerSecret);
+      const side = url.searchParams.get('role');
+      if (side !== 'camera' && side !== 'scoreboard') throw new HttpError(400, 'bad-role');
+      const gen = Number(url.searchParams.get('gen') ?? 0);
+      const offer = await readDesc(store, `offer:${b}`);
+      const mine = (offer?.by ?? 'camera') === side;
+      // The other phone's newer offer comes first: it supersedes whatever this phone is waiting for.
+      if (offer && !mine && offer.gen > gen) return json(200, { offer });
+      if (offer && mine && offer.gen === gen) {
+        const answer = await readDesc(store, `answer:${b}`);
+        if (answer?.gen === gen) return json(200, { answer });
+      }
+      return json(204);
+    }
+
+    if (a === 'sessions' && b && c === 'end') {
+      if (m !== 'POST') throw new HttpError(405, 'method');
+      const body = await readBody(req);
+      const s = await session(store, b, body.secret ?? headerSecret);
+      await store.set(`sess:${b}`, JSON.stringify({ ...s, ended: true } satisfies Session), SESSION_TTL_S);
+      await Promise.all(['offer', 'answer'].map((k) => store.take(`${k}:${b}`)));
+      return json(204);
     }
 
     if (a === 'sessions' && b && c === 'ice') {
