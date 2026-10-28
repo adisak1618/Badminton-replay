@@ -16,7 +16,9 @@
 // scored meanwhile (R-PAIR-4/8); a dropped connection rebuilt fresh; remote stop; reloads of either phone
 // rejoining with no scan; the screen of the scoreboard off for 20 s and on again (link back in seconds, §4.5);
 // a second scoreboard joining mid-match, both scoring, the same rally tapped on both counted once, the second
-// one's screen off and on while the first scores, the camera unpairing both (D14); a typed code; the QR's
+// one's screen off and on while the first scores, point reasons (D15: a winner tagged in one tap and an error
+// in two on one scoreboard, the other's game-over card showing them, tagging later from the list there, a match
+// with point reasons off recording no tag), the camera unpairing both (D14); a typed code; the QR's
 // link opened by the iPhone camera app with the viewfinder still
 // on that QR, claimed once; a version mismatch (R-PAIR-7); two phones on different networks told so, with the
 // pairing diagnostics; with the relay, two phones on different networks connecting through TURN while a shared
@@ -83,8 +85,8 @@ const chip = (p: Page) => text(p, '[data-testid=link-chip]');
 // Test hooks live here, not in the app: every RTCPeerConnection is kept on window.__pcs; window.__drop swallows
 // every outgoing data-channel message and window.__deaf every incoming one; window.__frozen holds the page's
 // timers; a channel marked __dead carries nothing either way, ever again, and window.__pcs[i].__dead makes a
-// connection say it failed: what an iPhone's connection is after its screen was locked; sessionStorage.__v3 makes this page
-// speak protocol version 3;
+// connection say it failed: what an iPhone's connection is after its screen was locked; sessionStorage.__vnext makes this page
+// speak the next protocol version (4);
 // sessionStorage.__ip replaces this page's candidates with one host candidate on that address, the way an iPhone
 // on mobile data offers only its carrier address; sessionStorage.__relay does the same but keeps the relay
 // candidates and makes the connection use only those (iceTransportPolicy 'relay'), since this Mac's own host
@@ -114,14 +116,14 @@ const HOOKS = `
       ct(real ?? id);
     };
     const send = RTCDataChannel.prototype.send;
-    const v3 = sessionStorage.getItem('__v3') === '1'; // latched at load: a page being reloaded still says goodbye in v2
+    const newer = sessionStorage.getItem('__vnext') === '1'; // latched at load: a page being reloaded still says goodbye in v3
     window.__out = [];
     window.__dcs = new Set();
     RTCDataChannel.prototype.send = function (d) {
       window.__dcs.add(this);
       if (typeof d === 'string') { window.__out.push((window.__drop || this.__dead ? 'x:' : '') + d.slice(0, 40)); if (window.__out.length > 300) window.__out.shift(); }
       if (window.__drop || this.__dead) return;
-      if (typeof d === 'string' && v3) d = d.replace('{"v":2,', '{"v":3,');
+      if (typeof d === 'string' && newer) d = d.replace('{"v":3,', '{"v":4,'); // a build one protocol version ahead
       return send.call(this, d);
     };
     const listen = RTCDataChannel.prototype.addEventListener;
@@ -206,15 +208,37 @@ async function noRelay(p: Page): Promise<void> {
   await p.route(/\/api\/signal\/sessions\/[0-9a-f]+\/ice$/, (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"relay":"not-configured"}' }));
 }
 
-async function tap(p: Page, zone: 'left' | 'right'): Promise<number> {
+/** One point. The why-was-this-point-won popup it opens (D15) is closed with "Later" unless `keepPopup`. */
+async function tap(p: Page, zone: 'left' | 'right', keepPopup = false): Promise<number> {
   const b = (await p.locator(`[data-zone=${zone}]`).boundingBox())!;
   await p.mouse.move(b.x + b.width / 2, b.y + b.height * 0.3);
   await p.mouse.down();
   await p.waitForTimeout(60);
   const at = Date.now();
   await p.mouse.up();
-  await p.waitForTimeout(850); // R-DISP-6: one point per 800 ms
+  await p.waitForTimeout(850); // R-DISP-6: one point per 800 ms; the popup rises after 350 ms
+  if (!keepPopup && (await p.locator('[data-testid=tag-later]').count())) await p.locator('[data-testid=tag-later]').click();
   return at;
+}
+
+/** The camera's match log (MatchHub keeps it in localStorage, src/link/hub.ts). */
+async function cameraLog(cam: Page): Promise<Array<{ type: string; by: string; point?: string }>> {
+  return cam.evaluate(() => JSON.parse(localStorage.getItem('bs.hub') ?? 'null')?.log?.events ?? []);
+}
+
+/** Points the camera's log has a tag for (a chip appends a newer tag for the same point). */
+const taggedPoints = async (cam: Page) => new Set((await cameraLog(cam)).filter((e) => e.type === 'tag').map((e) => e.point)).size;
+
+/** Taps for the left team until the game is over, closing each popup. */
+async function toGameOver(p: Page): Promise<void> {
+  for (let i = 0; i < 40 && !(await p.locator('[aria-label="Game over"]').count()); i++) {
+    if (await p.locator('[aria-label=Interval]').count()) {
+      await p.locator('[aria-label=Interval]').click({ position: { x: 20, y: 20 } });
+      await p.waitForTimeout(900);
+    }
+    await tap(p, 'left');
+  }
+  if (!(await p.locator('[aria-label="Game over"]').count())) throw new Error('no game over');
 }
 
 /**
@@ -606,6 +630,67 @@ async function main() {
       return `A and B ${want} after three taps; a tap on each 300 ms apart: ${once}, the cue shown`;
     });
 
+    await step('point reasons: A tags a winner in one tap and an error in two; B’s game-over card shows them (D15)', async () => {
+      const b = sbB!;
+      const before = await taggedPoints(cam);
+      await tap(sb, 'left', true);
+      await until('A’s popup', async () => (await sb.locator('[data-testid=tag-sheet]').count()) > 0, 3000);
+      if (await b.locator('[data-testid=tag-sheet]').count()) throw new Error('the popup opened on B too');
+      const offer = await until('B offers to tag', async () => (await b.locator('[data-testid=tag-offer]').count()) > 0, 3000);
+      await sb.locator('[data-testid=tag-who-A0]').click(); // A won the rally: a winner in one tap
+      await sb.locator('[data-testid=tag-shot-smash]').click();
+      await sb.locator('[data-testid=tag-skip]').click();
+      await tap(sb, 'right', true);
+      await until('A’s popup again', async () => (await sb.locator('[data-testid=tag-sheet]').count()) > 0, 3000);
+      await sb.screenshot({ path: path.join(OUT, '05e-scoreboard-tag-who.png') });
+      await sb.locator('[data-testid=tag-who-A0]').click(); // A lost this one: forced or unforced
+      await sb.locator('[data-testid=tag-unforced]').click();
+      await sb.locator('[data-testid=tag-skip]').click();
+      await until('the camera holds both tags', async () => (await taggedPoints(cam)) === before + 2, 5000);
+      await toGameOver(sb);
+      await until('B at game over with the card', async () => (await b.locator('[data-testid=stats-card]').count()) > 0, 5000);
+      const cells = await b.locator('[data-testid=stats-A0] td').allTextContents(); // singles: Player, W, Forced, FE, UE
+      if (cells.join('|') !== 'A|1|0|0|1') throw new Error(`B's card row for A: ${cells.join('|')}`);
+      await b.screenshot({ path: path.join(OUT, '05f-scoreboard-b-game-over-card.png') });
+      return `the popup on A only, B offered "${offer && 'Tap to tag'}"; winner (1 tap) and unforced error (2 taps) at the camera; B's card: A W 1, UE 1, "${await text(b, '[data-testid=stats-tagged]')}"`;
+    });
+
+    await step('tag later from the rally list on B; A’s card follows (D15)', async () => {
+      const b = sbB!;
+      const tagged = await text(sb, '[data-testid=stats-tagged]');
+      await b.locator('[data-testid=stats-tag-points]').click();
+      await until('the rally list', async () => (await b.locator('[data-testid=rally-list]').count()) > 0, 3000);
+      const first = b.locator('[data-testid^=rally-][data-testid$=-A0]').first();
+      await first.click(); // the first untagged rally: A won those, so A0 is a winner in this one tap
+      await b.locator('[data-testid=tag-skip]').click();
+      await b.locator('[data-testid=rally-list]').getByRole('button', { name: 'Close' }).click();
+      const now = await until('A’s card counts one more', async () => {
+        const t = await text(sb, '[data-testid=stats-tagged]');
+        return t !== tagged && t;
+      }, 5000);
+      return `A's card "${tagged}" -> "${now}"`;
+    });
+
+    await step('point reasons off: a new match records no tag and opens no popup (D15)', async () => {
+      const b = sbB!;
+      await sb.getByRole('button', { name: 'Menu' }).click();
+      await button(sb, 'New match').click();
+      await button(sb, /Tap again/).click();
+      await sb.locator('[aria-label="point reasons"]').getByRole('button', { name: 'Off' }).click();
+      await button(sb, 'START MATCH').click();
+      await until('B on the new match', async () => (await score(b)) === '0-0' && (await score(sb)) === '0-0', 5000);
+      await tap(sb, 'left', true);
+      await tap(b, 'right', true);
+      await sb.waitForTimeout(600);
+      for (const p of [sb, b]) {
+        if (await p.locator('[data-testid=tag-sheet]').count()) throw new Error('a popup with point reasons off');
+        if (await p.locator('[data-testid=untagged-chip]').count()) throw new Error('an untagged chip with point reasons off');
+      }
+      const tags = (await cameraLog(cam)).filter((e) => e.type === 'tag').length;
+      if (tags) throw new Error(`${tags} tag events in the new match`);
+      return `score ${await score(sb)} on both, no popup, no chip, no tag at the camera`;
+    });
+
     await step('scoreboard B screen off for 20 s while A scores; B back in seconds with the camera’s state', async () => {
       const b = sbB!;
       await screenOff(b);
@@ -701,10 +786,10 @@ async function main() {
       return `link #pair=${c}: ${ms} ms to paired, one claim, still paired 5 s later with the QR in view`;
     });
 
-    // The camera pretends to be a newer build speaking protocol v3: the scoreboard is the one to update.
+    // The camera pretends to be a newer build speaking protocol v4: the scoreboard is the one to update.
     await step('version mismatch tells which phone to update (R-PAIR-7)', async () => {
       const board = sb3!;
-      await cam.evaluate(() => sessionStorage.setItem('__v3', '1'));
+      await cam.evaluate(() => sessionStorage.setItem('__vnext', '1'));
       await cam.reload();
       await until('scoreboard mismatch chip', async () => (await chip(board)) === 'update app', 20_000);
       const title = (await board.locator('[data-testid=link-chip]').getAttribute('title')) ?? '';
