@@ -2,6 +2,7 @@
 // camera settings (R-SETUP-4).
 import { DEFAULT_SETUP, PALETTE, type MatchSetup } from '../engine';
 import { randomId } from '../engine';
+import { CORNERS, LOGO_SIZES, type Corner, type LogoSize } from '../overlay/layout';
 import { DEFAULT_CAMERA_SETTINGS, OVERLAY_DELAYS_MS, QUALITIES, type CameraSettings } from '../recording/config';
 import type { Lang } from '../speech/phrases';
 
@@ -71,6 +72,15 @@ export function loadCameraSettings(): CameraSettings {
   const s = read<Partial<CameraSettings>>(CAMERA_KEY) ?? {};
   const quality = s.quality && s.quality in QUALITIES ? s.quality : DEFAULT_CAMERA_SETTINGS.quality;
   const delayMs = (OVERLAY_DELAYS_MS as readonly number[]).includes(s.delayMs as number) ? (s.delayMs as number) : DEFAULT_CAMERA_SETTINGS.delayMs;
-  return { ...DEFAULT_CAMERA_SETTINGS, ...s, quality, delayMs };
+  const corner = (c: unknown, d: Corner): Corner => ((CORNERS as readonly unknown[]).includes(c) ? (c as Corner) : d);
+  return {
+    ...DEFAULT_CAMERA_SETTINGS,
+    ...s,
+    quality,
+    delayMs,
+    scoreCorner: corner(s.scoreCorner, DEFAULT_CAMERA_SETTINGS.scoreCorner),
+    logoCorner: corner(s.logoCorner, DEFAULT_CAMERA_SETTINGS.logoCorner),
+    logoSize: (LOGO_SIZES as readonly unknown[]).includes(s.logoSize) ? (s.logoSize as LogoSize) : DEFAULT_CAMERA_SETTINGS.logoSize,
+  };
 }
 export const saveCameraSettings = (s: CameraSettings) => write(CAMERA_KEY, s);

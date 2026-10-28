@@ -1,6 +1,6 @@
 // Segments and interruptions as a pure state machine (technical-design.md §6.5, §6.6; R-REC-5). The camera
 // controller feeds it what the browser reports; the UI and the `rec` report are read from it.
-import type { Box } from '../overlay';
+import type { Box, Corner, LogoSize } from '../overlay';
 
 export type EndReason = 'user' | 'interrupted' | 'quota' | 'error';
 
@@ -17,7 +17,15 @@ export interface Segment {
   endedAt: number | null;
   bytes: number;
   endReason: EndReason | null;
-  overlay: { box: Box; delayMs: number; mirrored: boolean; theme: string };
+  /** Where the overlays were burned in: the score panel's box and corner, and the logo's when one was shown. */
+  overlay: {
+    box: Box;
+    corner: Corner;
+    delayMs: number;
+    mirrored: boolean;
+    theme: string;
+    logo: { box: Box; corner: Corner; size: LogoSize } | null;
+  };
 }
 
 /**

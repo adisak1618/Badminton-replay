@@ -1,6 +1,7 @@
-// drawOverlay(ctx, model, box, theme): the score strip of the mockup's C3 frame, in plain Canvas 2D so it
-// runs per camera frame on the phone and in node-canvas for a later re-render (technical-design.md §6.2, §7).
-// A canvas cannot rasterise HTML, so this is not the scoreboard's DOM; it reuses its colours and type.
+// drawOverlay(ctx, model, box, theme): the score panel burned into every frame, in plain Canvas 2D so it runs
+// per camera frame on the phone and in node-canvas for a later re-render (technical-design.md §6.2, §7). A
+// canvas cannot rasterise HTML, so this is not the scoreboard's DOM. The look follows a broadcast score
+// panel: two rows, one per team, players' names in white capitals, the score in a lighter cell at the end.
 import type { OverlayModel, OverlaySide } from './model';
 
 export interface Box {
@@ -13,39 +14,30 @@ export interface Box {
 export interface OverlayTheme {
   id: string; // recorded per segment so a re-render knows which look was burned in
   font: string;
+  panelBg: string;
   nameFg: string;
   scoreBg: string;
   scoreFg: string;
-  gameBg: string;
-  gameFg: string;
+  gamesBg: string;
+  gamesFg: string;
+  footFg: string;
   flagFg: string;
   staleFg: string;
-  edge: string;
 }
 
-/** The mockup's strip: team-coloured name cells with black text, white digits on near-black, a grey game cell. */
 export const DEFAULT_THEME: OverlayTheme = {
-  id: 'strip-v1',
+  id: 'panel-v2',
   font: "-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif",
-  nameFg: '#000000',
-  scoreBg: '#111111',
+  panelBg: 'rgba(12,14,18,0.78)',
+  nameFg: '#ffffff',
+  scoreBg: 'rgba(255,255,255,0.22)',
   scoreFg: '#ffffff',
-  gameBg: '#222222',
-  gameFg: '#cccccc',
+  gamesBg: 'rgba(255,255,255,0.08)',
+  gamesFg: '#c9d0da',
+  footFg: '#9aa3b0',
   flagFg: '#ffb020',
   staleFg: '#ff4d4d',
-  edge: 'rgba(0,0,0,0.55)',
 };
-
-/** Cell widths as fractions of the box: name, score, score, name, game. */
-const CELLS = [0.27, 0.115, 0.115, 0.27, 0.23] as const;
-
-/** The fixed overlay box, bottom-left, for a W x H frame. It does not move with mirroring or the score. */
-export function overlayBox(W: number, H: number): Box {
-  const m = Math.round(H * 0.044);
-  const h = Math.round(H * 0.067);
-  return { x: m, y: H - m - h, w: Math.round(W * 0.42), h };
-}
 
 type Ctx = CanvasRenderingContext2D;
 
@@ -96,81 +88,83 @@ function shuttle(ctx: Ctx, cx: number, cy: number, size: number, color: string, 
   ctx.restore();
 }
 
-export function drawOverlay(ctx: Ctx, m: OverlayModel, box: Box, theme: OverlayTheme = DEFAULT_THEME): void {
-  const u = box.h / 72; // sizes below are for the 72 px tall box of a 1080p frame
-  const xs: number[] = [];
-  let acc = box.x;
-  for (const f of CELLS) {
-    xs.push(acc);
-    acc += f * box.w;
-  }
-  const cellW = (i: number) => CELLS[i] * box.w;
-  const cy = box.y + box.h / 2;
+// Panel geometry in units of box.h / 160 (the 1080p panel is 768 x 160): padding, two 54-unit rows, a footer.
+const PAD = 8;
+const ROW = 54;
+const GAP = 4;
+const FOOT = 28;
+const ACCENT = 6;
+const SCORE_W = 76;
+const GAMES_W = 36;
+const MARK_W = 34;
 
+export function drawOverlay(ctx: Ctx, m: OverlayModel, box: Box, theme: OverlayTheme = DEFAULT_THEME): void {
+  const u = box.h / 160;
   ctx.save();
-  roundRectPath(ctx, box, 10 * u);
-  ctx.fillStyle = theme.edge;
+  roundRectPath(ctx, box, 12 * u);
+  ctx.fillStyle = theme.panelBg;
   ctx.fill();
   ctx.clip();
   ctx.textBaseline = 'middle';
 
-  const nameCell = (i: number, s: OverlaySide, markerLeft: boolean) => {
-    const x = xs[i];
-    const w = cellW(i);
+  const x0 = box.x + PAD * u;
+  const x1 = box.x + box.w - PAD * u;
+  const row = (i: number, s: OverlaySide) => {
+    const y = box.y + (PAD + i * (ROW + GAP)) * u;
+    const h = ROW * u;
+    const cy = y + h / 2;
+    // A thin team-colour accent keeps A and B recognisable without flags.
     ctx.fillStyle = s.color;
-    ctx.fillRect(x, box.y, w, box.h);
-    const pad = 12 * u;
-    const mark = 30 * u; // reserved even when not serving, so the name never jumps
-    const textW = w - 2 * pad - mark;
-    const text = fit(ctx, s.name, textW, 34 * u, 20 * u, theme.font);
-    ctx.fillStyle = theme.nameFg;
-    if (markerLeft) {
-      ctx.textAlign = 'right';
-      ctx.fillText(text, x + w - pad, cy);
-      if (s.serving) shuttle(ctx, x + pad + mark / 2, cy, mark, theme.nameFg, true);
-    } else {
-      ctx.textAlign = 'left';
-      ctx.fillText(text, x + pad, cy);
-      if (s.serving) shuttle(ctx, x + w - pad - mark / 2, cy, mark, theme.nameFg, false);
-    }
-  };
-  const scoreCell = (i: number, score: number) => {
+    ctx.fillRect(x0, y, ACCENT * u, h);
+    const scoreX = x1 - SCORE_W * u;
     ctx.fillStyle = theme.scoreBg;
-    ctx.fillRect(xs[i], box.y, cellW(i), box.h);
+    ctx.fillRect(scoreX, y, SCORE_W * u, h);
     ctx.fillStyle = theme.scoreFg;
     ctx.textAlign = 'center';
-    ctx.fillText(fit(ctx, String(score), cellW(i) - 8 * u, 48 * u, 24 * u, theme.font, 800), xs[i] + cellW(i) / 2, cy + 2 * u);
+    ctx.fillText(fit(ctx, String(s.score), (SCORE_W - 8) * u, 42 * u, 22 * u, theme.font, 800), scoreX + (SCORE_W * u) / 2, cy + 2 * u);
+    if (m.flag?.team === s.team) {
+      // The team with game or match point gets an amber underline under its score.
+      ctx.fillStyle = theme.flagFg;
+      ctx.fillRect(scoreX, y + h - 4 * u, SCORE_W * u, 4 * u);
+    }
+    const gamesX = scoreX - GAMES_W * u;
+    ctx.fillStyle = theme.gamesBg;
+    ctx.fillRect(gamesX, y, GAMES_W * u, h);
+    ctx.fillStyle = theme.gamesFg;
+    ctx.fillText(fit(ctx, String(s.games), (GAMES_W - 6) * u, 24 * u, 14 * u, theme.font), gamesX + (GAMES_W * u) / 2, cy);
+    const markX = gamesX - MARK_W * u;
+    if (s.serving) shuttle(ctx, markX + (MARK_W * u) / 2, cy, 26 * u, theme.nameFg, false);
+    const nameX = x0 + (ACCENT + 12) * u;
+    ctx.fillStyle = theme.nameFg;
+    ctx.textAlign = 'left';
+    ctx.fillText(fit(ctx, s.players, markX - 6 * u - nameX, 30 * u, 18 * u, theme.font), nameX, cy + u);
   };
+  row(0, m.left);
+  row(1, m.right);
 
-  nameCell(0, m.left, false);
-  scoreCell(1, m.left.score);
-  scoreCell(2, m.right.score);
-  nameCell(3, m.right, true);
-  // A hairline between the two scores.
-  ctx.fillStyle = theme.gameBg;
-  ctx.fillRect(xs[2] - u, box.y + 12 * u, 2 * u, box.h - 24 * u);
-
-  // Game cell: "G2  1-0" on top; the status (game/match point, interval, final, stale link) below.
-  const gx = xs[4];
-  const gw = cellW(4);
-  ctx.fillStyle = theme.gameBg;
-  ctx.fillRect(gx, box.y, gw, box.h);
-  ctx.textAlign = 'center';
-  ctx.fillStyle = theme.gameFg;
-  const top = `G${m.game}  ${m.left.games}-${m.right.games}`;
+  // Footer: the game number, and the status (game/match point, interval, final, link lost) when there is one.
+  const fy = box.y + (PAD + 2 * (ROW + GAP)) * u + (FOOT * u) / 2;
+  ctx.textAlign = 'left';
+  ctx.fillStyle = theme.footFg;
+  ctx.fillText(fit(ctx, `GAME ${m.game}`, 200 * u, 20 * u, 12 * u, theme.font), x0 + (ACCENT + 12) * u, fy);
   const status = statusText(m);
-  ctx.fillText(fit(ctx, top, gw - 12 * u, status ? 26 * u : 30 * u, 16 * u, theme.font), gx + gw / 2, status ? box.y + box.h * 0.33 : cy);
   if (status) {
+    ctx.textAlign = 'right';
     ctx.fillStyle = m.stale ? theme.staleFg : theme.flagFg;
-    ctx.fillText(fit(ctx, status, gw - 12 * u, 20 * u, 12 * u, theme.font, 800), gx + gw / 2, box.y + box.h * 0.72);
+    ctx.fillText(fit(ctx, status, x1 - x0 - 230 * u, 20 * u, 12 * u, theme.font, 800), x1 - 4 * u, fy);
   }
   ctx.restore();
+}
+
+/** The optional channel or show logo (round 2): drawn as is, into its box. */
+export function drawLogo(ctx: Ctx, image: CanvasImageSource, box: Box): void {
+  ctx.drawImage(image, box.x, box.y, box.w, box.h);
 }
 
 export function statusText(m: OverlayModel): string {
   if (m.stale) return 'LINK LOST';
   if (m.phase === 'matchOver') return m.winner ? 'FINAL' : 'FINAL · DRAW';
-  if (m.phase === 'gameOver') return `GAME ${m.game} END`;
+  if (m.phase === 'gameOver') return 'GAME OVER';
   if (m.phase === 'interval') return 'INTERVAL';
   if (m.flag) return m.flag.kind === 'matchPoint' ? 'MATCH POINT' : 'GAME POINT';
   return '';

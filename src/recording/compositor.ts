@@ -1,9 +1,14 @@
 // Camera frame + overlay, once per delivered camera frame (technical-design.md §6.2): a hidden <video> plays
 // the camera stream, requestVideoFrameCallback draws it into the canvas and paints the overlay on top. The
 // canvas is the visible preview and the source of captureStream, so the preview is exactly what is recorded.
-import { drawOverlay, type Box, type OverlayModel } from '../overlay';
+import { drawLogo, drawOverlay, type Box, type OverlayModel } from '../overlay';
 
-export type OverlayFeed = (now: number) => { model: OverlayModel; box: Box } | null;
+export interface OverlayFrame {
+  score: { model: OverlayModel; box: Box } | null;
+  logo: { image: CanvasImageSource; box: Box } | null;
+}
+
+export type OverlayFeed = (now: number) => OverlayFrame;
 
 type FrameVideo = HTMLVideoElement & {
   requestVideoFrameCallback?: (cb: (now: number) => void) => number;
@@ -100,7 +105,8 @@ export class Compositor {
       ctx.drawImage(v, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, W, H);
     }
     const o = this.overlay(Date.now());
-    if (o) drawOverlay(ctx, o.model, o.box);
+    if (o.logo) drawLogo(ctx, o.logo.image, o.logo.box);
+    if (o.score) drawOverlay(ctx, o.score.model, o.score.box);
 
     this.drawn++;
     if (this.lastFrame != null) this.longestGapMs = Math.max(this.longestGapMs, now - this.lastFrame);

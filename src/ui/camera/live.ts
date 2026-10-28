@@ -5,8 +5,10 @@ import { LocalSource } from '../../link/local';
 import { NoSource } from '../../link/none';
 import type { PeerInfo } from '../../link/source';
 import { store } from '../../match/live';
+import { loadLogo } from '../../match/persist';
 import { deviceId, loadCameraSettings, saveCameraSettings } from '../../match/prefs';
 import { CameraController } from '../../recording/controller';
+import { decodeLogo } from '../../recording/logo';
 
 export const thisDevice = (): PeerInfo => ({ id: deviceId(), ua: navigator.userAgent, app: APP_BUILD });
 
@@ -23,6 +25,10 @@ export function cameraController(): CameraController {
       if (s !== saved) saveCameraSettings((saved = s)); // R-SETUP-4 choices are kept per device
     });
     controller = c;
+    loadLogo()
+      .then((png) => png && decodeLogo(png))
+      .then((logo) => logo && c.setLogo(logo))
+      .catch(() => {}); // no logo stored, or it no longer decodes: run without one
   }
   return controller;
 }

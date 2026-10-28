@@ -3,8 +3,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { other, reduce } from '../../engine';
 import type { LocalSource } from '../../link/local';
+import { saveLogo } from '../../match/persist';
+import type { Corner } from '../../overlay';
 import { DIM_AFTER_MS, LOW_MINUTES, OVERLAY_DELAYS_MS, QUALITIES, type Quality } from '../../recording/config';
 import type { CameraController } from '../../recording/controller';
+import { LOGO_TYPES, prepareLogo } from '../../recording/logo';
 import { current, isActive, segmentMs } from '../../recording/session';
 import { elapsed } from '../format';
 import { useNow } from '../useNow';
@@ -20,6 +23,13 @@ interface Props {
   onLeave: () => void;
   onUpdate: (() => void) | null;
 }
+
+const CORNER_OPTIONS: Array<[Corner, string]> = [
+  ['tl', '↖'],
+  ['tr', '↗'],
+  ['bl', '↙'],
+  ['br', '↘'],
+];
 
 function Seg<T extends string | number | boolean>({
   label,
@@ -53,6 +63,8 @@ export function CameraScreen({ ctrl, demo, onToggleDemo, onRecordings, onLeave, 
   const [dimmed, setDimmed] = useState(false);
   const lastTouch = useRef(Date.now());
   const previewRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [logoError, setLogoError] = useState<string | null>(null);
   const { session, settings } = snap;
   const active = isActive(session.phase);
   const c3 = active || session.phase === 'interrupted' || session.phase === 'full';
@@ -83,6 +95,23 @@ export function CameraScreen({ ctrl, demo, onToggleDemo, onRecordings, onLeave, 
     }, 1000);
     return () => clearInterval(id);
   }, [active]);
+
+  // Round 2: an optional logo, downscaled and kept on this device; it is drawn into the frames like the score.
+  const addLogo = async (input: HTMLInputElement) => {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    setLogoError(null);
+    try {
+      const { logo, png } = await prepareLogo(file);
+      if (ctrl.setLogo(logo)) await saveLogo(png);
+    } catch (err) {
+      setLogoError((err as Error).message || 'This image could not be used.');
+    }
+  };
+  const removeLogo = async () => {
+    if (ctrl.setLogo(null)) await saveLogo(null).catch(() => {});
+  };
 
   const live = useMemo(() => (mirror.config ? reduce(mirror.config, mirror.events) : null), [mirror.config, mirror.events]);
   const lastScore =
@@ -200,44 +229,73 @@ export function CameraScreen({ ctrl, demo, onToggleDemo, onRecordings, onLeave, 
             <HoldButton label="Hold to stop recording" onHold={() => ctrl.stopRec('user')} disabled={session.phase !== 'recording'} />
           </aside>
         ) : (
-          <aside className="flex w-[240px] shrink-0 flex-col gap-1.5 overflow-y-auto pb-1">
-            <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1.5">
-              <Seg
-                label="Quality"
-                value={settings.quality}
-                options={(Object.keys(QUALITIES) as Quality[]).map((q) => [q, q])}
-                onChange={(quality) => ctrl.setSettings({ quality })}
-              />
-              <Seg label="Audio" value={settings.audio} options={[[true, 'On'], [false, 'Off']]} onChange={(audio) => ctrl.setSettings({ audio })} />
-              <Seg
-                label="Mirror overlay"
-                value={settings.mirrored}
-                options={[[false, 'Off'], [true, 'On']]}
-                onChange={(mirrored) => ctrl.setSettings({ mirrored })}
-              />
-              <Seg
-                label="Overlay delay"
-                value={settings.delayMs}
-                options={OVERLAY_DELAYS_MS.map((d) => [d, `${d / 1000} s`] as [number, string])}
-                onChange={(delayMs) => ctrl.setSettings({ delayMs })}
-              />
-            </div>
-            <div className="text-xs leading-snug">{storageLine(settings.quality)}</div>
-            {snap.opfs === 'unavailable' && (
-              <div className="text-xs font-semibold text-amber">Recording needs normal browsing mode (not Private Browsing).</div>
-            )}
-            {session.phase === 'failed' && (
-              <div className="text-xs text-amber" role="alert">
-                {session.message}{' '}
-                <button className="underline" onClick={() => ctrl.dismiss()}>
-                  OK
-                </button>
+          <aside className="flex w-[240px] shrink-0 flex-col gap-1.5 pb-1">
+            <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto">
+              <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1.5">
+                <Seg
+                  label="Quality"
+                  value={settings.quality}
+                  options={(Object.keys(QUALITIES) as Quality[]).map((q) => [q, q])}
+                  onChange={(quality) => ctrl.setSettings({ quality })}
+                />
+                <Seg label="Audio" value={settings.audio} options={[[true, 'On'], [false, 'Off']]} onChange={(audio) => ctrl.setSettings({ audio })} />
+                <Seg
+                  label="Mirror overlay"
+                  value={settings.mirrored}
+                  options={[[false, 'Off'], [true, 'On']]}
+                  onChange={(mirrored) => ctrl.setSettings({ mirrored })}
+                />
+                <Seg
+                  label="Overlay delay"
+                  value={settings.delayMs}
+                  options={OVERLAY_DELAYS_MS.map((d) => [d, `${d / 1000} s`] as [number, string])}
+                  onChange={(delayMs) => ctrl.setSettings({ delayMs })}
+                />
+                <Seg label="Score at" value={settings.scoreCorner} options={CORNER_OPTIONS} onChange={(scoreCorner) => ctrl.setSettings({ scoreCorner })} />
+                <span className="lab self-center">Logo</span>
+                <span className="flex gap-1.5">
+                  <button className="btn min-h-9 flex-1 px-2 py-1 text-sm" onClick={() => fileRef.current?.click()} data-testid="logo-add">
+                    {snap.logo ? 'Change…' : 'Add logo…'}
+                  </button>
+                  {snap.logo && (
+                    <button className="btn btn-ghost min-h-9 px-2 py-1 text-sm" onClick={() => void removeLogo()} data-testid="logo-remove">
+                      Remove
+                    </button>
+                  )}
+                </span>
+                {snap.logo && (
+                  <>
+                    <Seg label="Logo at" value={settings.logoCorner} options={CORNER_OPTIONS} onChange={(logoCorner) => ctrl.setSettings({ logoCorner })} />
+                    <Seg
+                      label="Logo size"
+                      value={settings.logoSize}
+                      options={[
+                        ['small', 'S'],
+                        ['medium', 'M'],
+                        ['large', 'L'],
+                      ]}
+                      onChange={(logoSize) => ctrl.setSettings({ logoSize })}
+                    />
+                  </>
+                )}
               </div>
-            )}
-            {mirror.link === 'unpaired' && !mirror.config && (
-              <div className="text-xs text-mut">Not paired: records without the score.</div>
-            )}
-            <div className="mt-auto flex items-center justify-between gap-2">
+              <input ref={fileRef} type="file" accept={LOGO_TYPES} className="hidden" onChange={(e) => void addLogo(e.currentTarget)} data-testid="logo-file" />
+              {logoError && <div className="text-xs text-amber">{logoError}</div>}
+              <div className="text-xs leading-snug">{storageLine(settings.quality)}</div>
+              {snap.opfs === 'unavailable' && (
+                <div className="text-xs font-semibold text-amber">Recording needs normal browsing mode (not Private Browsing).</div>
+              )}
+              {session.phase === 'failed' && (
+                <div className="text-xs text-amber" role="alert">
+                  {session.message}{' '}
+                  <button className="underline" onClick={() => ctrl.dismiss()}>
+                    OK
+                  </button>
+                </div>
+              )}
+              {mirror.link === 'unpaired' && !mirror.config && <div className="text-xs text-mut">Not paired: records without the score.</div>}
+            </div>
+            <div className="flex shrink-0 items-center justify-between gap-2">
               <button className="btn btn-ghost text-sm" onClick={onRecordings}>
                 Recordings
               </button>

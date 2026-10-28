@@ -17,6 +17,8 @@ import {
 export interface OverlaySide {
   team: Team;
   name: string;
+  /** What the panel shows: 'NOK / PAE' in doubles, the one name in singles, the team name when no names were set. */
+  players: string;
   color: string;
   score: number;
   games: number;
@@ -43,11 +45,21 @@ export interface OverlayOptions {
   stale: boolean;
 }
 
+/** The players' names for the panel, upper case (doubles 'NAME1 / NAME2'). */
+export function playersLabel(cfg: MatchConfig, team: Team): string {
+  const t = cfg.teams[team];
+  // configFromSetup fills blank doubles names with "<team> 1", "<team> 2": those are not names.
+  const named = t.players.filter((p, i) => p.trim() && p !== `${t.name} ${i + 1}`);
+  const label = cfg.doubles && named.length === t.players.length ? t.players.join(' / ') : cfg.doubles ? t.name : (t.players[0] ?? t.name);
+  return label.toUpperCase();
+}
+
 export function overlayModel(cfg: MatchConfig, s: MatchState, opts: OverlayOptions): OverlayModel {
   const leftTeam = opts.mirrored ? other(s.leftTeam) : s.leftTeam;
   const side = (team: Team): OverlaySide => ({
     team,
     name: cfg.teams[team].name,
+    players: playersLabel(cfg, team),
     color: cfg.teams[team].color,
     score: s.score[team],
     games: s.games[team],

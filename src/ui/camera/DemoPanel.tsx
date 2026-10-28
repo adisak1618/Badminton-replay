@@ -20,13 +20,13 @@ export function DemoPanel({ source }: { source: LocalSource }) {
 
   if (!open)
     return (
-      <button className="btn absolute top-2 left-2 z-20 min-h-10 bg-pan/95 text-sm" onClick={() => setOpen(true)}>
+      <button className="btn absolute bottom-2 left-2 z-20 min-h-10 bg-pan/95 text-sm" onClick={() => setOpen(true)}>
         Demo score ›
       </button>
     );
   return (
     <div
-      className="absolute top-2 left-2 z-20 flex w-[300px] max-w-[calc(100%-1rem)] flex-col gap-2 rounded-xl border border-line bg-pan/95 p-2 text-sm"
+      className="absolute bottom-2 left-2 z-20 flex w-[300px] max-w-[calc(100%-1rem)] flex-col gap-2 rounded-xl border border-line bg-pan/95 p-2 text-sm"
       data-testid="demo-panel"
     >
       <div className="flex items-center justify-between font-semibold">

@@ -6,8 +6,9 @@ import { keepScreenOn } from '../device/wakeLock';
 import { Mirror } from '../link/mirror';
 import { NoSource } from '../link/none';
 import type { PeerInfo, RecCommand, RecReport, ScoreSource } from '../link/source';
-import { DEFAULT_THEME, OverlayClock, overlayBox } from '../overlay';
+import { DEFAULT_THEME, OverlayClock, overlayLayout, type Layout } from '../overlay';
 import { Compositor } from './compositor';
+import type { Logo } from './logo';
 import {
   AUDIO_BITS_PER_SECOND,
   MIME_TYPES,
@@ -35,6 +36,8 @@ export interface CameraSnapshot {
   storage: StorageFigures;
   persistAsked: boolean;
   fps: number;
+  /** The overlay logo's size, when one is set (the image itself stays in the controller). */
+  logo: { width: number; height: number } | null;
 }
 
 export function pickMimeType(): string | null {
@@ -83,6 +86,7 @@ export class CameraController {
   private logTimer: ReturnType<typeof setTimeout> | null = null;
   private lastStorageAt = 0;
   private startingRec = false;
+  private logo: Logo | null = null;
 
   constructor(
     settings: CameraSettings,
@@ -99,6 +103,7 @@ export class CameraController {
       storage: { usage: null, quota: null, persisted: null },
       persistAsked: false,
       fps: 0,
+      logo: null,
     };
     this.compositor = new Compositor((now) => {
       const m = this.mirror.getSnapshot();
@@ -113,7 +118,11 @@ export class CameraController {
         mirrored,
         stale: m.link !== 'paired',
       });
-      return model && { model, box: overlayBox(this.compositor.canvas.width, this.compositor.canvas.height) };
+      const layout = this.layout();
+      return {
+        score: model && { model, box: layout.score },
+        logo: this.logo && layout.logo ? { image: this.logo.image, box: layout.logo } : null,
+      };
     });
     this.compositor.setSize(QUALITIES[settings.quality].width, QUALITIES[settings.quality].height);
     this.mirror.onCommand = (c) => void this.command(c);
@@ -154,6 +163,22 @@ export class CameraController {
     this.source = src;
     this.detachSource = this.mirror.attach(src);
     this.report();
+  }
+
+  /** Where the score panel and the logo go in the current frame size (round 2: corners are settings). */
+  layout(): Layout {
+    const { width, height } = this.compositor.canvas;
+    const s = this.snap.settings;
+    const logo = this.logo ? { corner: s.logoCorner, size: s.logoSize, aspect: this.logo.width / this.logo.height } : null;
+    return overlayLayout(width, height, { scoreCorner: s.scoreCorner, logo });
+  }
+
+  /** Set or clear the overlay logo; like the other overlay settings it cannot change mid-recording. */
+  setLogo(logo: Logo | null): boolean {
+    if (isActive(this.snap.session.phase)) return false;
+    this.logo = logo;
+    this.set({ logo: logo && { width: logo.width, height: logo.height } });
+    return true;
   }
 
   // ---- settings and camera ----
@@ -340,6 +365,7 @@ export class CameraController {
     const { settings } = this.snap;
     const q = QUALITIES[settings.quality];
     const { width, height } = this.compositor.canvas;
+    const layout = this.layout();
     this.dispatch({
       type: 'start',
       at: Date.now(),
@@ -350,7 +376,14 @@ export class CameraController {
         height,
         fps: q.fps,
         startLatencyMs: START_LATENCY_MS,
-        overlay: { box: overlayBox(width, height), delayMs: settings.delayMs, mirrored: settings.mirrored, theme: DEFAULT_THEME.id },
+        overlay: {
+          box: layout.score,
+          corner: settings.scoreCorner,
+          delayMs: settings.delayMs,
+          mirrored: settings.mirrored,
+          theme: DEFAULT_THEME.id,
+          logo: layout.logo && { box: layout.logo, corner: settings.logoCorner, size: settings.logoSize },
+        },
       },
     });
     const seg = current(this.snap.session)!;

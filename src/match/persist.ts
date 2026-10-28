@@ -73,3 +73,21 @@ export async function clearCurrent(): Promise<void> {
   tx.objectStore(META).delete(CURRENT);
   await done(tx);
 }
+
+const LOGO = 'camera.logo';
+
+/** The camera's optional overlay logo (an image Blob), kept on this device next to the live match. */
+export async function saveLogo(blob: Blob | null): Promise<void> {
+  const db = await openDb();
+  const tx = db.transaction(META, 'readwrite');
+  if (blob) tx.objectStore(META).put(blob, LOGO);
+  else tx.objectStore(META).delete(LOGO);
+  await done(tx);
+}
+
+export async function loadLogo(): Promise<Blob | null> {
+  const db = await openDb();
+  const tx = db.transaction(META, 'readonly');
+  const b = await result(tx.objectStore(META).get(LOGO) as IDBRequest<Blob | undefined>);
+  return b ?? null;
+}

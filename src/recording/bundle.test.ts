@@ -17,7 +17,7 @@ const seg = (index: number, startedAt: number, endedAt: number | null, mirrored 
   endedAt,
   bytes: 1000,
   endReason: endedAt ? 'user' : null,
-  overlay: { box: { x: 48, y: 960, w: 806, h: 72 }, delayMs: 0, mirrored, theme: 'strip-v1' },
+  overlay: { box: { x: 43, y: 43, w: 768, h: 160 }, corner: 'tl', delayMs: 0, mirrored, theme: 'panel-v2', logo: null },
 });
 
 const camera = { id: 'cam-1', ua: 'test' };
@@ -106,6 +106,21 @@ describe('match.json (technical-design.md §8, R-EXP-1, R-BURN-1)', () => {
     const { meta, log } = recorded(m, [seg(1, 0, null)]);
     meta.createdAt = at;
     expect(buildBundle({ meta, log, app: 'x', now: 0 }).recording!.segments[0].file).toBe('match-20261028-1912-video-1.mp4');
+  });
+
+  it('carries every segment overlay corner and boxes, logo included, into match.json (round 2)', () => {
+    const m = new Match(makeConfig());
+    const s1 = seg(1, 0, 10);
+    const s2 = {
+      ...seg(2, 20, null),
+      overlay: { ...s1.overlay, corner: 'br' as const, logo: { box: { x: 1552, y: 43, w: 325, h: 130 }, corner: 'tr' as const, size: 'medium' as const } },
+    };
+    const b = buildBundle({ ...recorded(m, [s1, s2]), app: 'x', now: 0 });
+    expect(b.recording!.segments.map((x) => [x.overlay.corner, x.overlay.logo?.corner ?? null])).toEqual([
+      ['tl', null],
+      ['br', 'tr'],
+    ]);
+    expect(b.recording!.segments[1].overlay.logo!.box).toEqual({ x: 1552, y: 43, w: 325, h: 130 });
   });
 
   it('an unpaired recording exports its segments with no config and no events', () => {

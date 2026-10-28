@@ -88,7 +88,7 @@ export function repairMeta(meta: RecordingMeta | null, id: string, files: Stored
       endedAt: f.lastModified,
       bytes: f.size,
       endReason: 'error',
-      overlay: { box: { x: 0, y: 0, w: 0, h: 0 }, delayMs: 0, mirrored: false, theme: 'unknown' },
+      overlay: { box: { x: 0, y: 0, w: 0, h: 0 }, corner: 'tl', delayMs: 0, mirrored: false, theme: 'unknown', logo: null },
     });
   }
   m.segments.sort((a, b) => a.index - b.index);

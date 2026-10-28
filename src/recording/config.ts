@@ -1,3 +1,5 @@
+import { DEFAULT_LOGO_CORNER, DEFAULT_SCORE_CORNER, type Corner, type LogoSize } from '../overlay/layout';
+
 // Recording constants in one place (technical-design.md §6). The default quality is one line: if the
 // captain's 60-minute soak says 1080p30 is too hot or drops frames, set DEFAULT_QUALITY to '720p'.
 export type Quality = '1080p' | '720p';
@@ -37,6 +39,9 @@ export interface CameraSettings {
   audio: boolean; // D7
   mirrored: boolean; // R-REC-4
   delayMs: number;
+  scoreCorner: Corner;
+  logoCorner: Corner;
+  logoSize: LogoSize;
 }
 
 export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
@@ -44,6 +49,9 @@ export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
   audio: true,
   mirrored: false,
   delayMs: DEFAULT_OVERLAY_DELAY_MS,
+  scoreCorner: DEFAULT_SCORE_CORNER,
+  logoCorner: DEFAULT_LOGO_CORNER,
+  logoSize: 'medium',
 };
 
 export function bytesPerMinute(q: Quality, audio: boolean): number {
