@@ -18,13 +18,18 @@ export function PairScreen({ initialCode, onClose }: { initialCode: string | nul
   const [code, setCode] = useState(initialCode ?? '');
   const [joinedAt, setJoinedAt] = useState<number | null>(null);
   const autoStarted = useRef(false);
-  /** A scanned code is tried once; after a failure the user retries with Pair. */
-  const scanned = useRef<string | null>(null);
+  /**
+   * The last code joined, however it came (launch link, typed, scanned): the scanner never joins it again. The
+   * viewfinder usually still sees the camera's QR after a typed or linked code, and a room code is one-shot, so
+   * a second claim fails ("code not found"). After a failure the user retries with Pair.
+   */
+  const tried = useRef<string | null>(null);
   const paired = l.state === 'paired';
   const now = useNow(1000, joinedAt != null && !paired);
 
   const join = (c: string) => {
     if (l.busy) return;
+    tried.current = c;
     setCode(c);
     setJoinedAt(Date.now());
     void link.join(c);
@@ -80,10 +85,7 @@ export function PairScreen({ initialCode, onClose }: { initialCode: string | nul
         const img = videoRef.current && grabFrame(videoRef.current, canvas);
         const text = img ? await read(img) : null;
         const c = text && codeFromText(text);
-        if (live && c && c !== scanned.current) {
-          scanned.current = c;
-          return join(c);
-        }
+        if (live && c && c !== tried.current) return join(c);
       } catch {
         // decoder failed to load: typing still works
       }

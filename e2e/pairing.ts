@@ -3,11 +3,13 @@
 // The scoreboard's fake camera plays the camera page's own QR code, so the scan path (zxing-wasm) is real.
 //
 //   pnpm build && pnpm e2e            # needs Google Chrome and ffmpeg; OUT=dir keeps screenshots and results
+//   HELPER=https://badminton-replay.vercel.app pnpm e2e    # the pages' /api/signal calls go to that helper
 //
 // Steps: no-internet message on both roles (R-PAIR-1); pairing by scanning the QR; sync of a live match and
 // tap-to-camera latency; remote REC with ack (D11); a 20 s outage of the channel and the helper with points
 // scored meanwhile (R-PAIR-4/8); a dropped connection rebuilt fresh; remote stop; reloads of either phone
-// rejoining with no scan; a typed code; a version mismatch (R-PAIR-7). Exits non-zero on the first failure.
+// rejoining with no scan; a typed code; the QR's link opened by the iPhone camera app with the viewfinder still
+// on that QR, claimed once; a version mismatch (R-PAIR-7). Exits non-zero on the first failure.
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -20,6 +22,7 @@ const OUT = path.resolve(process.env.OUT ?? fs.mkdtempSync(path.join(os.tmpdir()
 const PORT = Number(process.env.PORT ?? 18_000 + Math.floor(Math.random() * 1000));
 const BASE = `http://127.0.0.1:${PORT}`;
 const CHROME = process.env.CHROME ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const HELPER = process.env.HELPER?.replace(/\/$/, '');
 const VIEW = { width: 844, height: 390 };
 fs.mkdirSync(OUT, { recursive: true });
 
@@ -91,6 +94,12 @@ async function launch(extra: string[] = []): Promise<Browser> {
 async function newPage(b: Browser, name: string): Promise<{ ctx: BrowserContext; page: Page }> {
   const ctx = await b.newContext({ viewport: VIEW, permissions: ['camera', 'microphone'] });
   await ctx.addInitScript(HOOKS);
+  // A regex, not the '**/api/**' glob the outage steps route and unroute, so those leave this one in place.
+  if (HELPER)
+    await ctx.route(/\/api\/signal(\/|\?|$)/, async (r) => {
+      const u = new URL(r.request().url());
+      await r.fulfill({ response: await r.fetch({ url: HELPER + u.pathname + u.search }) });
+    });
   const page = await ctx.newPage();
   page.on('console', (m) => m.type() === 'error' && log(`  [${name} console] ${m.text()}`));
   page.on('pageerror', (e) => log(`  [${name} pageerror] ${e.message}`));
@@ -153,7 +162,9 @@ async function main() {
   const camBrowser = await launch();
   const { ctx: camCtx, page: cam } = await newPage(camBrowser, 'camera');
   let sbBrowser: Browser | null = null;
+  let sb3Browser = null as Browser | null;
   let sb2: Page | null = null;
+  let sb3 = null as Page | null;
   let sbPage: Page | null = null;
   try {
     await step('camera role opens with a live preview', async () => {
@@ -177,6 +188,16 @@ async function main() {
     });
 
     let code = '';
+    /** A fake camera playing the QR code the camera page shows now. */
+    const qrCamera = async (name: string): Promise<string> => {
+      await cam.locator('[data-testid=pair-qr]').screenshot({ path: path.join(OUT, `${name}.png`) });
+      const y4m = path.join(OUT, `${name}.y4m`);
+      execFileSync('ffmpeg', [
+        '-loglevel', 'error', '-y', '-loop', '1', '-i', path.join(OUT, `${name}.png`), '-t', '2',
+        '-vf', 'scale=480:480:flags=neighbor,pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=gray,format=yuv420p', '-r', '15', y4m,
+      ]);
+      return y4m;
+    };
     await step('camera shows a QR code and six digits (C2)', async () => {
       await button(cam, 'Try again').click();
       code = await until('code', async () => {
@@ -184,18 +205,12 @@ async function main() {
         return /^\d{6}$/.test(c) && c;
       });
       await until('QR svg', async () => (await cam.locator('[data-testid=pair-qr] svg').count()) > 0);
-      await cam.locator('[data-testid=pair-qr]').screenshot({ path: path.join(OUT, 'qr.png') });
       await cam.screenshot({ path: path.join(OUT, '01-camera-c2.png') });
       return `code ${code}`;
     });
 
     // The scoreboard browser's fake camera shows that QR code.
-    const y4m = path.join(OUT, 'qr.y4m');
-    execFileSync('ffmpeg', [
-      '-loglevel', 'error', '-y', '-loop', '1', '-i', path.join(OUT, 'qr.png'), '-t', '2',
-      '-vf', 'scale=480:480:flags=neighbor,pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=gray,format=yuv420p', '-r', '15', y4m,
-    ]);
-    sbBrowser = await launch([`--use-file-for-fake-video-capture=${y4m}`]);
+    sbBrowser = await launch([`--use-file-for-fake-video-capture=${await qrCamera('qr')}`]);
     const { ctx: sbCtx, page: sb } = await newPage(sbBrowser, 'scoreboard');
     sbPage = sb;
 
@@ -357,22 +372,56 @@ async function main() {
       return `typed ${c}: ${Date.now() - start} ms to paired`;
     });
 
+    // The captain's path on iPhone: the camera app reads the QR and opens its link, so S2 starts with that code
+    // while its own viewfinder still sees the same QR. The one-shot code must be claimed once: a second claim
+    // fails with "code not found" and used to end the pairing the first one had made.
+    await step('the QR link opened by the camera app pairs, the viewfinder on the same QR claims nothing more', async () => {
+      await cam.getByRole('button', { name: 'Menu' }).click();
+      await button(cam, 'Unpair the scoreboard').click();
+      await until('scoreboard 2 unpaired', async () => (await sb2!.locator('[data-testid=pair-chip]').count()) > 0, 5000);
+      await cam.locator('[data-testid=cam-pair]').click();
+      const c = await until('code', async () => {
+        const t = await text(cam, '[data-testid=pair-code]');
+        return /^\d{6}$/.test(t) && t;
+      });
+      await until('QR svg', async () => (await cam.locator('[data-testid=pair-qr] svg').count()) > 0);
+      sb3Browser = await launch([`--use-file-for-fake-video-capture=${await qrCamera('qr-link')}`]);
+      const linked = await newPage(sb3Browser, 'scoreboard-3');
+      sb3 = linked.page;
+      const claims: string[] = [];
+      sb3.on('request', (r) => /\/api\/signal\/rooms\/\d+$/.test(r.url()) && claims.push(r.url().slice(-6)));
+      const start = Date.now();
+      await sb3.goto(`${BASE}/#pair=${c}`);
+      await until('paired', async () => (await sb3!.locator('[data-testid=pair-done]').count()) > 0, 30_000);
+      await until('camera link ok', async () => (await chip(cam)) === 'link ok');
+      const ms = Date.now() - start;
+      // Long enough for the scanner to have read the QR many times over (it looks every 300 ms).
+      await sb3.waitForTimeout(5000);
+      await sb3.screenshot({ path: path.join(OUT, '06-scoreboard-link-paired.png') });
+      if ((await sb3.locator('[data-testid=pair-done]').count()) === 0)
+        throw new Error(`no longer paired: "${await text(sb3, '[data-testid=pair-status]').catch(() => '')}"`);
+      if (claims.length !== 1) throw new Error(`claimed ${claims.length} times: ${claims.join(', ')}`);
+      if ((await chip(cam)) !== 'link ok') throw new Error(`camera chip "${await chip(cam)}"`);
+      await button(sb3, 'OK').click();
+      return `link #pair=${c}: ${ms} ms to paired, one claim, still paired 5 s later with the QR in view`;
+    });
+
     // The camera pretends to be a newer build speaking protocol v2: the scoreboard is the one to update.
     await step('version mismatch tells which phone to update (R-PAIR-7)', async () => {
-      const board = sb2!;
+      const board = sb3!;
       await cam.evaluate(() => sessionStorage.setItem('__v2', '1'));
       await cam.reload();
       await until('scoreboard mismatch chip', async () => (await chip(board)) === 'update app', 20_000);
       const title = (await board.locator('[data-testid=link-chip]').getAttribute('title')) ?? '';
       const camNote = await until('camera note', async () => text(cam, '[data-testid=pair-note]'), 10_000);
-      await board.screenshot({ path: path.join(OUT, '06-scoreboard-mismatch.png') });
-      await cam.screenshot({ path: path.join(OUT, '07-camera-mismatch.png') });
+      await board.screenshot({ path: path.join(OUT, '07-scoreboard-mismatch.png') });
+      await cam.screenshot({ path: path.join(OUT, '08-camera-mismatch.png') });
       if (title !== 'Update the app on this phone (reload it), then pair again.') throw new Error(`scoreboard says "${title}"`);
       if (camNote !== 'Update the app on the other phone, then pair again.') throw new Error(`camera says "${camNote}"`);
       return `scoreboard chip "update app" / "${title}"; camera "${camNote}"`;
     });
   } catch (err) {
-    for (const [name, p] of [['camera', cam], ['scoreboard', sbPage]] as const) {
+    for (const [name, p] of [['camera', cam], ['scoreboard', sbPage], ['scoreboard-3', sb3]] as const) {
       if (!p) continue;
       await p.screenshot({ path: path.join(OUT, `fail-${name}.png`) }).catch(() => {});
       const out = await p.evaluate(() => (window as any).__out.slice(-25)).catch(() => []);
@@ -383,6 +432,7 @@ async function main() {
     fs.writeFileSync(path.join(OUT, 'results.json'), JSON.stringify(results, null, 2));
     await camBrowser.close().catch(() => {});
     await sbBrowser?.close().catch(() => {});
+    await sb3Browser?.close().catch(() => {});
     server.kill();
   }
 }

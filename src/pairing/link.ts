@@ -115,6 +115,8 @@ export class PeerLink {
   private snap: LinkSnapshot = INITIAL;
   private listeners = new Set<() => void>();
   private session: Session | null = null;
+  /** Scoreboard: the room code the current pairing was claimed with. */
+  private joined: string | null = null;
   private gen = 0;
   private pc: RTCPeerConnection | null = null;
   private dc: RTCDataChannel | null = null;
@@ -232,7 +234,10 @@ export class PeerLink {
   /** Scoreboard: take the camera's room by its code and answer (S2). */
   async join(code: string): Promise<void> {
     if (this.role !== 'scoreboard') throw new Error('only the scoreboard joins a room');
+    // A room code is one-shot: claiming it again can only fail, and starting over would end the pairing it made.
+    if (code === this.joined && (this.busy || this.session)) return;
     const epoch = this.reset();
+    this.joined = code;
     this.setBusy(true);
     this.set({ error: null, mismatch: null });
     try {
