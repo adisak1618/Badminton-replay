@@ -4,15 +4,24 @@
 //
 //   pnpm build && pnpm e2e            # needs Google Chrome and ffmpeg; OUT=dir keeps screenshots and results
 //   HELPER=https://badminton-replay.vercel.app pnpm e2e    # the pages' /api/signal calls go to that helper
+//   E2E_RELAY=0 pnpm e2e         # without Docker: no local TURN relay, the relay step is skipped
+//
+// The local helper gets a TURN key whose API is a stand-in for Cloudflare's generate-ice-servers, handing out
+// credentials for a coturn in Docker on this Mac (relay addresses on the container's own address: two relay
+// candidates reach each other inside it, while the pages reach only the published TURN port). With HELPER the relay step is skipped: that helper has its own key,
+// or none.
 //
 // Steps: no-internet message on both roles (R-PAIR-1); pairing by scanning the QR; sync of a live match and
 // tap-to-camera latency; remote REC with ack (D11); a 20 s outage of the channel and the helper with points
 // scored meanwhile (R-PAIR-4/8); a dropped connection rebuilt fresh; remote stop; reloads of either phone
 // rejoining with no scan; a typed code; the QR's link opened by the iPhone camera app with the viewfinder still
 // on that QR, claimed once; a version mismatch (R-PAIR-7); two phones on different networks told so, with the
-// pairing diagnostics. Every ICE restart description must carry candidates. Exits non-zero on the first failure.
+// pairing diagnostics; with the relay, two phones on different networks connecting through TURN while a shared
+// network still connects directly. Every ICE restart description must carry candidates. Exits non-zero on the
+// first failure.
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +34,11 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const CHROME = process.env.CHROME ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const HELPER = process.env.HELPER?.replace(/\/$/, '');
 const VIEW = { width: 844, height: 390 };
+const RELAY = !HELPER && process.env.E2E_RELAY !== '0';
+const TURN_PORT = PORT + 1000;
+const TURN_USER = 'e2e';
+const TURN_PASS = 'e2e-pass';
+const TURN_KEY = { id: 'e2e-key', token: 'e2e-token' };
 fs.mkdirSync(OUT, { recursive: true });
 
 const results: Array<{ step: string; ok: boolean; detail: string; ms: number }> = [];
@@ -66,7 +80,10 @@ const chip = (p: Page) => text(p, '[data-testid=link-chip]');
 // Test hooks live here, not in the app: every RTCPeerConnection is kept on window.__pcs; window.__drop swallows
 // every outgoing data-channel message; sessionStorage.__v2 makes this page speak protocol version 2;
 // sessionStorage.__ip replaces this page's candidates with one host candidate on that address, the way an iPhone
-// on mobile data offers only its carrier address.
+// on mobile data offers only its carrier address; sessionStorage.__relay does the same but keeps the relay
+// candidates and makes the connection use only those (iceTransportPolicy 'relay'), since this Mac's own host
+// candidates would otherwise connect the two pages directly; sessionStorage.__tcp also keeps only the TURN URLs
+// over TCP, like a carrier network that blocks UDP.
 const HOOKS = `
   (() => {
     const send = RTCDataChannel.prototype.send;
@@ -80,13 +97,22 @@ const HOOKS = `
     };
     const PC = window.RTCPeerConnection;
     window.__pcs = [];
+    const tcpOnly = (servers) =>
+      servers.map((s) => ({ ...s, urls: [].concat(s.urls).filter((u) => /^turn:.*transport=tcp/.test(u)) })).filter((s) => s.urls.length);
+    const relayOnly = (c) => {
+      if (!sessionStorage.getItem('__relay')) return c;
+      const tcp = sessionStorage.getItem('__tcp') === '1';
+      return { ...c, iceTransportPolicy: 'relay', iceServers: tcp ? tcpOnly(c.iceServers ?? []) : c.iceServers };
+    };
     window.RTCPeerConnection = class extends PC {
-      constructor(...a) { super(...a); window.__pcs.push(this); }
+      constructor(c, ...a) { super(relayOnly(c ?? {}), ...a); window.__pcs.push(this); }
+      setConfiguration(c) { return super.setConfiguration(relayOnly(c)); }
       get localDescription() {
         const d = super.localDescription;
-        const ip = sessionStorage.getItem('__ip');
+        const relay = sessionStorage.getItem('__relay');
+        const ip = sessionStorage.getItem('__ip') ?? relay;
         if (!d || !ip) return d;
-        const lines = d.sdp.split('\\r\\n').filter((l) => !l.startsWith('a=candidate:'));
+        const lines = d.sdp.split('\\r\\n').filter((l) => !l.startsWith('a=candidate:') || (relay && / typ relay /.test(l)));
         lines.splice(lines.findIndex((l) => l.startsWith('c=')) + 1, 0, 'a=candidate:1 1 udp 2113937151 ' + ip + ' 50000 typ host generation 0 network-cost 999');
         return { type: d.type, sdp: lines.join('\\r\\n') };
       }
@@ -130,6 +156,19 @@ async function newPage(b: Browser, name: string): Promise<{ ctx: BrowserContext;
 
 const button = (p: Page, name: string | RegExp) => p.getByRole('button', { name }).first();
 
+/** The newest pairing-diagnostics line of a kind (diag.ts) once the saved log has one matching `want`. */
+async function diagLatest(p: Page, role: 'camera' | 'scoreboard', kind: string, want: (line: string) => boolean = () => true): Promise<string> {
+  return until(`diagnostics ${role} ${kind}`, async () => {
+    const line = await p.evaluate(([r, k]) => JSON.parse(localStorage.getItem(`bs.diag.${r}`) ?? '{}')?.latest?.[k] as string | undefined, [role, kind] as const);
+    return line && want(line) && line;
+  }, 5000);
+}
+
+/** This page's helper has no TURN key: what the production helper said before the key was set. */
+async function noRelay(p: Page): Promise<void> {
+  await p.route(/\/api\/signal\/sessions\/[0-9a-f]+\/ice$/, (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"relay":"not-configured"}' }));
+}
+
 async function tap(p: Page, zone: 'left' | 'right'): Promise<number> {
   const b = (await p.locator(`[data-zone=${zone}]`).boundingBox())!;
   await p.mouse.move(b.x + b.width / 2, b.y + b.height * 0.3);
@@ -170,9 +209,60 @@ async function cameraFiles(cam: Page, matchId: string): Promise<{ log: any; rec:
   }, matchId);
 }
 
+/** Requests the stand-in for Cloudflare's TURN API got: the TTL asked for. */
+const minted: Array<{ ttl: number }> = [];
+
+/** POST /v1/turn/keys/<id>/credentials/generate-ice-servers with the key's bearer token, as Cloudflare answers it. */
+function turnApi(): Promise<{ url: string; close: () => void }> {
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      const ok = req.method === 'POST' && req.url === `/v1/turn/keys/${TURN_KEY.id}/credentials/generate-ice-servers`;
+      if (!ok || req.headers.authorization !== `Bearer ${TURN_KEY.token}`) return void res.writeHead(401).end('{"error":"unauthorized"}');
+      minted.push({ ttl: JSON.parse(body).ttl });
+      res.writeHead(201, { 'Content-Type': 'application/json' }).end(
+        JSON.stringify({
+          iceServers: [
+            { urls: [`stun:127.0.0.1:${TURN_PORT}`] },
+            { urls: [`turn:127.0.0.1:${TURN_PORT}?transport=udp`, `turn:127.0.0.1:${TURN_PORT}?transport=tcp`], username: TURN_USER, credential: TURN_PASS },
+          ],
+        }),
+      );
+    });
+  });
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ url: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1/turn/keys`, close: () => server.close() })));
+}
+
+const TURN_CONTAINER = `pairing-e2e-turn-${PORT}`;
+
+/**
+ * coturn on TURN_PORT (UDP and TCP), long-term credentials, relaying on the container's address. (Relaying on
+ * its loopback with --allow-loopback-peers left the first connection of each pairing without a single check
+ * delivered; the camera's second one, 10 s later, worked.)
+ */
+function startCoturn(): void {
+  execFileSync('docker', [
+    'run', '-d', '--rm', '--name', TURN_CONTAINER,
+    '-p', `127.0.0.1:${TURN_PORT}:3478/udp`, '-p', `127.0.0.1:${TURN_PORT}:3478/tcp`,
+    'coturn/coturn:4.7.0',
+    '-n', '--log-file=stdout', '--fingerprint', '--lt-cred-mech', '--realm=e2e', `--user=${TURN_USER}:${TURN_PASS}`,
+    '--listening-port=3478', '--min-port=49160', '--max-port=49200',
+    '--no-tls', '--no-dtls', '--no-cli',
+  ], { stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
 async function main() {
   log(`output: ${OUT}`);
-  const server = spawn(process.execPath, [path.join(ROOT, 'server/local.ts')], { env: { ...process.env, PORT: String(PORT) }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let api: Awaited<ReturnType<typeof turnApi>> | null = null;
+  const env: Record<string, string> = { ...(process.env as Record<string, string>), PORT: String(PORT) };
+  if (RELAY) {
+    startCoturn();
+    api = await turnApi();
+    Object.assign(env, { TURN_KEY_ID: TURN_KEY.id, TURN_KEY_API_TOKEN: TURN_KEY.token, TURN_API_URL: api.url });
+    log(`relay: coturn ${TURN_CONTAINER} on 127.0.0.1:${TURN_PORT}, TURN API stand-in ${api.url}`);
+  }
+  const server = spawn(process.execPath, [path.join(ROOT, 'server/local.ts')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   const serverLog = fs.createWriteStream(path.join(OUT, 'server.log'));
   server.stdout.pipe(serverLog);
   server.stderr.pipe(serverLog);
@@ -258,7 +348,11 @@ async function main() {
       const ms = Date.now() - start;
       await sb.screenshot({ path: path.join(OUT, '02-scoreboard-s2-paired.png') });
       await cam.screenshot({ path: path.join(OUT, '03-camera-paired.png') });
-      return `scan to paired on both: ${ms} ms`;
+      // One network (this Mac): with STUN and TURN configured too, ICE still picks the direct pair.
+      const direct = (l: string) => l.startsWith('direct: ');
+      const paths = [await diagLatest(cam, 'camera', 'path', direct), await diagLatest(sb, 'scoreboard', 'path', direct)];
+      const relays = [await diagLatest(cam, 'camera', 'relay'), await diagLatest(sb, 'scoreboard', 'relay')];
+      return `scan to paired on both: ${ms} ms; camera "${paths[0]}", scoreboard "${paths[1]}"; relay "${relays[0].split(' · ')[0]}" / "${relays[1].split(' · ')[0]}"`;
     });
 
     let matchId = '';
@@ -453,6 +547,7 @@ async function main() {
       const camNet = (await newPage(camBrowser, 'camera-net')).page;
       const sbNet = (await newPage(camBrowser, 'scoreboard-net')).page;
       netPages.push(camNet, sbNet);
+      for (const p of [camNet, sbNet]) await noRelay(p);
       await camNet.goto(BASE);
       await camNet.evaluate(() => sessionStorage.setItem('__ip', '10.195.144.160'));
       await button(camNet, /CAMERA/).click();
@@ -469,7 +564,7 @@ async function main() {
       const start = Date.now();
       await sbNet.locator('input[data-testid=pair-code]').fill(c);
       await sbNet.locator('[data-testid=pair-submit]').click();
-      const want = 'different networks (this phone 10.131.171.124, the other 10.195.144.160)';
+      const want = 'different networks (this phone 10.131.171.124, the other 10.195.144.160), probably mobile data, and the internet relay is not set up';
       const sbSays = await until('scoreboard names the networks', async () => {
         const t = await text(sbNet, '[data-testid=pair-status]');
         return t.includes(want) && t;
@@ -477,14 +572,24 @@ async function main() {
       const ms = Date.now() - start;
       const camSays = await until('camera names the networks', async () => {
         const t = await text(camNet, '[data-testid=pair-status]');
-        return t.includes('different networks (this phone 10.195.144.160, the other 10.131.171.124)') && t;
+        return t.includes('different networks (this phone 10.195.144.160, the other 10.131.171.124), probably mobile data, and the internet relay is not set up') && t;
       }, 20_000, 250);
       if ((await sbNet.locator('[data-testid=pair-done]').count()) > 0) throw new Error('paired across networks?');
       const chipText = await text(sbNet, '[data-testid=diag-chip]');
-      if (!chipText.includes('net different (this phone 10.131.171.124, other 10.195.144.160)')) throw new Error(`diagnostics chip "${chipText}"`);
+      for (const part of ['path none', 'relay: not configured', 'net different (this phone 10.131.171.124, other 10.195.144.160)'])
+        if (!chipText.includes(part)) throw new Error(`diagnostics chip "${chipText}" lacks "${part}"`);
       await sbNet.locator('[data-testid=diag-chip]').click();
-      const diagLog = await text(sbNet, '[data-testid=diag-log]');
-      for (const line of [`GET /rooms/${c} → 200`, 'got offer gen 1 new connection: 10.195.144.160', 'sent answer gen 1 new connection: 10.131.171.124'])
+      const diagLog = await until('the slow connect in the log', async () => {
+        const t = await text(sbNet, '[data-testid=diag-log]');
+        return t.includes('after the answer: different networks') && t;
+      }, 10_000, 250);
+      for (const line of [
+        `GET /rooms/${c} → 200`,
+        'got offer gen 1 new connection: 10.195.144.160',
+        'sent answer gen 1 new connection: 10.131.171.124',
+        'relay  not configured',
+        'after the answer: different networks and the internet relay is not set up',
+      ])
         if (!diagLog.includes(line)) throw new Error(`the diagnostics log lacks "${line}"`);
       await sbNet.screenshot({ path: path.join(OUT, '09-scoreboard-different-networks-diag.png') });
       await sbNet.getByRole('dialog', { name: 'Pairing diagnostics' }).getByRole('button', { name: 'Close' }).click();
@@ -492,8 +597,83 @@ async function main() {
       await camNet.screenshot({ path: path.join(OUT, '11-camera-different-networks.png') });
       return `typed ${c}; after ${ms} ms the scoreboard says "${sbSays}"; camera "${camSays}"; chip "${chipText}"`;
     });
+
+    if (!RELAY) log(`  relay steps skipped: ${HELPER ? 'HELPER is set' : 'E2E_RELAY=0'}`);
+    else {
+      /** A camera and a scoreboard that offer only the carrier addresses of 2026-10-28 and relay candidates. */
+      const relayPair = async (name: string, tcp: boolean) => {
+        const camRelay = (await newPage(camBrowser, `camera-${name}`)).page;
+        const sbRelay = (await newPage(camBrowser, `scoreboard-${name}`)).page;
+        netPages.push(camRelay, sbRelay);
+        const since = Date.now();
+        for (const [p, ip] of [[camRelay, '10.195.144.160'], [sbRelay, '10.131.171.124']] as const) {
+          await p.goto(BASE);
+          await p.evaluate(([a, t]) => {
+            sessionStorage.setItem('__relay', a);
+            if (t) sessionStorage.setItem('__tcp', '1');
+          }, [ip, tcp] as const);
+        }
+        await button(camRelay, /CAMERA/).click();
+        await until('camera live', async () => (await camRelay.locator('[data-testid=rec-button]').isEnabled()) || null, 15_000);
+        await camRelay.locator('[data-testid=cam-pair]').click();
+        const c = await until('code', async () => {
+          const t = await text(camRelay, '[data-testid=pair-code]');
+          return /^\d{6}$/.test(t) && t;
+        });
+        await button(sbRelay, /SCOREBOARD/).click();
+        await sbRelay.locator('[data-testid=pair-chip]').click();
+        const start = Date.now();
+        await sbRelay.locator('input[data-testid=pair-code]').fill(c);
+        await sbRelay.locator('[data-testid=pair-submit]').click();
+        await until('paired', async () => (await sbRelay.locator('[data-testid=pair-done]').count()) > 0, 30_000);
+        await until('camera link ok', async () => (await chip(camRelay)) === 'link ok', 10_000);
+        const ms = Date.now() - start;
+        const relayPath = (l: string) => l.startsWith(`relay: this phone relay/${tcp ? 'tcp' : 'udp'} `);
+        const paths = [await diagLatest(camRelay, 'camera', 'path', relayPath), await diagLatest(sbRelay, 'scoreboard', 'path', relayPath)];
+        const sent = posted.filter((p) => p.at >= since && p.page.endsWith(`-${name}`));
+        if (sent.some((p) => p.candidates < 2)) throw new Error(`descriptions without a relay candidate: ${JSON.stringify(sent)}`);
+        const nets = [await diagLatest(camRelay, 'camera', 'net'), await diagLatest(sbRelay, 'scoreboard', 'net')];
+        if (!nets.every((n) => n.startsWith('different'))) throw new Error(`net ${JSON.stringify(nets)}`);
+        return { camRelay, sbRelay, c, ms, paths, sent };
+      };
+
+      // The fix for 2026-10-28: the same two carrier addresses, but the helper hands out TURN credentials, so
+      // each phone also offers relay candidates and the link opens through the relay.
+      await step('phones on different networks connect through the relay; the diagnostics say relay', async () => {
+        const { camRelay, sbRelay, c, ms, paths, sent } = await relayPair('relay', false);
+        const relays = [await diagLatest(camRelay, 'camera', 'relay'), await diagLatest(sbRelay, 'scoreboard', 'relay')];
+        if (!relays.every((l) => l.startsWith('ready until ') && l.includes(`turn:127.0.0.1:${TURN_PORT}?transport=udp`) && !l.includes(TURN_PASS)))
+          throw new Error(`relay lines ${JSON.stringify(relays)}`);
+        if (!minted.length || minted.some((m) => m.ttl !== 3600)) throw new Error(`TURN API calls ${JSON.stringify(minted)}`);
+        const chipText = await text(sbRelay, '[data-testid=diag-chip]').catch(() => '');
+        await button(sbRelay, 'OK').click();
+        await sbRelay.screenshot({ path: path.join(OUT, '12-scoreboard-relay.png') });
+        await camRelay.screenshot({ path: path.join(OUT, '13-camera-relay.png') });
+        // The relay carries the match too.
+        await button(sbRelay, 'START MATCH').click();
+        await until('board', async () => (await sbRelay.locator('[data-zone=left]').count()) > 0);
+        await tap(sbRelay, 'left');
+        await until('camera shows 1–0', () => cameraShows(camRelay, sbRelay), 5000);
+        return `typed ${c}: ${ms} ms to paired; camera "${paths[0]}", scoreboard "${paths[1]}"; ${sent.length} descriptions, each with its relay candidate; ${minted.length} credential requests so far, TTL 3600 s; chip "${chipText}"; a point reached the camera`;
+      });
+
+      await step('with UDP to the relay blocked, TURN over TCP carries the link', async () => {
+        const { c, ms, paths } = await relayPair('relay-tcp', true);
+        return `typed ${c}: ${ms} ms to paired; camera "${paths[0]}", scoreboard "${paths[1]}"`;
+      });
+    }
   } catch (err) {
-    for (const [name, p] of [['camera', cam], ['scoreboard', sbPage], ['scoreboard-3', sb3], ['camera-net', netPages[0]], ['scoreboard-net', netPages[1]]] as const) {
+    for (const [name, p] of [
+      ['camera', cam],
+      ['scoreboard', sbPage],
+      ['scoreboard-3', sb3],
+      ['camera-net', netPages[0]],
+      ['scoreboard-net', netPages[1]],
+      ['camera-relay', netPages[2]],
+      ['scoreboard-relay', netPages[3]],
+      ['camera-relay-tcp', netPages[4]],
+      ['scoreboard-relay-tcp', netPages[5]],
+    ] as const) {
       if (!p) continue;
       await p.screenshot({ path: path.join(OUT, `fail-${name}.png`) }).catch(() => {});
       const out = await p.evaluate(() => (window as any).__out.slice(-25)).catch(() => []);
@@ -501,12 +681,33 @@ async function main() {
     }
     throw err;
   } finally {
+    // Each page's pairing diagnostics, as Copy would give them.
+    const pages = [['camera', cam], ['scoreboard', sbPage], ['scoreboard-2', sb2], ['scoreboard-3', sb3], ['camera-net', netPages[0]], ['scoreboard-net', netPages[1]], ['camera-relay', netPages[2]], ['scoreboard-relay', netPages[3]], ['camera-relay-tcp', netPages[4]], ['scoreboard-relay-tcp', netPages[5]]] as const;
+    for (const [name, p] of pages) {
+      const logs = await p
+        ?.evaluate(() => ['camera', 'scoreboard'].map((r) => localStorage.getItem(`bs.diag.${r}`)).filter(Boolean).map((j) => JSON.parse(j!).entries))
+        .catch(() => null);
+      if (logs) fs.writeFileSync(path.join(OUT, `diag-${name}.json`), JSON.stringify(logs, null, 2));
+    }
     fs.writeFileSync(path.join(OUT, 'results.json'), JSON.stringify(results, null, 2));
     fs.writeFileSync(path.join(OUT, 'posted-descriptions.json'), JSON.stringify(posted, null, 2));
     await camBrowser.close().catch(() => {});
     await sbBrowser?.close().catch(() => {});
     await sb3Browser?.close().catch(() => {});
     server.kill();
+    api?.close();
+    if (RELAY) {
+      try {
+        fs.writeFileSync(path.join(OUT, 'coturn.log'), execFileSync('docker', ['logs', TURN_CONTAINER], { stdio: ['ignore', 'pipe', 'pipe'] }));
+      } catch {
+        // gone already
+      }
+      try {
+        execFileSync('docker', ['rm', '-f', TURN_CONTAINER], { stdio: 'ignore' });
+      } catch {
+        // gone already
+      }
+    }
   }
 }
 

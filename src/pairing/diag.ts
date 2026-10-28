@@ -1,11 +1,12 @@
 // The pairing log each phone keeps for itself (⋯ › Pairing diagnostics): build, every helper request with its
-// status, the candidates each side offered, ICE and channel state changes, the network check and the last
-// error, with a one-line summary to read out. In memory and localStorage only: nothing leaves the phone
+// status, the relay credentials and ICE servers (no secrets), the candidates each side offered by type, ICE
+// and channel state changes, the candidate pair carrying the link (direct or relay), the network check and the
+// last error, with a one-line summary to read out. In memory and localStorage only: nothing leaves the phone
 // unless the user copies or shares it. Times are UTC, like the helper's request logs on Vercel.
 import { APP_BUILD } from '../build';
 import type { Role } from '../protocol/messages';
 
-export type DiagKind = 'app' | 'helper' | 'sdp' | 'ice' | 'link' | 'net' | 'error';
+export type DiagKind = 'app' | 'helper' | 'sdp' | 'ice' | 'link' | 'net' | 'relay' | 'path' | 'error';
 
 export interface DiagEntry {
   at: number;
@@ -101,13 +102,18 @@ export class PairingDiag {
     this.saveTimer ??= setTimeout(() => this.flush(), SAVE_AFTER_MS);
   }
 
-  /** One line to read out: role, build, network check, ICE, last error (with its time: it may be old). */
+  /**
+   * One line to read out: role, build, the link's path (direct, relay or none), the relay, network check, ICE,
+   * last error (with its time: it may be old).
+   */
   summary(): string {
     const l = this.snap.latest;
     const err = this.snap.entries.findLast((e) => e.kind === 'error');
     return [
       this.role,
       `build ${buildStamp()}${updateWaiting ? ' (update waiting)' : ''}`,
+      `path ${l.path ? l.path.split(':')[0] : 'none'}`,
+      l.relay ? `relay: ${l.relay.split(' · ')[0]}` : 'relay: not checked',
       l.net ? `net ${l.net}` : 'net not checked',
       l.ice ?? 'ice not started',
       l.error ? `error ${l.error}${err ? ` at ${utc(err.last ?? err.at).slice(0, 8)}` : ''}` : 'no error',

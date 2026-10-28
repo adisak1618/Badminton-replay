@@ -12,7 +12,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { MemoryStore, createHandler } from '../api/signal.ts';
+import { MemoryStore, createHandler, turnFromEnv } from '../api/signal.ts';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', process.env.DIST ?? 'dist');
 const PORT = Number(process.env.PORT ?? 8787);
@@ -31,7 +31,8 @@ const MIME: Record<string, string> = {
 };
 
 const store = new MemoryStore();
-const signal = createHandler(() => store);
+const turn = turnFromEnv(process.env);
+const signal = createHandler(() => store, { turn: () => turn });
 
 function cacheControl(rel: string): string {
   return rel.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'public, max-age=0, must-revalidate';
@@ -89,4 +90,6 @@ http
     } else if (req.method === 'GET' || req.method === 'HEAD') serveStatic(req, res, pathname);
     else res.writeHead(405).end();
   })
-  .listen(PORT, HOST, () => console.log(`app + signaling helper (memory store) on http://${HOST}:${PORT}  serving ${ROOT}`));
+  .listen(PORT, HOST, () =>
+    console.log(`app + signaling helper (memory store, relay ${turn ? `via ${turn.api}` : 'not configured'}) on http://${HOST}:${PORT}  serving ${ROOT}`),
+  );

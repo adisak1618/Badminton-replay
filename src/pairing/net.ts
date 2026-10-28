@@ -1,8 +1,9 @@
 // What a session description says about the network its phone is on, and whether the two phones can plausibly
-// reach each other. The link is local-network only (no STUN, D13), so a host candidate is all a phone offers;
-// WebKit gives just the address of its default route (network-cost 999, no network-id). Two phones on mobile
-// data show two unrelated carrier addresses and can never connect; that is what the production logs of
-// 2026-10-28 showed (camera 10.195.144.160, scoreboard 10.131.171.124), behind a "connecting" that never ended.
+// reach each other directly. The host candidates tell the network (server-reflexive and relay ones are counted
+// apart: they exist only with STUN/TURN, ice.ts); WebKit gives just the address of its default route
+// (network-cost 999, no network-id). Two phones on mobile data show two unrelated carrier addresses and can
+// never connect directly, only through a relay; that is what the production logs of 2026-10-28 showed (camera
+// 10.195.144.160, scoreboard 10.131.171.124), behind a "connecting" that never ended.
 
 export interface Candidates {
   /** Host candidates with a plain address (IPv4 or IPv6), in SDP order, without repeats. */
@@ -49,6 +50,8 @@ export interface NetCheck {
   mine: string[];
   theirs: string[];
   verdict: NetVerdict;
+  /** How many relay candidates each side offered: none without TURN, or when its relay is out of reach. */
+  relay: { mine: number; theirs: number };
 }
 
 const V4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
@@ -71,7 +74,7 @@ export function netVerdict(mine: string[], theirs: string[]): NetVerdict {
 
 export function netCheck(mineSdp: string | null, theirsSdp: string | null): NetCheck | null {
   if (!mineSdp || !theirsSdp) return null;
-  const mine = candidatesOf(mineSdp).ips;
-  const theirs = candidatesOf(theirsSdp).ips;
-  return { mine, theirs, verdict: netVerdict(mine, theirs) };
+  const a = candidatesOf(mineSdp);
+  const b = candidatesOf(theirsSdp);
+  return { mine: a.ips, theirs: b.ips, verdict: netVerdict(a.ips, b.ips), relay: { mine: a.relay, theirs: b.relay } };
 }

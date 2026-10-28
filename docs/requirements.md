@@ -22,8 +22,9 @@ of the docs assume these.
 - **D2 Pairing: (b) signaling helper on Vercel.** One scan (or a typed code) and
   automatic reconnection. Consequence: v1 has one serverless function and a
   Marketplace Redis store (technical-design.md §4); both phones need internet
-  while pairing and reconnecting; the phones still talk to each other over the
-  local network, the helper only carries connection descriptors. With no
+  while pairing and reconnecting; the phones still talk to each other directly
+  over the local network when they share one (otherwise through a TURN relay,
+  D13), the helper only carries connection descriptors and relay credentials. With no
   internet on the court there is no pairing: the scoreboard scores alone and
   the camera records without the overlay (R-PAIR-1, R-PAIR-8). The offline
   two-QR handshake is documented as a later fallback, not v1 scope.
@@ -56,7 +57,13 @@ of the docs assume these.
   plays two games, 2-0 is a win and 1-1 is a draw reported with the game
   scores and total points; fixed 1 is a single game. Ends change at 11 in a
   one-game match and in the third game, never mid-game in fixed 2.
-- **D13 STUN: (a) none in v1.** The data path is local network only.
+- **D13 STUN: (a) none in v1**, revised on 2026-10-28 after the first
+  production test, where both iPhones were on mobile data and could never
+  connect: the link now also offers STUN and a TURN relay (Cloudflare Realtime
+  TURN; the helper mints credentials valid for an hour, technical-design.md
+  §4.2). The direct local-network path is still chosen whenever both phones
+  share a network; without a TURN key on the helper the data path is local
+  network only, as before.
 - The captain also asked to see a rough UI before implementation starts:
   [mockup/index.html](mockup/index.html), described in ux-design.md §6.
 
@@ -230,8 +237,9 @@ the BWF Statutes (https://corporate.bwfbadminton.com/statutes/).
 
 - **R-PAIR-1 Pairing through the helper (D2).** The camera phone shows a QR
   code and a six-digit room code; the scoreboard phone scans or types it; the
-  phones then connect directly over the same Wi-Fi or hotspot. Both phones need
-  internet during pairing; the connection itself needs no internet. With no
+  phones then connect directly over the same Wi-Fi or hotspot, or through the
+  TURN relay when they share no network (D13). Both phones need internet during
+  pairing; a direct connection itself needs no internet, a relayed one does. With no
   internet the app says so and both roles keep working alone. *Accept:* on a
   phone hotspot with mobile data on, pairing completes in under 30 s; with
   mobile data off the screen says "no internet, cannot pair" within 5 s.
@@ -371,7 +379,7 @@ the BWF Statutes (https://corporate.bwfbadminton.com/statutes/).
 - Mac-side re-render tool (R-BURN-2), on-phone transcoding, highlights,
   automatic clip cutting at point boundaries.
 - Keeping a raw (overlay-free) recording next to the composited one.
-- Offline pairing without internet (two-QR handshake), STUN/TURN relays.
+- Offline pairing without internet (two-QR handshake).
 - Service faults, lets, challenges, timeouts beyond the standard intervals.
 - A third phone as a remote, or a live camera preview on the scoreboard phone.
 - Multi-match tournaments, player profiles, statistics, history sync between

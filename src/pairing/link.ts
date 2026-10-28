@@ -1,6 +1,7 @@
-// One phone's end of the paired link: an RTCPeerConnection with one ordered data channel over the local
-// network (no STUN, D13), its descriptors carried by the helper (D2), liveness pings both ways, the clock
-// samples, the version check (R-PAIR-7) and automatic reconnect (R-PAIR-8). The camera offers, the scoreboard
+// One phone's end of the paired link: an RTCPeerConnection with one ordered data channel, over the local
+// network when the phones share one and through a TURN relay when they do not (ice.ts; D13), its descriptors
+// and the relay credentials carried by the helper (D2), liveness pings both ways, the clock samples, the
+// version check (R-PAIR-7) and automatic reconnect (R-PAIR-8). The camera offers, the scoreboard
 // answers (technical-design.md §4.3). What the messages mean is the role's business (scoreboard.ts, peer.ts);
 // this class only delivers them.
 import { ClockSampler } from '../protocol/clock';
@@ -8,6 +9,20 @@ import { PROTOCOL_VERSION, encode, parse, type Msg, type Role } from '../protoco
 import type { ClockEstimate, LinkState } from '../link/source';
 import type { DiagKind } from './diag';
 import { HelperError, type Desc, type HelperClient, type HelperErrorKind, type Session } from './helper';
+import {
+  GATHER_LAN_MS,
+  GATHER_RELAY_MS,
+  GATHER_SETTLE_MS,
+  ICE_REFRESH_BEFORE_MS,
+  RELAY_UNKNOWN,
+  assembleIceServers,
+  relayAddresses,
+  relayLine,
+  relayReason,
+  selectedPath,
+  type PathType,
+  type RelayStatus,
+} from './ice';
 import { candidatesOf, describeCandidates, netCheck, type NetCheck } from './net';
 import {
   PING_EVERY_MS,
@@ -22,8 +37,14 @@ import {
 } from './reconnect';
 import { loadPairing, savePairing, type SavedPairing } from './saved';
 
-export const GATHER_MAX_MS = 2000;
 const TICK_MS = 250;
+/** Not open this long after the answer: the pairing screens say why (pairText.ts) and the log records it. */
+export const SLOW_CONNECT_MS = 15_000;
+/** How often an open link reads which candidate pair carries it (it can change after an ICE restart). */
+const PATH_EVERY_MS = 10_000;
+/** After a failed credential fetch, and after "not configured", ask the helper again only this much later. */
+const ICE_RETRY_FAILED_MS = 30_000;
+const ICE_RETRY_UNCONFIGURED_MS = 10 * 60_000;
 /** Renew the camera's code shortly before the helper forgets the room. */
 const ROOM_RENEW_BEFORE_MS = 20_000;
 
@@ -57,6 +78,10 @@ export interface LinkSnapshot {
   everOpened: boolean;
   /** Where this phone and the other one are, from the last descriptions each side sent (net.ts). */
   net: NetCheck | null;
+  /** Whether this phone has TURN credentials (ice.ts). */
+  relay: RelayStatus;
+  /** Which candidate pair carries the open link: direct, relay, or none while it is not open. */
+  path: PathType;
 }
 
 export type HelloFields = { deviceId: string; app: string; ua?: string; matchId?: string; lastSeq?: number };
@@ -66,7 +91,7 @@ export interface PeerLinkDeps {
   role: Role;
   helper: HelperClient;
   hello: () => HelloFields;
-  createPc?: () => RTCPeerConnection;
+  createPc?: (config: RTCConfiguration) => RTCPeerConnection;
   now?: () => number;
   /**
    * Before every ICE gathering: make sure this page holds capture permission, without which WebKit offers no
@@ -89,6 +114,8 @@ const INITIAL: LinkSnapshot = {
   otherBuild: null,
   everOpened: false,
   net: null,
+  relay: RELAY_UNKNOWN,
+  path: 'none',
 };
 
 export function hasCandidates(sdp: string): boolean {
@@ -96,23 +123,40 @@ export function hasCandidates(sdp: string): boolean {
 }
 
 /**
- * Resolve when ICE gathering is complete, or after `max` ms with whatever was gathered (no trickle ICE).
+ * Resolve when ICE gathering is complete, or after `max` ms with whatever was gathered (no trickle ICE). With
+ * STUN/TURN servers the caller passes GATHER_RELAY_MS, and `settle`: once this round has a relay candidate,
+ * resolve when no other candidate came for that long, instead of waiting for every server (a blocked
+ * transport would hold the round up until `max`). A relay candidate on UDP is enough; without one the round
+ * waits on for TCP or TLS.
  * Right after the description of an ICE restart the state still says `complete` from the last round while the
  * description has no candidate yet, so complete also needs a candidate: restart offers and answers went out
  * empty before (production, 2026-10-28) and the restart could not work.
  */
-export function gathered(pc: RTCPeerConnection, max = GATHER_MAX_MS): Promise<void> {
+export function gathered(pc: RTCPeerConnection, max = GATHER_LAN_MS, settle?: number): Promise<void> {
   return new Promise((resolve) => {
     const ready = () => pc.iceGatheringState === 'complete' && hasCandidates(pc.localDescription?.sdp ?? '');
     if (ready()) return resolve();
+    let relayed = false;
+    let quiet: ReturnType<typeof setTimeout> | undefined;
     const done = () => {
       clearTimeout(timer);
+      clearTimeout(quiet);
       pc.removeEventListener('icegatheringstatechange', check);
+      pc.removeEventListener('icecandidate', candidate);
       resolve();
     };
     const check = () => ready() && done();
+    const candidate = (e: Event) => {
+      const c = (e as RTCPeerConnectionIceEvent).candidate;
+      if (!c || settle == null) return;
+      relayed ||= c.type === 'relay' || / typ relay /.test(c.candidate);
+      if (!relayed) return;
+      clearTimeout(quiet);
+      quiet = setTimeout(done, settle);
+    };
     const timer = setTimeout(done, max);
     pc.addEventListener('icegatheringstatechange', check);
+    pc.addEventListener('icecandidate', candidate);
   });
 }
 
@@ -120,7 +164,7 @@ export class PeerLink {
   readonly role: Role;
   private readonly helper: HelperClient;
   private readonly helloFields: () => HelloFields;
-  private readonly createPc: () => RTCPeerConnection;
+  private readonly createPc: (config: RTCConfiguration) => RTCPeerConnection;
   private readonly now: () => number;
   private readonly ensureCapture: NonNullable<PeerLinkDeps['ensureCapture']>;
   private readonly saved: NonNullable<PeerLinkDeps['saved']>;
@@ -149,6 +193,16 @@ export class PeerLink {
   private pingId = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
   private releaseCapture: (() => void) | null = null;
+  /** The ICE servers for this session (TURN credentials until expiresAt), and when to ask the helper again. */
+  private ice: { servers: RTCIceServer[]; expiresAt: number } | null = null;
+  private iceRetryAt = 0;
+  /** The servers the current connection was configured with. */
+  private pcServers: RTCIceServer[] = [];
+  private lastPathAt = 0;
+  private lastPathLine = '';
+  /** The first answer since the link was last open, and whether its slow connect was logged (once). */
+  private stuckSince: number | null = null;
+  private slowLogged = false;
   /** Bumped by unpair/pair so work started for an older pairing drops its result. */
   private epoch = 0;
   readonly clock = new ClockSampler();
@@ -162,7 +216,7 @@ export class PeerLink {
     this.role = deps.role;
     this.helper = deps.helper;
     this.helloFields = deps.hello;
-    this.createPc = deps.createPc ?? (() => new RTCPeerConnection({ iceServers: [] })); // D13: no STUN
+    this.createPc = deps.createPc ?? ((config) => new RTCPeerConnection(config));
     this.now = deps.now ?? Date.now;
     this.ensureCapture = deps.ensureCapture ?? (async () => {});
     this.saved = deps.saved ?? { load: () => loadPairing(deps.role), save: (p) => savePairing(deps.role, p) };
@@ -235,9 +289,18 @@ export class PeerLink {
       if (epoch !== this.epoch) return;
       this.session = { session: r.session, secret: r.secret };
       this.gen = 1;
+      // The room needs a session before TURN credentials can be had; with them, a new offer carrying relay
+      // candidates replaces the local-network one before the code is shown (the claim gets the latest offer).
+      if ((await this.iceServers()).length) {
+        if (epoch !== this.epoch) return;
+        const relayed = await this.makeOffer('fresh', 2);
+        await this.helper.postOffer(this.session, { gen: 2, sdp: relayed, fresh: true });
+        if (epoch !== this.epoch) return;
+        this.gen = 2;
+      }
       this.persist();
       this.down = { since: this.now(), cause: 'closed' };
-      this.attempt = { kind: 'fresh', gen: 1, startedAt: this.now(), answeredAt: null };
+      this.attempt = { kind: 'fresh', gen: this.gen, startedAt: this.now(), answeredAt: null };
       this.nextPollAt = this.now() + POLL_FAST_MS;
       this.offline = false;
       this.set({ room: { code: r.code, expiresAt: this.now() + r.expiresIn * 1000 }, everOpened: false });
@@ -321,7 +384,12 @@ export class PeerLink {
     this.retryAt = 0;
     this.localSdp = null;
     this.remoteSdp = null;
+    this.ice = null;
+    this.iceRetryAt = 0;
+    this.stuckSince = null;
+    this.slowLogged = false;
     this.releaseHeldCapture();
+    this.set({ relay: RELAY_UNKNOWN, path: 'none' });
     return ++this.epoch;
   }
 
@@ -374,6 +442,7 @@ export class PeerLink {
     this.pc = null;
     this.dc = null;
     this.open = false;
+    if (this.snap.path !== 'none') this.set({ path: 'none' });
     try {
       pc?.close();
     } catch {
@@ -381,11 +450,16 @@ export class PeerLink {
     }
   }
 
-  private newPc(): RTCPeerConnection {
+  private newPc(servers: RTCIceServer[]): RTCPeerConnection {
     this.closePc();
-    const pc = this.createPc();
+    const pc = this.createPc({ iceServers: servers });
     this.pc = pc;
-    pc.addEventListener('iceconnectionstatechange', () => this.pc === pc && this.log('ice', `ice ${pc.iceConnectionState}`));
+    this.pcServers = servers;
+    pc.addEventListener('iceconnectionstatechange', () => {
+      if (this.pc !== pc) return;
+      this.log('ice', `ice ${pc.iceConnectionState}`);
+      if (this.open && (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed')) void this.checkPath();
+    });
     pc.addEventListener('icegatheringstatechange', () => this.pc === pc && this.log('sdp', `gathering ${pc.iceGatheringState}`));
     pc.addEventListener('connectionstatechange', () => {
       if (this.pc !== pc) return;
@@ -419,13 +493,79 @@ export class PeerLink {
   /** Camera: a local offer on a new connection ('fresh') or an ICE restart of the current one. */
   private async makeOffer(kind: 'fresh' | 'restart', gen: number): Promise<string> {
     const fresh = kind === 'fresh' || !this.pc;
-    const pc = fresh ? this.newPc() : this.pc!;
+    const servers = await this.iceServers();
+    const pc = fresh ? this.newPc(servers) : this.pc!;
+    if (!fresh) this.configure(pc, servers, true);
     await pc.setLocalDescription(await pc.createOffer(fresh ? undefined : { iceRestart: true }));
     const start = this.now();
-    await gathered(pc);
+    await gathered(pc, servers.length ? GATHER_RELAY_MS : GATHER_LAN_MS, servers.length ? GATHER_SETTLE_MS : undefined);
     const sdp = pc.localDescription!.sdp;
     this.local(`offer gen ${gen} ${fresh ? 'new connection' : 'ICE restart'}`, sdp, this.now() - start);
     return sdp;
+  }
+
+  /**
+   * The ICE servers for the next gathering: the cached ones while their credentials have long enough left,
+   * else new ones from the helper. The scoreboard renews with twice the margin, so when the camera restarts ICE
+   * for new credentials (tickCamera) the scoreboard's answer carries new ones too. Without a session (the
+   * camera's very first offer), a TURN key on the helper or working credentials: none, the local network only.
+   */
+  private async iceServers(): Promise<RTCIceServer[]> {
+    const now = this.now();
+    const margin = this.role === 'camera' ? ICE_REFRESH_BEFORE_MS : 2 * ICE_REFRESH_BEFORE_MS;
+    const cached = this.ice && now < this.ice.expiresAt ? this.ice.servers : [];
+    if (this.ice && now < this.ice.expiresAt - margin) return this.ice.servers;
+    if (!this.session || now < this.iceRetryAt) return cached;
+    const epoch = this.epoch;
+    let relay: RelayStatus;
+    try {
+      const r = await this.helper.getIce(this.session);
+      if (epoch !== this.epoch) return [];
+      if (r?.relay === 'ok') {
+        const servers = assembleIceServers(r.iceServers);
+        if (!servers.length) throw new Error('no usable TURN server in the reply');
+        this.ice = { servers, expiresAt: this.now() + r.ttl * 1000 };
+        relay = { state: 'ready', expiresAt: this.ice.expiresAt };
+      } else if (r?.relay === 'not-configured') {
+        this.iceRetryAt = this.now() + ICE_RETRY_UNCONFIGURED_MS;
+        relay = { state: 'not-configured' };
+      } else throw new Error('unexpected reply');
+    } catch (err) {
+      if (epoch !== this.epoch) return [];
+      this.iceRetryAt = this.now() + ICE_RETRY_FAILED_MS;
+      const detail = err instanceof HelperError ? (err.message === err.kind ? err.kind : `${err.kind}: ${err.message}`) : ((err as Error)?.message ?? String(err));
+      relay = { state: 'failed', detail };
+    }
+    const servers = relay.state === 'ready' ? this.ice!.servers : cached;
+    this.log('relay', relayLine(relay, servers));
+    // Credentials still valid from before outlive a failed renewal: keep saying ready until they expire.
+    if (relay.state === 'ready' || !cached.length) this.set({ relay });
+    return servers;
+  }
+
+  /** An ICE restart gathers with the connection's configuration: give it new credentials first. */
+  private configure(pc: RTCPeerConnection, servers: RTCIceServer[], strict: boolean): void {
+    if (servers === this.pcServers || typeof pc.setConfiguration !== 'function') return;
+    try {
+      pc.setConfiguration({ ...pc.getConfiguration(), iceServers: servers });
+      this.pcServers = servers;
+    } catch (err) {
+      this.log('error', `could not change the ICE servers for the restart (${(err as Error)?.message ?? err})`);
+      if (strict) throw err; // the camera falls back to a fresh connection (runAttempt)
+    }
+  }
+
+  /** Which candidate pair carries the open link, logged when it changes. */
+  private async checkPath(): Promise<void> {
+    const pc = this.pc;
+    if (!pc || !this.open) return;
+    this.lastPathAt = this.now();
+    const p = await selectedPath(pc, relayAddresses(this.remoteSdp)).catch(() => null);
+    if (!p || this.pc !== pc || !this.open) return;
+    const line = `${p.type}: ${p.detail}`;
+    if (line !== this.lastPathLine) this.log('path', line);
+    this.lastPathLine = line;
+    this.set({ path: p.type });
   }
 
   private local(what: string, sdp: string, ms: number): void {
@@ -459,12 +599,15 @@ export class PeerLink {
       this.pc.signalingState === 'stable' &&
       this.dc?.readyState === 'open';
     if (!first && !this.open) this.holdCapture(await this.ensureCapture('reconnect'));
-    const pc = reuse ? this.pc! : this.newPc();
+    const servers = await this.iceServers();
+    const pc = reuse ? this.pc! : this.newPc(servers);
+    if (reuse) this.configure(pc, servers, false);
     await pc.setRemoteDescription({ type: 'offer', sdp: offer.sdp });
     this.remote(`offer gen ${offer.gen} ${offer.fresh ? 'new connection' : 'ICE restart'}`, offer.sdp);
     await pc.setLocalDescription(await pc.createAnswer());
     const start = this.now();
-    await gathered(pc);
+    const relay = this.pcServers.length > 0;
+    await gathered(pc, relay ? GATHER_RELAY_MS : GATHER_LAN_MS, relay ? GATHER_SETTLE_MS : undefined);
     const sdp = pc.localDescription!.sdp;
     this.local(`answer gen ${offer.gen} ${reuse ? 'ICE restart' : 'new connection'}`, sdp, this.now() - start);
     if (first && !hasCandidates(sdp)) throw new PairFailure('no-candidates');
@@ -512,6 +655,7 @@ export class PeerLink {
         if (!wasOpen) {
           this.log('link', `open: the other phone runs ${m.app}`);
           this.sendHello();
+          void this.checkPath();
         }
         this.set({
           remote: { deviceId: m.deviceId, app: m.app, ua: m.ua },
@@ -552,6 +696,8 @@ export class PeerLink {
     if (this.open) {
       this.open = false;
       this.log('link', `down: ${cause}`);
+      this.log('path', 'none');
+      this.lastPathLine = '';
       this.down = { since: cause === 'pongs' ? this.lastPongAt : now, cause };
       // The scoreboard was polling at the idle 15 s: look for the camera's new offer now, then every 2 s.
       this.nextPollAt = Math.min(this.nextPollAt, now);
@@ -563,7 +709,7 @@ export class PeerLink {
         this.retryAt = now + POLL_FAST_MS;
       } else if (cause === 'closed' || (cause === 'ice-failed' && this.down.cause === 'pongs')) this.down = { ...this.down, cause };
     } else this.down = { since: now, cause };
-    this.set({});
+    this.set({ path: 'none' });
   }
 
   private canRestart(): boolean {
@@ -576,13 +722,40 @@ export class PeerLink {
     if (this.dc?.readyState === 'open' && now - this.lastPingAt >= PING_EVERY_MS) this.ping();
     if (this.open && this.dc?.readyState !== 'open') this.goDown('closed'); // gone without a close event
     else if (this.open && pongsMissed(now, this.lastPongAt)) this.goDown('pongs');
+    if (this.open && now - this.lastPathAt >= PATH_EVERY_MS) void this.checkPath();
+    this.checkSlow(now);
     if (this.role === 'camera') this.tickCamera(now);
     else this.tickScoreboard(now);
     this.set({});
   }
 
+  /**
+   * Still not open SLOW_CONNECT_MS after the first answer (the camera meanwhile tries new connections): log
+   * why, once until the link opens.
+   */
+  private checkSlow(now: number): void {
+    if (this.open) {
+      this.stuckSince = null;
+      this.slowLogged = false;
+      return;
+    }
+    this.stuckSince ??= this.attempt?.answeredAt ?? null;
+    if (this.stuckSince == null || this.slowLogged || now - this.stuckSince < SLOW_CONNECT_MS) return;
+    this.slowLogged = true;
+    const net = this.snap.net;
+    const why = net?.verdict === 'different' ? `different networks and ${relayReason(this.snap.relay, net)}` : `network ${net?.verdict ?? 'not checked'}`;
+    this.log('link', `not connected ${Math.round((now - this.stuckSince) / 1000)} s after the answer: ${why}`);
+  }
+
   private tickCamera(now: number): void {
     if (this.busy) return;
+    // A relayed link is cut when its credentials expire: restart ICE with new ones while it still works.
+    const renew = this.ice && now >= this.ice.expiresAt - ICE_REFRESH_BEFORE_MS && now >= this.iceRetryAt;
+    if (this.open && !this.attempt && this.snap.path === 'relay' && renew) {
+      this.log('relay', 'credentials expire soon · ICE restart with new ones');
+      void this.runAttempt('restart');
+      return;
+    }
     const room = this.snap.room;
     if (!this.open && room && now >= room.expiresAt - ROOM_RENEW_BEFORE_MS && !this.attempt?.answeredAt) {
       void this.pair(); // nobody took the code: show a new one

@@ -5,6 +5,9 @@
 //
 // Self-contained on purpose: Vercel builds one function per file under api/, and server/local.ts runs this
 // same file under Node's type stripping, so it is erasable TypeScript with no relative imports.
+//
+// It also mints short-lived TURN credentials for a live session (GET sessions/:id/ice), so two phones that
+// share no network can still connect through a relay; the TURN key never reaches the phones.
 import { Redis } from '@upstash/redis';
 
 export const ROOM_TTL_S = 600; // a room code lives 10 minutes and is deleted on first read
@@ -13,6 +16,10 @@ export const CLAIM_LIMIT_PER_MIN = 20; // GET rooms/:code per IP: a six-digit co
 export const CREATE_LIMIT_PER_MIN = 10; // POST rooms per IP: keeps the store from being flooded
 export const MAX_BODY_BYTES = 16_384;
 export const MAX_SDP_BYTES = 12_000; // a data-channel-only description with mDNS candidates is 1 to 2 kB
+export const ICE_LIMIT_PER_MIN = 30; // GET sessions/:id/ice per IP: one per new connection or ICE restart
+export const TURN_TTL_S = 3600; // TURN credentials live an hour; the phones fetch new ones before that
+export const TURN_API = 'https://rtc.live.cloudflare.com/v1/turn/keys';
+export const TURN_TIMEOUT_MS = 3000; // inside the phones' 4 s helper timeout
 
 /** The store behind the helper: Redis on Vercel, a Map for local runs and tests. Values are strings. */
 export interface SignalStore {
@@ -131,6 +138,74 @@ export function storeFromEnv(env: Env): SignalStore | null {
   return c ? new RedisStore(c.url, c.token) : null;
 }
 
+// ---- TURN credentials (Cloudflare Realtime TURN) ----
+
+export interface TurnConfig {
+  keyId: string;
+  token: string;
+  /** The keys endpoint; TURN_API_URL replaces it for a local stand-in (e2e). */
+  api: string;
+}
+
+/** TURN_KEY_ID and TURN_KEY_API_TOKEN, the names Cloudflare's docs use; null when either is missing. */
+export function turnFromEnv(env: Env): TurnConfig | null {
+  const keyId = env.TURN_KEY_ID?.trim();
+  const token = env.TURN_KEY_API_TOKEN?.trim();
+  if (!keyId || !token) return null;
+  return { keyId, token, api: (env.TURN_API_URL?.trim() || TURN_API).replace(/\/$/, '') };
+}
+
+export interface TurnServer {
+  urls: string[];
+  username: string;
+  credential: string;
+}
+
+export type TurnFailure = 'auth' | 'upstream' | 'unreachable' | 'bad-response';
+
+export class TurnError extends Error {
+  reason: TurnFailure;
+  constructor(reason: TurnFailure, message: string) {
+    super(message);
+    this.reason = reason;
+  }
+}
+
+type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
+
+/**
+ * Generate credentials valid for `ttlS` seconds: POST {api}/{keyId}/credentials/generate-ice-servers with the
+ * key's API token, which answers 201 with `{iceServers: [{urls}, {urls, username, credential}]}`
+ * (https://developers.cloudflare.com/realtime/turn/generate-credentials/). Only the TURN entries are kept:
+ * the phones add the STUN servers themselves.
+ */
+export async function mintTurn(cfg: TurnConfig, ttlS: number, fetchImpl: Fetch = (i, init) => fetch(i, init)): Promise<TurnServer[]> {
+  let res: Response;
+  try {
+    res = await fetchImpl(`${cfg.api}/${encodeURIComponent(cfg.keyId)}/credentials/generate-ice-servers`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${cfg.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ttl: ttlS }),
+      signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
+    });
+  } catch (err) {
+    throw new TurnError('unreachable', (err as Error)?.message ?? String(err));
+  }
+  if (res.status === 401 || res.status === 403 || res.status === 404) throw new TurnError('auth', `TURN key rejected (${res.status})`);
+  if (!res.ok) throw new TurnError('upstream', `TURN API answered ${res.status}`);
+  const body = (await res.json().catch(() => null)) as { iceServers?: unknown } | null;
+  // An array today; a single object in the older generate endpoint.
+  const list = Array.isArray(body?.iceServers) ? body.iceServers : body?.iceServers ? [body.iceServers] : [];
+  const out: TurnServer[] = [];
+  for (const e of list as Array<{ urls?: unknown; username?: unknown; credential?: unknown }>) {
+    if (typeof e?.username !== 'string' || typeof e.credential !== 'string') continue;
+    const urls = (Array.isArray(e.urls) ? e.urls : [e.urls]).filter((u): u is string => typeof u === 'string' && /^turns?:/.test(u));
+    if (urls.length) out.push({ urls, username: e.username, credential: e.credential });
+  }
+  if (!out.length) throw new TurnError('bad-response', 'no TURN server in the reply');
+  return out;
+}
+
 // ---- protocol of the mailbox ----
 
 export interface Offer {
@@ -149,6 +224,10 @@ interface Session {
 export interface HandlerOptions {
   now?: () => number;
   randomBytes?: (n: number) => Uint8Array;
+  /** Where TURN credentials come from; none means the phones stay on the local network. */
+  turn?: () => TurnConfig | null;
+  /** For the TURN API. */
+  fetch?: Fetch;
 }
 
 const CODE = /^\d{6}$/;
@@ -224,6 +303,7 @@ function routeOf(url: URL): string[] {
 export function createHandler(getStore: () => SignalStore | null, opts: HandlerOptions = {}): (req: Request) => Promise<Response> {
   const now = opts.now ?? Date.now;
   const randomBytes = opts.randomBytes ?? ((n: number) => crypto.getRandomValues(new Uint8Array(n)));
+  const turn = opts.turn ?? (() => null);
 
   const limit = async (store: SignalStore, bucket: string, req: Request, max: number) => {
     const n = await store.incr(`rl:${bucket}:${clientIp(req)}:${Math.floor(now() / 60_000)}`, 60);
@@ -316,6 +396,22 @@ export function createHandler(getStore: () => SignalStore | null, opts: HandlerO
       throw new HttpError(405, 'method');
     }
 
+    if (a === 'sessions' && b && c === 'ice') {
+      if (m !== 'GET') throw new HttpError(405, 'method');
+      await session(store, b, headerSecret);
+      await limit(store, 'ice', req, ICE_LIMIT_PER_MIN);
+      const cfg = turn();
+      if (!cfg) return json(200, { relay: 'not-configured' });
+      try {
+        const iceServers = await mintTurn(cfg, TURN_TTL_S, opts.fetch);
+        return json(200, { relay: 'ok', iceServers, ttl: TURN_TTL_S });
+      } catch (err) {
+        if (!(err instanceof TurnError)) throw err;
+        console.error('TURN credentials failed', err.reason, err.message);
+        throw new HttpError(503, 'relay-failed', { reason: err.reason });
+      }
+    }
+
     throw new HttpError(404, 'not-found');
   };
 
@@ -340,5 +436,5 @@ export function createHandler(getStore: () => SignalStore | null, opts: HandlerO
 let store: SignalStore | null | undefined;
 
 export default {
-  fetch: createHandler(() => (store === undefined ? (store = storeFromEnv(process.env)) : store)),
+  fetch: createHandler(() => (store === undefined ? (store = storeFromEnv(process.env)) : store), { turn: () => turnFromEnv(process.env) }),
 };

@@ -48,7 +48,7 @@ export function PairPanel({ l, onNewCode, onClose }: { l: LinkSnapshot; onNewCod
           : code
             ? `Waiting for the scoreboard… (code valid ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')})`
             : answeredAt != null && now - answeredAt > SLOW_CONNECT_MS
-              ? slowConnectText(l.net)
+              ? slowConnectText(l.net, l.relay)
               : 'Connecting…';
 
   return (

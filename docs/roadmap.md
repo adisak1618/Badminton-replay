@@ -108,7 +108,6 @@ the overlay delay default is decided from the undo counts in the logs.
 - **Offline two-QR pairing** as a fallback for courts with no internet at
   all: the handshake is designed (technical-design.md §4.6) but adds a second
   scan and manual re-pairing after drops.
-- **STUN fallback** (D13) if the phase-0 LAN tests fail on some networks.
 - Small live camera preview on the scoreboard phone (needs a media track on
   the channel; today it is data only).
 - Third phone as a sideline remote through the same protocol.

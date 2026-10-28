@@ -51,20 +51,26 @@ describe('pairing diagnostics', () => {
     expect(storage.data.size).toBe(0);
   });
 
-  it('sums up role, build, network, ICE and the last error in one line', () => {
+  it('sums up role, build, path, relay, network, ICE and the last error in one line', () => {
     const d = new PairingDiag('scoreboard', null, () => T0);
-    expect(d.summary()).toBe(`scoreboard · build ${buildStamp()} · net not checked · ice not started · no error`);
+    expect(d.summary()).toBe(`scoreboard · build ${buildStamp()} · path none · relay: not checked · net not checked · ice not started · no error`);
+    d.log('relay', 'not configured · no TURN key on the helper, local network only');
     d.log('net', 'different (this phone 10.131.171.124, other 10.195.144.160)');
     d.log('ice', 'ice checking');
     d.log('error', 'no-room');
     setUpdateWaiting(true);
     try {
       expect(d.summary()).toBe(
-        `scoreboard · build ${buildStamp()} (update waiting) · net different (this phone 10.131.171.124, other 10.195.144.160) · ice checking · error no-room at 13:03:39`,
+        `scoreboard · build ${buildStamp()} (update waiting) · path none · relay: not configured · net different (this phone 10.131.171.124, other 10.195.144.160) · ice checking · error no-room at 13:03:39`,
       );
     } finally {
       setUpdateWaiting(false);
     }
+    d.log('relay', 'ready until 14:03:39 UTC · stun:stun.cloudflare.com:3478, turn:turn.cloudflare.com:3478?transport=udp');
+    d.log('path', 'relay: this phone relay/udp ↔ other phone srflx');
+    expect(d.summary()).toContain(' · path relay · relay: ready until 14:03:39 UTC · net different');
+    d.log('path', 'none');
+    expect(d.summary()).toContain(' · path none · ');
     expect(buildStamp('badminton-scoreboard@0.3.0+2026-10-28T13:00')).toBe('2026-10-28T13:00');
   });
 

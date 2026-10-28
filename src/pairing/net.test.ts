@@ -34,7 +34,7 @@ describe('candidates of a description', () => {
 
 describe('network check', () => {
   it('the two iPhones of 2026-10-28 were on different networks', () => {
-    expect(netCheck(SCOREBOARD, CAMERA)).toEqual({ mine: ['10.131.171.124'], theirs: ['10.195.144.160'], verdict: 'different' });
+    expect(netCheck(SCOREBOARD, CAMERA)).toEqual({ mine: ['10.131.171.124'], theirs: ['10.195.144.160'], verdict: 'different', relay: { mine: 0, theirs: 0 } });
     expect(netVerdict(['10.160.74.63'], ['10.195.144.160'])).toBe('different'); // the same phones, 12:33 UTC
   });
 
@@ -96,6 +96,29 @@ describe('gathering', () => {
     expect(Date.now() - start).toBeLessThan(20);
   });
 
+  it('with relay servers: ends shortly after a relay candidate, not when the slowest server answers', async () => {
+    const pc = new RestartingPc();
+    pc.iceGatheringState = 'gathering';
+    const candidate = (type: string, after: number) =>
+      setTimeout(() => pc.dispatchEvent(Object.assign(new Event('icecandidate'), { candidate: { type, candidate: `candidate:1 1 udp 1 1.2.3.4 1 typ ${type}` } })), after);
+    candidate('host', 5);
+    candidate('srflx', 15);
+    candidate('relay', 30);
+    const start = Date.now();
+    await gathered(pc as unknown as RTCPeerConnection, 1000, 40);
+    expect(Date.now() - start).toBeGreaterThanOrEqual(65);
+    expect(Date.now() - start).toBeLessThan(300);
+  });
+
+  it('with relay servers but no relay candidate (UDP blocked, TCP slow): waits on, up to the maximum', async () => {
+    const pc = new RestartingPc();
+    pc.iceGatheringState = 'gathering';
+    setTimeout(() => pc.dispatchEvent(Object.assign(new Event('icecandidate'), { candidate: { type: 'host', candidate: 'candidate:1 1 udp 1 1.2.3.4 1 typ host' } })), 5);
+    const start = Date.now();
+    await gathered(pc as unknown as RTCPeerConnection, 150, 20);
+    expect(Date.now() - start).toBeGreaterThanOrEqual(145);
+  });
+
   it('a round that never yields a candidate still ends after the maximum', async () => {
     const pc = new RestartingPc();
     const start = Date.now();
@@ -145,7 +168,7 @@ describe('the scoreboard checks the network as soon as it has answered', () => {
     links.push(link);
     const room = await helper.createRoom(CAMERA);
     await link.join(room.code);
-    expect(link.getSnapshot().net).toEqual({ mine: ['10.131.171.124'], theirs: ['10.195.144.160'], verdict: 'different' });
+    expect(link.getSnapshot().net).toEqual({ mine: ['10.131.171.124'], theirs: ['10.195.144.160'], verdict: 'different', relay: { mine: 0, theirs: 0 } });
     expect(logged).toContain('sdp got offer gen 1 new connection: 10.195.144.160');
     expect(logged.some((l) => l.startsWith('sdp sent answer gen 1 new connection: 10.131.171.124 (gathered in'))).toBe(true);
     expect(logged).toContain('net different (this phone 10.131.171.124, other 10.195.144.160)');
