@@ -6,7 +6,9 @@
 import { ClockSampler } from '../protocol/clock';
 import { PROTOCOL_VERSION, encode, parse, type Msg, type Role } from '../protocol/messages';
 import type { ClockEstimate, LinkState } from '../link/source';
+import type { DiagKind } from './diag';
 import { HelperError, type Desc, type HelperClient, type HelperErrorKind, type Session } from './helper';
+import { candidatesOf, describeCandidates, netCheck, type NetCheck } from './net';
 import {
   PING_EVERY_MS,
   POLL_FAST_MS,
@@ -53,6 +55,8 @@ export interface LinkSnapshot {
   otherBuild: string | null;
   /** The link has been open at least once in this pairing. */
   everOpened: boolean;
+  /** Where this phone and the other one are, from the last descriptions each side sent (net.ts). */
+  net: NetCheck | null;
 }
 
 export type HelloFields = { deviceId: string; app: string; ua?: string; matchId?: string; lastSeq?: number };
@@ -71,6 +75,8 @@ export interface PeerLinkDeps {
   ensureCapture?: (why: 'pair' | 'reconnect') => Promise<(() => void) | void>;
   /** Persisted pairing; defaults to localStorage. */
   saved?: { load(): SavedPairing | null; save(p: SavedPairing | null): void };
+  /** The pairing diagnostics log (diag.ts). */
+  log?: (kind: DiagKind, text: string) => void;
 }
 
 const INITIAL: LinkSnapshot = {
@@ -82,22 +88,29 @@ const INITIAL: LinkSnapshot = {
   mismatch: null,
   otherBuild: null,
   everOpened: false,
+  net: null,
 };
 
 export function hasCandidates(sdp: string): boolean {
   return /^a=candidate:/m.test(sdp);
 }
 
-/** Resolve when ICE gathering is complete, or after `max` ms with whatever was gathered (no trickle ICE). */
+/**
+ * Resolve when ICE gathering is complete, or after `max` ms with whatever was gathered (no trickle ICE).
+ * Right after the description of an ICE restart the state still says `complete` from the last round while the
+ * description has no candidate yet, so complete also needs a candidate: restart offers and answers went out
+ * empty before (production, 2026-10-28) and the restart could not work.
+ */
 export function gathered(pc: RTCPeerConnection, max = GATHER_MAX_MS): Promise<void> {
   return new Promise((resolve) => {
-    if (pc.iceGatheringState === 'complete') return resolve();
+    const ready = () => pc.iceGatheringState === 'complete' && hasCandidates(pc.localDescription?.sdp ?? '');
+    if (ready()) return resolve();
     const done = () => {
       clearTimeout(timer);
       pc.removeEventListener('icegatheringstatechange', check);
       resolve();
     };
-    const check = () => pc.iceGatheringState === 'complete' && done();
+    const check = () => ready() && done();
     const timer = setTimeout(done, max);
     pc.addEventListener('icegatheringstatechange', check);
   });
@@ -111,12 +124,16 @@ export class PeerLink {
   private readonly now: () => number;
   private readonly ensureCapture: NonNullable<PeerLinkDeps['ensureCapture']>;
   private readonly saved: NonNullable<PeerLinkDeps['saved']>;
+  private readonly log: NonNullable<PeerLinkDeps['log']>;
 
   private snap: LinkSnapshot = INITIAL;
   private listeners = new Set<() => void>();
   private session: Session | null = null;
   /** Scoreboard: the room code the current pairing was claimed with. */
   private joined: string | null = null;
+  /** The last description this phone sent and the last one it received, for the network check. */
+  private localSdp: string | null = null;
+  private remoteSdp: string | null = null;
   private gen = 0;
   private pc: RTCPeerConnection | null = null;
   private dc: RTCDataChannel | null = null;
@@ -149,6 +166,7 @@ export class PeerLink {
     this.now = deps.now ?? Date.now;
     this.ensureCapture = deps.ensureCapture ?? (async () => {});
     this.saved = deps.saved ?? { load: () => loadPairing(deps.role), save: (p) => savePairing(deps.role, p) };
+    this.log = deps.log ?? (() => {});
   }
 
   // ---- store plumbing for React ----
@@ -208,10 +226,10 @@ export class PeerLink {
     if (this.role !== 'camera') throw new Error('only the camera opens a room');
     const epoch = this.reset();
     this.setBusy(true);
-    this.set({ error: null, mismatch: null, room: null });
+    this.set({ error: null, mismatch: null, room: null, net: null });
     try {
       this.holdCapture(await this.ensureCapture('pair'));
-      const sdp = await this.makeOffer('fresh');
+      const sdp = await this.makeOffer('fresh', 1);
       if (!hasCandidates(sdp)) throw new PairFailure('no-candidates');
       const r = await this.helper.createRoom(sdp);
       if (epoch !== this.epoch) return;
@@ -223,6 +241,7 @@ export class PeerLink {
       this.nextPollAt = this.now() + POLL_FAST_MS;
       this.offline = false;
       this.set({ room: { code: r.code, expiresAt: this.now() + r.expiresIn * 1000 }, everOpened: false });
+      this.log('link', `showing code ${r.code}`);
       this.startTimer();
     } catch (err) {
       if (epoch === this.epoch) this.fail(err);
@@ -239,7 +258,8 @@ export class PeerLink {
     const epoch = this.reset();
     this.joined = code;
     this.setBusy(true);
-    this.set({ error: null, mismatch: null });
+    this.set({ error: null, mismatch: null, net: null });
+    this.log('link', `joining with code ${code}`);
     try {
       this.holdCapture(await this.ensureCapture('pair'));
       const r = await this.helper.claimRoom(code);
@@ -268,6 +288,7 @@ export class PeerLink {
     this.gen = p.gen;
     this.down = { since: this.now(), cause: 'closed' };
     this.set({ everOpened: true, error: null });
+    this.log('link', `rejoining the saved pairing (session ${p.session.slice(0, 6)}…, gen ${p.gen})`);
     this.startTimer();
     return true;
   }
@@ -298,6 +319,8 @@ export class PeerLink {
     this.offline = false;
     this.busy = false;
     this.retryAt = 0;
+    this.localSdp = null;
+    this.remoteSdp = null;
     this.releaseHeldCapture();
     return ++this.epoch;
   }
@@ -315,6 +338,7 @@ export class PeerLink {
           ? { kind: err.kind, detail: err.message }
           : { kind: 'failed', detail: (err as Error)?.message ?? String(err) };
     if (err instanceof HelperError && err.kind === 'offline') this.offline = true;
+    this.log('error', `${error.kind}${error.detail && error.detail !== error.kind ? ` (${error.detail})` : ''}`);
     this.closePc();
     this.releaseHeldCapture();
     this.set({ error, room: null });
@@ -361,8 +385,11 @@ export class PeerLink {
     this.closePc();
     const pc = this.createPc();
     this.pc = pc;
+    pc.addEventListener('iceconnectionstatechange', () => this.pc === pc && this.log('ice', `ice ${pc.iceConnectionState}`));
+    pc.addEventListener('icegatheringstatechange', () => this.pc === pc && this.log('sdp', `gathering ${pc.iceGatheringState}`));
     pc.addEventListener('connectionstatechange', () => {
       if (this.pc !== pc) return;
+      this.log('ice', `connection ${pc.connectionState}`);
       if (pc.connectionState === 'failed') this.goDown('ice-failed');
       else if (pc.connectionState === 'closed') this.goDown('closed');
     });
@@ -376,20 +403,50 @@ export class PeerLink {
     const mine = () => this.pc === pc && this.dc === dc;
     dc.addEventListener('open', () => {
       if (!mine()) return;
+      this.log('link', 'channel open');
       this.lastPongAt = this.now();
       this.sendHello();
       this.ping();
     });
-    dc.addEventListener('close', () => mine() && this.goDown('closed'));
+    dc.addEventListener('close', () => {
+      if (!mine()) return;
+      this.log('link', 'channel closed');
+      this.goDown('closed');
+    });
     dc.addEventListener('message', (e) => mine() && this.receive(e.data));
   }
 
   /** Camera: a local offer on a new connection ('fresh') or an ICE restart of the current one. */
-  private async makeOffer(kind: 'fresh' | 'restart'): Promise<string> {
-    const pc = kind === 'fresh' || !this.pc ? this.newPc() : this.pc;
-    await pc.setLocalDescription(await pc.createOffer(kind === 'restart' ? { iceRestart: true } : undefined));
+  private async makeOffer(kind: 'fresh' | 'restart', gen: number): Promise<string> {
+    const fresh = kind === 'fresh' || !this.pc;
+    const pc = fresh ? this.newPc() : this.pc!;
+    await pc.setLocalDescription(await pc.createOffer(fresh ? undefined : { iceRestart: true }));
+    const start = this.now();
     await gathered(pc);
-    return pc.localDescription!.sdp;
+    const sdp = pc.localDescription!.sdp;
+    this.local(`offer gen ${gen} ${fresh ? 'new connection' : 'ICE restart'}`, sdp, this.now() - start);
+    return sdp;
+  }
+
+  private local(what: string, sdp: string, ms: number): void {
+    this.localSdp = sdp;
+    this.log('sdp', `sent ${what}: ${describeCandidates(candidatesOf(sdp))} (gathered in ${ms} ms)`);
+    this.checkNet();
+  }
+
+  private remote(what: string, sdp: string): void {
+    this.remoteSdp = sdp;
+    this.log('sdp', `got ${what}: ${describeCandidates(candidatesOf(sdp))}`);
+    this.checkNet();
+  }
+
+  private checkNet(): void {
+    const net = netCheck(this.localSdp, this.remoteSdp);
+    const prev = this.snap.net;
+    const key = (n: NetCheck | null) => (n ? `${n.verdict} ${n.mine} ${n.theirs}` : '');
+    if (key(net) === key(prev)) return;
+    if (net) this.log('net', `${net.verdict} (this phone ${net.mine.join(', ') || 'no address'}, other ${net.theirs.join(', ') || 'no address'})`);
+    this.set({ net });
   }
 
   /** Scoreboard: answer an offer, in place for an ICE restart when the channel is still usable. */
@@ -404,9 +461,12 @@ export class PeerLink {
     if (!first && !this.open) this.holdCapture(await this.ensureCapture('reconnect'));
     const pc = reuse ? this.pc! : this.newPc();
     await pc.setRemoteDescription({ type: 'offer', sdp: offer.sdp });
+    this.remote(`offer gen ${offer.gen} ${offer.fresh ? 'new connection' : 'ICE restart'}`, offer.sdp);
     await pc.setLocalDescription(await pc.createAnswer());
+    const start = this.now();
     await gathered(pc);
     const sdp = pc.localDescription!.sdp;
+    this.local(`answer gen ${offer.gen} ${reuse ? 'ICE restart' : 'new connection'}`, sdp, this.now() - start);
     if (first && !hasCandidates(sdp)) throw new PairFailure('no-candidates');
     await this.helper.postAnswer(this.session!, { gen: offer.gen, sdp, fresh: !reuse });
     this.gen = offer.gen;
@@ -449,7 +509,10 @@ export class PeerLink {
         this.offline = false;
         this.releaseHeldCapture();
         this.persist();
-        if (!wasOpen) this.sendHello();
+        if (!wasOpen) {
+          this.log('link', `open: the other phone runs ${m.app}`);
+          this.sendHello();
+        }
         this.set({
           remote: { deviceId: m.deviceId, app: m.app, ua: m.ua },
           otherBuild: m.app !== this.helloFields().app ? m.app : null,
@@ -476,6 +539,7 @@ export class PeerLink {
   /** R-PAIR-7: the other phone speaks another protocol version. Stop, and say which phone to update. */
   private versionMismatch(v: unknown, theirs: string | null): void {
     this.send({ t: 'bye', reason: 'version' });
+    this.log('error', `protocol mismatch, the other phone runs ${theirs ?? 'another version'}`);
     const newer = typeof v === 'number' ? (v > PROTOCOL_VERSION ? 'other' : 'this') : null;
     this.reset();
     this.saved.save(null);
@@ -487,7 +551,10 @@ export class PeerLink {
     const now = this.now();
     if (this.open) {
       this.open = false;
+      this.log('link', `down: ${cause}`);
       this.down = { since: cause === 'pongs' ? this.lastPongAt : now, cause };
+      // The scoreboard was polling at the idle 15 s: look for the camera's new offer now, then every 2 s.
+      this.nextPollAt = Math.min(this.nextPollAt, now);
     } else if (this.down) {
       if (cause !== 'pongs' && this.attempt?.answeredAt != null) {
         // The connection an attempt brought up has failed too: the next attempt is a fresh connection.
@@ -557,6 +624,7 @@ export class PeerLink {
         return;
       }
       await this.pc!.setRemoteDescription({ type: 'answer', sdp: ans.sdp });
+      this.remote(`answer gen ${ans.gen}`, ans.sdp);
       a.answeredAt = this.now();
       if (this.open) this.attempt = null;
       if (this.snap.room) this.set({ room: null });
@@ -580,15 +648,15 @@ export class PeerLink {
     this.busy = true;
     try {
       this.holdCapture(await this.ensureCapture('reconnect'));
+      const gen = this.gen + 1;
       let sdp: string;
       try {
-        sdp = await this.makeOffer(kind);
+        sdp = await this.makeOffer(kind, gen);
       } catch (err) {
         if (kind === 'fresh') throw err;
         kind = 'fresh';
-        sdp = await this.makeOffer('fresh');
+        sdp = await this.makeOffer('fresh', gen);
       }
-      const gen = this.gen + 1;
       await this.helper.postOffer(this.session!, { gen, sdp, fresh: kind === 'fresh' });
       if (epoch !== this.epoch) return;
       this.gen = gen;
@@ -637,6 +705,7 @@ export class PeerLink {
     if (!(err instanceof HelperError)) return;
     if (err.kind === 'offline') this.offline = !this.open;
     if (err.kind === 'no-session') {
+      this.log('error', 'the helper no longer knows this pairing (expired)');
       this.reset();
       this.saved.save(null);
       this.set({ ...INITIAL, error: { kind: 'expired' } });

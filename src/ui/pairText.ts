@@ -1,5 +1,6 @@
 // What the pairing screens say when something goes wrong (ux-design.md E1).
 import type { Mismatch, PairError } from '../pairing/link';
+import type { NetCheck } from '../pairing/net';
 
 export const NO_INTERNET = 'No internet: cannot pair. Scoring and recording still work on each phone.';
 
@@ -34,3 +35,12 @@ export function mismatchText(m: Mismatch): string {
 export const SLOW_CONNECT_MS = 15_000;
 export const SLOW_CONNECT_TEXT =
   'Still connecting. Both phones must be on the same Wi-Fi or hotspot, and that network must let devices see each other.';
+
+/** The slow-connect line, naming the two addresses when they show the phones are on different networks. */
+export function slowConnectText(net: NetCheck | null): string {
+  if (net?.verdict !== 'different') return SLOW_CONNECT_TEXT;
+  return (
+    `Not connecting: the phones are on different networks (this phone ${net.mine[0]}, the other ${net.theirs[0]}), ` +
+    'probably mobile data. Put both on the same Wi-Fi, or turn on Personal Hotspot on one phone and join its Wi-Fi from the other, then pair again.'
+  );
+}

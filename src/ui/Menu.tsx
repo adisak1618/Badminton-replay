@@ -4,6 +4,7 @@ import { useState } from 'react';
 import type { MatchConfig, MatchState } from '../engine';
 import type { Prefs } from '../match/prefs';
 import { CameraMenuRows } from './CameraLink';
+import { DiagSheet } from './DiagSheet';
 
 export function Menu({
   s,
@@ -30,6 +31,7 @@ export function Menu({
   onPair: () => void;
 }) {
   const [confirm, setConfirm] = useState<'end' | 'new' | null>(null);
+  const [diag, setDiag] = useState(false);
   const over = s.phase === 'matchOver';
   const row = 'btn min-h-14 w-full bg-pan2 text-left';
   return (
@@ -75,10 +77,14 @@ export function Menu({
             Update the app {over ? '' : '(reloads)'}
           </button>
         )}
+        <button className={row} onClick={() => setDiag(true)}>
+          Pairing diagnostics
+        </button>
         <button className={`${row} btn-ghost bg-transparent`} onClick={onClose}>
           Close
         </button>
       </div>
+      {diag && <DiagSheet role="scoreboard" onClose={() => setDiag(false)} />}
     </div>
   );
 }
