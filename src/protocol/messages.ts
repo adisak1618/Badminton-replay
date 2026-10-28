@@ -1,24 +1,39 @@
-// The data-channel protocol between the two phones (technical-design.md §4.4) and hand-written guards for
-// everything that arrives. Unknown `t` is ignored; an unsupported `v` is answered with `bye` (R-PAIR-7).
-import type { MatchConfig, MatchEvent } from '../engine';
+// The data-channel protocol between the camera and each scoreboard (technical-design.md §4.4) and hand-written
+// guards for everything that arrives. Unknown `t` is ignored; an unsupported `v` is answered with `bye`
+// (R-PAIR-7). Version 2 (D14): the camera holds the match; scoreboards send inputs and render what it sends.
+import type { Input, InputResult, MatchConfig, MatchEvent } from '../engine';
 import type { RecReport } from '../link/source';
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 /** Every message stays under this (MDN: large messages block the channel; SDP default is 64 kB). */
 export const MAX_MESSAGE_BYTES = 16_000;
 
 export type Role = 'scoreboard' | 'camera';
 
+type Part = [index: number, count: number];
+
 export type Msg =
-  | { v: 1; t: 'hello'; role: Role; deviceId: string; app: string; ua?: string; matchId?: string; lastSeq?: number }
-  | { v: 1; t: 'ping'; id: number; t0: number }
-  | { v: 1; t: 'pong'; id: number; t0: number; t1: number; t2: number }
-  | { v: 1; t: 'event'; event: MatchEvent }
-  | { v: 1; t: 'sync'; matchId: string; config: MatchConfig; events: MatchEvent[]; part?: [index: number, count: number] }
-  | ({ v: 1; t: 'rec' } & RecReport)
-  | { v: 1; t: 'cmd'; id: string; action: 'rec.start' | 'rec.stop' }
-  | { v: 1; t: 'ack'; id: string; ok: boolean; error?: string }
-  | { v: 1; t: 'bye'; reason?: 'version' | 'leaving' | 'unpaired' };
+  | { v: 2; t: 'hello'; role: Role; deviceId: string; app: string; ua?: string; matchId?: string; lastSeq?: number }
+  | { v: 2; t: 'ping'; id: number; t0: number }
+  | { v: 2; t: 'pong'; id: number; t0: number; t1: number; t2: number }
+  // scoreboard -> camera: its live match, offered when the camera holds none (the camera adopts it)
+  | { v: 2; t: 'sync'; matchId: string; config: MatchConfig; events: MatchEvent[]; part?: Part }
+  // camera -> scoreboard: the whole match it holds, or none (matchId null), on every open and on request
+  | { v: 2; t: 'state'; matchId: string | null; config?: MatchConfig; events?: MatchEvent[]; part?: Part }
+  // camera -> scoreboard: one event the camera applied, in order (its seq is the log's length)
+  | { v: 2; t: 'event'; matchId: string; event: MatchEvent }
+  // scoreboard -> camera: a tap or a menu action, for the camera to apply
+  | { v: 2; t: 'input'; matchId: string; input: Input }
+  // camera -> the scoreboard that sent the input: what became of it
+  | { v: 2; t: 'result'; id: string; result: InputResult }
+  // scoreboard -> camera: its copy has a gap, send the whole state again
+  | { v: 2; t: 'resync' }
+  // camera -> scoreboard: how many scoreboards are linked right now
+  | { v: 2; t: 'peers'; count: number }
+  | ({ v: 2; t: 'rec' } & RecReport)
+  | { v: 2; t: 'cmd'; id: string; action: 'rec.start' | 'rec.stop' }
+  | { v: 2; t: 'ack'; id: string; ok: boolean; error?: string }
+  | { v: 2; t: 'bye'; reason?: 'version' | 'leaving' | 'unpaired' };
 
 export type MsgOf<T extends Msg['t']> = Extract<Msg, { t: T }>;
 
@@ -68,7 +83,17 @@ export function isMatchConfig(x: unknown): x is MatchConfig {
 }
 
 export function isMatchEvent(x: unknown): x is MatchEvent {
-  if (!isObj(x) || !isNum(x.seq) || !isStr(x.id) || !isNum(x.at) || !isStr(x.by) || !EVENT_TYPES.has(x.type as string)) return false;
+  if (!isObj(x) || !isNum(x.seq) || !isStr(x.id) || !isNum(x.at) || !isStr(x.by)) return false;
+  return isBody(x, true);
+}
+
+/** An input: undo and redo carry no target (the camera picks it). */
+export function isInput(x: unknown): x is Input {
+  return isObj(x) && isStr(x.id) && isNum(x.at) && isStr(x.by) && isObj(x.body) && isBody(x.body, false);
+}
+
+function isBody(x: Obj, targeted: boolean): boolean {
+  if (!EVENT_TYPES.has(x.type as string)) return false;
   switch (x.type) {
     case 'match.start':
       return isMatchConfig(x.config);
@@ -77,7 +102,7 @@ export function isMatchEvent(x: unknown): x is MatchEvent {
       return isTeam(x.team);
     case 'undo':
     case 'redo':
-      return isNum(x.target);
+      return targeted ? isNum(x.target) : x.target === undefined;
     case 'correct':
       return isScore(x.score) && isTeam(x.server) && (x.games === undefined || isScore(x.games));
     case 'server.set':
@@ -92,6 +117,10 @@ export function isMatchEvent(x: unknown): x is MatchEvent {
 }
 
 const REC_STATES = new Set(['idle', 'recording', 'stopping', 'error']);
+const RESULTS = new Set(['applied', 'duplicate', 'ignored']);
+
+const isPart = (p: unknown) =>
+  p === undefined || (Array.isArray(p) && p.length === 2 && p.every((n) => Number.isInteger(n)) && p[0] >= 0 && p[0] < p[1]);
 
 function guard(x: Obj): boolean {
   switch (x.t) {
@@ -109,16 +138,20 @@ function guard(x: Obj): boolean {
     case 'pong':
       return isNum(x.id) && isNum(x.t0) && isNum(x.t1) && isNum(x.t2);
     case 'event':
-      return isMatchEvent(x.event);
+      return isStr(x.matchId) && isMatchEvent(x.event);
     case 'sync':
-      return (
-        isStr(x.matchId) &&
-        isMatchConfig(x.config) &&
-        Array.isArray(x.events) &&
-        x.events.every(isMatchEvent) &&
-        (x.part === undefined ||
-          (Array.isArray(x.part) && x.part.length === 2 && x.part.every((n) => Number.isInteger(n)) && x.part[0] >= 0 && x.part[0] < x.part[1]))
-      );
+      return isStr(x.matchId) && isMatchConfig(x.config) && Array.isArray(x.events) && x.events.every(isMatchEvent) && isPart(x.part);
+    case 'state':
+      if (x.matchId === null) return x.config === undefined && x.events === undefined && x.part === undefined;
+      return isStr(x.matchId) && isMatchConfig(x.config) && Array.isArray(x.events) && x.events.every(isMatchEvent) && isPart(x.part);
+    case 'input':
+      return isStr(x.matchId) && isInput(x.input);
+    case 'result':
+      return isStr(x.id) && RESULTS.has(x.result as string);
+    case 'resync':
+      return true;
+    case 'peers':
+      return Number.isInteger(x.count) && (x.count as number) >= 0;
     case 'rec':
       return (
         REC_STATES.has(x.state as string) &&

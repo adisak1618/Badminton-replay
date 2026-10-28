@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { other, reduce } from '../../engine';
 import type { LocalSource } from '../../link/local';
+import type { SlotsSnapshot } from '../../pairing/slots';
 import { saveLogo } from '../../match/persist';
 import type { Corner, LogoSize } from '../../overlay';
 import { DIM_AFTER_MS, LOW_MINUTES, OVERLAY_DELAYS_MS, QUALITIES, type Quality } from '../../recording/config';
@@ -18,10 +19,12 @@ import { CameraMenu, HoldButton, LinkChip } from './parts';
 interface Props {
   ctrl: CameraController;
   demo: LocalSource | null;
-  paired: boolean;
+  /** The scoreboard slots (D14). */
+  slots: SlotsSnapshot;
   onToggleDemo: () => void;
   onPair: () => void;
-  onUnpair: () => void;
+  /** One scoreboard, or all of them (no index). */
+  onUnpair: (i?: number) => void;
   /** C2, shown over the preview while open. */
   c2: ReactNode;
   /** Why the last pairing ended (version mismatch, expired), shown in C1. */
@@ -69,7 +72,7 @@ function Seg<T extends string | number | boolean>({
   );
 }
 
-export function CameraScreen({ ctrl, demo, paired, onToggleDemo, onPair, onUnpair, c2, pairNote, onRecordings, onLeave, onUpdate }: Props) {
+export function CameraScreen({ ctrl, demo, slots, onToggleDemo, onPair, onUnpair, c2, pairNote, onRecordings, onLeave, onUpdate }: Props) {
   const snap = useSyncExternalStore(ctrl.subscribe, ctrl.getSnapshot);
   const mirror = useSyncExternalStore(ctrl.mirror.subscribe, ctrl.mirror.getSnapshot);
   const [menu, setMenu] = useState(false);
@@ -126,6 +129,12 @@ export function CameraScreen({ ctrl, demo, paired, onToggleDemo, onPair, onUnpai
     if (ctrl.setLogo(null)) await saveLogo(null).catch(() => {});
   };
 
+  const linked = slots.slots.filter((s) => s.state === 'paired').length;
+  const boards = !demo && slots.paired > 0 && (
+    <span className="text-mut tabular-nums" data-testid="boards" title="Scoreboards linked">
+      {linked}/{slots.slots.length}
+    </span>
+  );
   const live = useMemo(() => (mirror.config ? reduce(mirror.config, mirror.events) : null), [mirror.config, mirror.events]);
   const lastScore =
     live && mirror.config
@@ -160,6 +169,7 @@ export function CameraScreen({ ctrl, demo, paired, onToggleDemo, onPair, onUnpai
       </span>
       <span className="flex min-w-0 items-center gap-2">
         <LinkChip link={mirror.link} demo={!!demo} />
+        {boards}
         {lastScore && <b className="truncate" data-testid="last-score">{lastScore}</b>}
       </span>
     </>
@@ -173,6 +183,7 @@ export function CameraScreen({ ctrl, demo, paired, onToggleDemo, onPair, onUnpai
       </span>
       <span className="flex min-w-0 items-center gap-2">
         <LinkChip link={mirror.link} demo={!!demo} />
+        {boards}
         {lastScore && (
           <span className="truncate" data-testid="last-score">
             {lastScore}
@@ -316,6 +327,14 @@ export function CameraScreen({ ctrl, demo, paired, onToggleDemo, onPair, onUnpai
                   </button>
                 </div>
               )}
+              {!demo && slots.paired > 0 && slots.paired < slots.slots.length && (
+                <div className="flex items-center gap-2 text-xs text-mut">
+                  <span className="flex-1">A second scoreboard can join at any time.</span>
+                  <button className="btn min-h-9 px-2 py-1 text-sm" onClick={onPair} data-testid="cam-pair-more">
+                    Pair another…
+                  </button>
+                </div>
+              )}
             </div>
             <div className="flex shrink-0 items-center justify-between gap-2">
               <button className="btn btn-ghost text-sm" onClick={onRecordings}>
@@ -342,15 +361,15 @@ export function CameraScreen({ ctrl, demo, paired, onToggleDemo, onPair, onUnpai
       {menu && (
         <CameraMenu
           demo={!!demo}
-          paired={paired}
+          slots={slots}
           recording={active}
           onPair={() => {
             setMenu(false);
             onPair();
           }}
-          onUnpair={() => {
+          onUnpair={(i) => {
             setMenu(false);
-            onUnpair();
+            onUnpair(i);
           }}
           onDemo={() => {
             onToggleDemo();

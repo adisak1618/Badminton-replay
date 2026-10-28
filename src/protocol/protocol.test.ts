@@ -4,15 +4,23 @@ import { append, randomId, type MatchEvent } from '../engine';
 import { makeConfig } from '../engine/test-utils';
 import { ClockSampler, sample } from './clock';
 import { MAX_MESSAGE_BYTES, PROTOCOL_VERSION, encode, isMatchEvent, parse } from './messages';
-import { SyncAssembler, syncParts } from './sync';
+import { SyncAssembler, stateParts, syncParts } from './sync';
 
 const config = makeConfig();
 
 describe('message guards', () => {
   it('accept every example and shape from §4.4', () => {
     const examples = [
-      '{"v":1,"t":"event","event":{"seq":17,"id":"k3f9","at":1793100000123,"by":"sb-7c2","type":"point","team":"A"}}',
-      '{"v":1,"t":"rec","state":"recording","segment":1,"startedAt":1793099000456,"elapsedMs":754000,"bytes":565000000,"minutesLeft":26}',
+      '{"v":2,"t":"input","matchId":"m-1","input":{"id":"k3f9","at":1793100000123,"by":"sb-7c2","body":{"type":"point","team":"A"}}}',
+      '{"v":2,"t":"event","matchId":"m-1","event":{"seq":17,"id":"k3f9","at":1793100000101,"by":"sb-7c2","type":"point","team":"A"}}',
+      '{"v":2,"t":"result","id":"k3f9","result":"duplicate"}',
+      '{"v":2,"t":"rec","state":"recording","segment":1,"startedAt":1793099000456,"elapsedMs":754000,"bytes":565000000,"minutesLeft":26}',
+      encode({ t: 'input', matchId: 'm', input: { id: 'u', at: 1, by: 'sb', body: { type: 'undo' } } }),
+      encode({ t: 'input', matchId: 'm', input: { id: 's', at: 1, by: 'sb', body: { type: 'match.start', config } } }),
+      encode({ t: 'state', matchId: null }),
+      encode({ t: 'state', matchId: 'm', config, events: [], part: [0, 2] }),
+      encode({ t: 'resync' }),
+      encode({ t: 'peers', count: 2 }),
       encode({ t: 'hello', role: 'scoreboard', deviceId: 'sb-1', app: 'x@1', matchId: 'm-1', lastSeq: 3 }),
       encode({ t: 'hello', role: 'camera', deviceId: 'cam-1', app: 'x@1', ua: 'iPhone' }),
       encode({ t: 'ping', id: 1, t0: 10 }),
@@ -47,22 +55,30 @@ describe('message guards', () => {
     const bad = [
       'not json',
       '[1,2]',
-      '{"v":1,"t":"event","event":{"seq":"1","id":"x","at":1,"by":"s","type":"point","team":"A"}}',
-      '{"v":1,"t":"event","event":{"seq":1,"id":"x","at":1,"by":"s","type":"point","team":"C"}}',
-      '{"v":1,"t":"event","event":{"seq":1,"id":"x","at":1,"by":"s","type":"teleport"}}',
-      '{"v":1,"t":"ping","id":1}',
-      '{"v":1,"t":"rec","state":"dancing"}',
-      '{"v":1,"t":"cmd","id":"c","action":"rec.pause"}',
-      '{"v":1,"t":"sync","matchId":"m","config":{},"events":[]}',
-      '{"v":1,"t":"sync","matchId":"m","config":' + JSON.stringify(config) + ',"events":[],"part":[2,2]}',
-      '{"v":1,"t":"hello","role":"referee","deviceId":"d","app":"a"}',
-      '{"v":1,"t":"newfangled","x":1}',
+      '{"v":2,"t":"event","matchId":"m","event":{"seq":"1","id":"x","at":1,"by":"s","type":"point","team":"A"}}',
+      '{"v":2,"t":"event","matchId":"m","event":{"seq":1,"id":"x","at":1,"by":"s","type":"point","team":"C"}}',
+      '{"v":2,"t":"event","matchId":"m","event":{"seq":1,"id":"x","at":1,"by":"s","type":"teleport"}}',
+      '{"v":2,"t":"event","event":{"seq":1,"id":"x","at":1,"by":"s","type":"point","team":"A"}}',
+      '{"v":2,"t":"input","matchId":"m","input":{"id":"x","at":1,"by":"s","body":{"type":"undo","target":3}}}',
+      '{"v":2,"t":"input","matchId":"m","input":{"id":"x","at":1,"body":{"type":"point","team":"A"}}}',
+      '{"v":2,"t":"result","id":"x","result":"maybe"}',
+      '{"v":2,"t":"state","matchId":null,"events":[]}',
+      '{"v":2,"t":"peers","count":-1}',
+      '{"v":2,"t":"ping","id":1}',
+      '{"v":2,"t":"rec","state":"dancing"}',
+      '{"v":2,"t":"cmd","id":"c","action":"rec.pause"}',
+      '{"v":2,"t":"sync","matchId":"m","config":{},"events":[]}',
+      '{"v":2,"t":"sync","matchId":"m","config":' + JSON.stringify(config) + ',"events":[],"part":[2,2]}',
+      '{"v":2,"t":"hello","role":"referee","deviceId":"d","app":"a"}',
+      '{"v":2,"t":"newfangled","x":1}',
     ];
     for (const raw of bad) expect(parse(raw).kind, raw).toBe('ignore');
   });
 
   it('another protocol version is reported, not parsed (R-PAIR-7)', () => {
-    expect(parse('{"v":2,"t":"hello","role":"camera","deviceId":"d","app":"next@2"}')).toEqual({ kind: 'version', v: 2, app: 'next@2' });
+    expect(parse('{"v":3,"t":"hello","role":"camera","deviceId":"d","app":"next@3"}')).toEqual({ kind: 'version', v: 3, app: 'next@3' });
+    // A phone still on protocol 1 (before D14) is told to update, not half understood.
+    expect(parse('{"v":1,"t":"hello","role":"scoreboard","deviceId":"d","app":"old@1"}')).toEqual({ kind: 'version', v: 1, app: 'old@1' });
     expect(parse('{"t":"hello"}')).toMatchObject({ kind: 'version', v: undefined });
     expect(JSON.parse(encode({ t: 'bye' })).v).toBe(PROTOCOL_VERSION);
   });
@@ -138,17 +154,38 @@ describe('sync chunking', () => {
       if (r.kind !== 'msg' || r.msg.t !== 'sync') throw new Error('not a sync');
       return a.add(r.msg);
     });
-    expect(out.slice(0, -1).every((x) => x === null)).toBe(true);
+    expect(out.slice(0, -1).every((x) => x === undefined)).toBe(true);
     expect(out[out.length - 1]).toEqual(log);
+  });
+
+  it('the camera\'s state is chunked the same way, and "no match" is one small message', () => {
+    const log = longLog();
+    const parts = stateParts(log);
+    expect(parts.length).toBeGreaterThan(2);
+    const enc = new TextEncoder();
+    for (const p of parts) expect(enc.encode(p).length).toBeLessThanOrEqual(MAX_MESSAGE_BYTES);
+    const a = new SyncAssembler();
+    let last: unknown;
+    for (const p of parts) {
+      const r = parse(p);
+      if (r.kind !== 'msg' || r.msg.t !== 'state') throw new Error('not a state');
+      last = a.add(r.msg);
+    }
+    expect(last).toEqual(log);
+    const none = stateParts(null);
+    expect(none).toHaveLength(1);
+    const r = parse(none[0]);
+    if (r.kind !== 'msg' || r.msg.t !== 'state') throw new Error('not a state');
+    expect(a.add(r.msg)).toBeNull();
   });
 
   it('a gap drops the partial log; a new part 0 starts over', () => {
     const log = longLog();
     const msgs = syncParts(log).map((p) => JSON.parse(p));
     const a = new SyncAssembler();
-    expect(a.add(msgs[0])).toBeNull();
-    expect(a.add(msgs[2])).toBeNull(); // part 1 missing
-    expect(a.add(msgs[msgs.length - 1])).toBeNull();
+    expect(a.add(msgs[0])).toBeUndefined();
+    expect(a.add(msgs[2])).toBeUndefined(); // part 1 missing
+    expect(a.add(msgs[msgs.length - 1])).toBeUndefined();
     let last = null;
     for (const m of msgs) last = a.add(m);
     expect(last).toEqual(log);

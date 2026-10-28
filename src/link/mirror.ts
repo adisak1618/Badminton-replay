@@ -1,5 +1,5 @@
-// The camera's copy of the scoreboard's log (technical-design.md §3.5): replaced wholesale on every sync,
-// extended by events, deduplicated by id (R-PAIR-4). Each event also gets the camera's receive time.
+// The recording's view of the match the score source holds (technical-design.md §3.5): replaced wholesale on
+// every sync, extended by events, deduplicated by id (R-PAIR-4). Each event also gets the camera's receive time.
 import type { MatchConfig, MatchEvent } from '../engine';
 import type { LinkState, MatchLog, RecCommand, ScoreSource, SourceListener } from './source';
 

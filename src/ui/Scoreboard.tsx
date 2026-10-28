@@ -1,5 +1,5 @@
 // S3 scoreboard: two tap zones, top bar, Undo band, and the S3a-S3c overlays, S4 correction and S5 menu.
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent } from 'react';
 import {
   other,
   receiverIdx,
@@ -11,7 +11,8 @@ import {
   type MatchState,
   type Team,
 } from '../engine';
-import { keepScreenOn } from '../device/wakeLock';
+import { keepScreenOn, subscribeWake, wakeHint, wakeStatus } from '../device/wakeLock';
+import { DUPLICATE_WINDOW_MS } from '../engine';
 import type { Prefs } from '../match/prefs';
 import type { MatchStore } from '../match/store';
 import { announce } from '../speech/announce';
@@ -27,6 +28,8 @@ import { GameOverOverlay, IntervalOverlay, MatchOverOverlay } from './overlays';
 import { useNow } from './useNow';
 
 const REDO_WINDOW_MS = 5000;
+/** How long "already counted" stays up after a duplicate tap (D14). */
+const DUPLICATE_CUE_MS = DUPLICATE_WINDOW_MS;
 const SHUTTLE = '\u{1F3F8}';
 
 interface Props {
@@ -45,6 +48,7 @@ interface Props {
 
 export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, resumed, onContinue, onNewMatch, onUpdate, onPair }: Props) {
   const camera = useCameraLink();
+  const wakeLine = wakeHint(useSyncExternalStore(subscribeWake, wakeStatus));
   const [sheet, setSheet] = useState<'none' | 'menu' | 'correct'>('none');
   const [flash, setFlash] = useState<{ zone: Zone; key: number } | null>(null);
   const [undoAt, setUndoAt] = useState(0);
@@ -154,6 +158,7 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
     if (prefs.voice && live) speak(scoreCall(s, prefs.lang), prefs.lang);
   };
 
+  const duplicate = camera.b.duplicateAt != null && now - camera.b.duplicateAt < DUPLICATE_CUE_MS;
   const gameInfo = `Game ${s.game} · ${config.teams.A.name} ${s.games.A}–${s.games.B} ${config.teams.B.name} · ${FORMAT_LABEL[config.format]}`;
   const speechWarning = prefs.voice && (!speechAvailable() || !hasVoice(prefs.lang));
 
@@ -246,6 +251,20 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
         )}
         {resumed && (
           <button className="absolute inset-0 z-30 bg-bg/20" onClick={continueResumed} aria-label="Continue the match" />
+        )}
+        {duplicate && (
+          <div
+            className="pointer-events-none absolute top-3 left-1/2 z-20 -translate-x-1/2 rounded-full bg-pan2 px-4 py-2 font-semibold text-amber shadow-[0_2px_12px_rgb(0_0_0/0.6)]"
+            role="status"
+            data-testid="duplicate-cue"
+          >
+            Already counted on the other scoreboard
+          </div>
+        )}
+        {wakeLine && (
+          <div className="pointer-events-none absolute bottom-1 left-1/2 z-20 w-max max-w-[90%] -translate-x-1/2 text-center text-xs text-amber" data-testid="wake-hint">
+            {wakeLine}
+          </div>
         )}
       </div>
 

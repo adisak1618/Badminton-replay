@@ -11,11 +11,12 @@ export interface SavedPairing extends Session {
 }
 
 const SESSION_MS = 6 * 3600_000;
-const key = (role: Role) => `bs.pair.${role}`;
+/** The camera keeps one pairing per scoreboard slot; the first keeps the key it always had. */
+const key = (role: Role, slot = 0) => (slot ? `bs.pair.${role}.${slot + 1}` : `bs.pair.${role}`);
 
-export function loadPairing(role: Role, now = Date.now()): SavedPairing | null {
+export function loadPairing(role: Role, now = Date.now(), slot = 0): SavedPairing | null {
   try {
-    const p = JSON.parse(localStorage.getItem(key(role)) ?? 'null') as SavedPairing | null;
+    const p = JSON.parse(localStorage.getItem(key(role, slot)) ?? 'null') as SavedPairing | null;
     if (!p || typeof p.session !== 'string' || typeof p.secret !== 'string' || typeof p.gen !== 'number') return null;
     return now - p.at < SESSION_MS ? p : null;
   } catch {
@@ -23,10 +24,10 @@ export function loadPairing(role: Role, now = Date.now()): SavedPairing | null {
   }
 }
 
-export function savePairing(role: Role, p: SavedPairing | null): void {
+export function savePairing(role: Role, p: SavedPairing | null, slot = 0): void {
   try {
-    if (p) localStorage.setItem(key(role), JSON.stringify(p));
-    else localStorage.removeItem(key(role));
+    if (p) localStorage.setItem(key(role, slot), JSON.stringify(p));
+    else localStorage.removeItem(key(role, slot));
   } catch {
     // private mode or storage full: pairing still works, it just does not survive a reload
   }
