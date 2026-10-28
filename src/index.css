@@ -196,3 +196,33 @@
     animation: none;
   }
 }
+
+/* Camera role: the composited canvas is the preview (ux-design.md C1, C3). */
+.preview-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+@keyframes hold-fill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+.hold-fill {
+  transform-origin: left;
+  animation: hold-fill linear forwards;
+}
+
+@keyframes rec-blink {
+  50% {
+    opacity: 0.25;
+  }
+}
+.rec-dot {
+  animation: rec-blink 1s steps(1) infinite;
+}

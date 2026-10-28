@@ -11,14 +11,17 @@ score. Every point is logged with its time on the recording, so the finished
 clip is on the phone when the match ends and the overlay can still be
 re-rendered later if wanted.
 
-Status: phase 1 (single-phone scoreboard) implemented; pairing and recording
-are phase 2 (docs/roadmap.md). Hosting target: Vercel (static PWA plus one
-signaling function).
+Status: phase 1 (single-phone scoreboard) and the camera half of phase 2
+(live-composited recording, segments, export) implemented; the camera can
+follow this phone's own match through "Demo score" in its menu until pairing
+(the rest of phase 2, docs/roadmap.md) lands. Hosting target: Vercel (static
+PWA plus one signaling function).
 
 ## Development
 
 `pnpm install`, then `pnpm dev` (dev server), `pnpm test` (Vitest: engine,
-touch guards, phrases, persistence), `pnpm build` (static PWA in `dist/`).
+touch guards, phrases, persistence, overlay, score source, recording worker,
+segments, export bundle), `pnpm build` (static PWA in `dist/`).
 `pnpm icons` regenerates the PNG icons from `public/favicon.svg`.
 
 ## Docs

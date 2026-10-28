@@ -1,6 +1,8 @@
-// Small per-device settings in localStorage: last role (R-SETUP-1), last setup (R-SETUP-3), sound and voice.
+// Small per-device settings in localStorage: last role (R-SETUP-1), last setup (R-SETUP-3), sound and voice,
+// camera settings (R-SETUP-4).
 import { DEFAULT_SETUP, PALETTE, type MatchSetup } from '../engine';
 import { randomId } from '../engine';
+import { DEFAULT_CAMERA_SETTINGS, OVERLAY_DELAYS_MS, QUALITIES, type CameraSettings } from '../recording/config';
 import type { Lang } from '../speech/phrases';
 
 export type Role = 'scoreboard' | 'camera';
@@ -61,3 +63,14 @@ export function deviceId(): string {
   }
   return id;
 }
+
+const CAMERA_KEY = 'bs.camera';
+
+/** Camera role settings (R-SETUP-4), kept per device. */
+export function loadCameraSettings(): CameraSettings {
+  const s = read<Partial<CameraSettings>>(CAMERA_KEY) ?? {};
+  const quality = s.quality && s.quality in QUALITIES ? s.quality : DEFAULT_CAMERA_SETTINGS.quality;
+  const delayMs = (OVERLAY_DELAYS_MS as readonly number[]).includes(s.delayMs as number) ? (s.delayMs as number) : DEFAULT_CAMERA_SETTINGS.delayMs;
+  return { ...DEFAULT_CAMERA_SETTINGS, ...s, quality, delayMs };
+}
+export const saveCameraSettings = (s: CameraSettings) => write(CAMERA_KEY, s);

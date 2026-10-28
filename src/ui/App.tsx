@@ -1,4 +1,5 @@
-// Screen flow for phase 1: S0 role -> S1 setup -> S3 scoreboard; an unfinished match resumes on launch.
+// Screen flow: S0 role -> S1 setup -> S3 scoreboard, or S0 -> camera (C1/C3, C4); S0 also opens C4. An
+// unfinished match resumes on launch unless this phone was last used as the camera.
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { configFromSetup, reduce, type MatchSetup } from '../engine';
@@ -8,11 +9,13 @@ import { clearCurrent, loadCurrent } from '../match/persist';
 import { loadPrefs, loadRole, savePrefs, saveLastSetup, saveRole, type Prefs, type Role } from '../match/prefs';
 import { announce } from '../speech/announce';
 import { unlockAudio } from '../speech/sound';
-import { CameraPlaceholder, RoleScreen } from './RoleScreen';
+import { CameraRole } from './camera/CameraRole';
+import { Recordings } from './camera/Recordings';
+import { RoleScreen } from './RoleScreen';
 import { Scoreboard } from './Scoreboard';
 import { SetupScreen } from './SetupScreen';
 
-type Screen = 'loading' | 'role' | 'camera' | 'setup' | 'board';
+type Screen = 'loading' | 'role' | 'camera' | 'recordings' | 'setup' | 'board';
 
 export function App() {
   const [screen, setScreen] = useState<Screen>('loading');
@@ -27,16 +30,21 @@ export function App() {
 
   useEffect(() => {
     let live = true;
+    const camera = loadRole() === 'camera';
     loadCurrent()
       .then((m) => {
         if (!live) return;
-        if (m && reduce(m.config, m.events).phase !== 'matchOver') {
+        const unfinished = !!m && reduce(m.config, m.events).phase !== 'matchOver';
+        if (camera) {
+          if (unfinished) store.load(m); // the camera's "Demo score" carries on with this phone's own match
+          setScreen('camera');
+        } else if (unfinished) {
           store.load(m);
           setResumed(true);
           setScreen('board');
         } else setScreen('role');
       })
-      .catch(() => live && setScreen('role'));
+      .catch(() => live && setScreen(camera ? 'camera' : 'role'));
     return () => {
       live = false;
     };
@@ -89,7 +97,8 @@ export function App() {
         onUpdate={update}
       />
     );
-  if (screen === 'camera') return <CameraPlaceholder onBack={() => setScreen('role')} onScoreboard={() => pickRole('scoreboard')} />;
+  if (screen === 'camera') return <CameraRole onLeave={() => setScreen('role')} onUpdate={update} />;
+  if (screen === 'recordings') return <Recordings onBack={() => setScreen('role')} />;
   if (screen === 'setup') return <SetupScreen onBack={() => setScreen('role')} onStart={startMatch} onUpdate={update} />;
-  return <RoleScreen lastRole={lastRole} onPick={pickRole} onUpdate={update} />;
+  return <RoleScreen lastRole={lastRole} onPick={pickRole} onRecordings={() => setScreen('recordings')} onUpdate={update} />;
 }

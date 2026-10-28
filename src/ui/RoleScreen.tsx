@@ -1,6 +1,7 @@
-// S0 role choice (R-SETUP-1) and the phase-1 stand-in for the camera role.
-import { useState } from 'react';
+// S0 role choice (R-SETUP-1), with the way to C4 on a phone that holds recordings.
+import { useEffect, useState } from 'react';
 import { checkSupport } from '../device/support';
+import { countRecordings } from '../recording/storage';
 import type { Role } from '../match/prefs';
 
 export function UpdateBanner({ onUpdate }: { onUpdate: (() => void) | null }) {
@@ -18,13 +19,19 @@ export function UpdateBanner({ onUpdate }: { onUpdate: (() => void) | null }) {
 export function RoleScreen({
   lastRole,
   onPick,
+  onRecordings,
   onUpdate,
 }: {
   lastRole: Role | null;
   onPick: (r: Role) => void;
+  onRecordings: () => void;
   onUpdate: (() => void) | null;
 }) {
   const [support] = useState(() => checkSupport());
+  const [recordings, setRecordings] = useState(0);
+  useEffect(() => {
+    void countRecordings().then(setRecordings);
+  }, []);
   const roles: Array<{ role: Role; title: string; sub: string }> = [
     { role: 'scoreboard', title: 'SCOREBOARD', sub: 'at the net post' },
     { role: 'camera', title: 'CAMERA', sub: 'at the back corner' },
@@ -45,7 +52,6 @@ export function RoleScreen({
           >
             <span className="text-3xl font-extrabold tracking-wide">{r.title}</span>
             <span className="text-mut">{r.sub}</span>
-            {r.role === 'camera' && <span className="mt-1 text-xs text-amber">recording arrives in the next version</span>}
           </button>
         ))}
       </div>
@@ -55,26 +61,11 @@ export function RoleScreen({
         {support.ios && !support.standalone && (
           <span>Tip: Share, then "Add to Home Screen" so it runs offline and keeps the screen on.</span>
         )}
-      </div>
-    </main>
-  );
-}
-
-export function CameraPlaceholder({ onBack, onScoreboard }: { onBack: () => void; onScoreboard: () => void }) {
-  return (
-    <main className="pad-safe-x flex h-full flex-col items-center justify-center gap-4 py-4 text-center">
-      <h1 className="text-2xl font-bold">Camera</h1>
-      <p className="max-w-xl text-mut">
-        Recording the match with the score in the video, and pairing with the scoreboard phone, come in the next
-        version. For now this app is the scoreboard.
-      </p>
-      <div className="flex gap-3">
-        <button className="btn btn-ghost" onClick={onBack}>
-          Back
-        </button>
-        <button className="btn btn-pri" onClick={onScoreboard}>
-          Use as scoreboard
-        </button>
+        {recordings > 0 && (
+          <button className="btn btn-ghost ml-auto min-h-10 text-sm" onClick={onRecordings}>
+            Recordings ({recordings}) ›
+          </button>
+        )}
       </div>
     </main>
   );
