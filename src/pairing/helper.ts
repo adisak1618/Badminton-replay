@@ -1,6 +1,6 @@
 // Client for the signaling helper (api/signal.ts, technical-design.md §4.2). Every call times out quickly so
 // "no internet" shows within 5 s (R-PAIR-1); the helper's error codes become one of a few kinds the UI words.
-import type { Offer } from '../../api/signal';
+import type { Offer, TurnServer } from '../../api/signal';
 
 export type Desc = Pick<Offer, 'gen' | 'sdp' | 'fresh'>;
 
@@ -31,6 +31,9 @@ export interface Session {
   session: string;
   secret: string;
 }
+
+/** TURN credentials for a session, or that the helper has no TURN key (the link stays on the local network). */
+export type IceReply = { relay: 'ok'; iceServers: TurnServer[]; ttl: number } | { relay: 'not-configured' };
 
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -67,7 +70,7 @@ export class HelperClient {
     if (res.status === 409) throw new HelperError('stale', 409, code, typeof json?.gen === 'number' ? json.gen : undefined);
     // A gateway error or an HTML page instead of JSON: the helper is not reachable as such.
     if (!code || res.status === 502 || res.status === 504) throw new HelperError('offline', res.status);
-    throw new HelperError('helper', res.status, code);
+    throw new HelperError('helper', res.status, json?.reason ? `${code}: ${json.reason}` : code);
   }
 
   /** Camera: open a room with the first offer. */
@@ -92,6 +95,11 @@ export class HelperClient {
   async getAnswer(s: Session, gen: number): Promise<Desc | null> {
     const r = await this.call('GET', `/sessions/${s.session}/answer?gen=${gen}`, undefined, s.secret);
     return r.json?.answer ?? null;
+  }
+
+  /** Short-lived TURN credentials for this session (api/signal.ts, mintTurn). */
+  async getIce(s: Session): Promise<IceReply> {
+    return (await this.call('GET', `/sessions/${s.session}/ice`, undefined, s.secret)).json;
   }
 
   /** The camera's offer when it is newer than `gen`, else null. */

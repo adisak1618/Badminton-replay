@@ -25,14 +25,15 @@ test on the captain's iPhones in phase 0 of [roadmap.md](roadmap.md).
    speech, UI                                 + overlay -> captureStream + mic
    IDB: live match                            -> MediaRecorder -> worker -> OPFS
    |                                          event mirror, export
-   +-------- WebRTC data channel (LAN) --------+
+   +--- WebRTC data channel (LAN, or TURN) ----+
              JSON messages, no media
 ```
 
 - **One static web app, two roles.** The same bundle serves both phones; the
   role is chosen at launch (R-SETUP-1).
 - **One function.** The signaling helper exchanges WebRTC descriptors between
-  the phones and nothing else (R-PAIR-9). Video, scores and names never leave
+  the phones and mints short-lived TURN credentials for them, nothing else
+  (R-PAIR-9). Video, scores and names never leave
   the phones (N-PRIV-1).
 - **Scoreboard phone is the source of truth** for the match (config + event
   log). The camera phone mirrors it. Only one side writes score events, so
@@ -203,10 +204,13 @@ fixed 2.
 
 ### 4.1 Shape (D2)
 
-The helper is a mailbox for WebRTC session descriptions. The phones still
-connect to each other over the local network (host candidates; no STUN per
-D13); the helper never sees match data. Internet is needed on both phones
-whenever descriptors are exchanged: at pairing and at each reconnect.
+The helper is a mailbox for WebRTC session descriptions. The phones connect
+to each other over the local network when they share one (host candidates);
+when they do not, e.g. both on mobile data, through a TURN relay whose
+credentials the helper mints (D13 as revised on 2026-10-28). The helper never
+sees match data, and the relay only forwards the encrypted data channel.
+Internet is needed on both phones whenever descriptors are exchanged: at
+pairing and at each reconnect, and for as long as the link is relayed.
 
 Options the captain chose between are summarised for the record: the offline
 two-QR handshake (no server, two scans, manual re-pair after drops) is kept
@@ -227,6 +231,7 @@ sends `/api/signal/:path*` to it). JSON bodies, no cookies, CORS not needed
 | `GET /api/signal/sessions/:session/answer?gen=N` | camera | → `{answer}` or 204; secret in `X-Signal-Secret` | |
 | `POST /api/signal/sessions/:session/offer` | camera | `{secret, gen, offer}` → 204 | reconnect: new offer with `gen+1` |
 | `GET /api/signal/sessions/:session/offer?gen=N` | scoreboard | → `{offer}` or 204 if none newer than N; secret in `X-Signal-Secret` | |
+| `GET /api/signal/sessions/:session/ice` | both | → `{relay:'ok', iceServers, ttl}` or `{relay:'not-configured'}`; 503 `{error:'relay-failed', reason}`; secret in `X-Signal-Secret` | rate counter only |
 
 Offers and answers are stored as `{gen, sdp, fresh, at}`; `fresh` marks a
 description for a new `RTCPeerConnection` rather than an ICE restart of the
@@ -248,6 +253,19 @@ e.g. after a reload).
   Redis counter, so a six-digit code cannot be brute-forced within its
   lifetime. The remaining risk (someone guessing a live code) is accepted for a
   personal app; the secret in the QR path is never guessable.
+- **TURN credentials:** `sessions/:session/ice` asks Cloudflare Realtime TURN
+  for credentials valid `TURN_TTL_S` = 3600 s (`POST
+  https://rtc.live.cloudflare.com/v1/turn/keys/<TURN_KEY_ID>/credentials/generate-ice-servers`
+  with `Authorization: Bearer <TURN_KEY_API_TOKEN>` and `{"ttl":3600}`, which
+  answers 201 with `iceServers`,
+  https://developers.cloudflare.com/realtime/turn/generate-credentials/;
+  credentials can live up to 48 h). Only the TURN entry is passed on; the key
+  and its token stay in the function's environment. A rejected key is
+  `reason: auth`, an API error `upstream`, no answer within 3 s
+  `unreachable`. Without `TURN_KEY_ID` and `TURN_KEY_API_TOKEN` the answer is
+  `not-configured` and the phones stay on the local network. 30 requests per
+  minute per IP; only for a live session with its secret, so the relay cannot
+  be used by anyone who has not created or claimed a room.
 - **Store:** a Redis database from the Vercel Marketplace (Upstash; Vercel KV
   was retired into it in December 2024, https://vercel.com/docs/redis). The
   integration injects the REST URL and token as project environment variables
@@ -262,19 +280,38 @@ e.g. after a reload).
 ```
 Camera phone                                  Scoreboard phone
 1  preview stream running (camera permission granted)
-2  pc = new RTCPeerConnection({ iceServers: [] })      // D13
+2  pc = new RTCPeerConnection({ iceServers: [] })      // no session yet, so no credentials
 3  dc = pc.createDataChannel('match', { ordered: true })
 4  createOffer; setLocalDescription; wait for gathering complete (<= 2 s)
-5  POST rooms {offer} -> code, session, secret; show QR + digits
-                                              6  open camera (viewfinder); scan QR or type digits
-                                              7  GET rooms/:code -> offer, session, secret
-                                              8  pc = new RTCPeerConnection({ iceServers: [] })
-                                              9  setRemoteDescription(offer); createAnswer; setLocalDescription;
+5  POST rooms {offer} -> code, session, secret
+6  GET sessions/:s/ice -> TURN credentials (or not-configured: skip to 9 with gen 1)
+7  new pc with STUN + TURN; offer again, gathering <= 5 s
+8  POST sessions/:s/offer {gen:2, fresh}      // the claim returns the latest offer
+9  show QR + digits
+                                              10 open camera (viewfinder); scan QR or type digits
+                                              11 GET rooms/:code -> offer, session, secret
+                                              12 GET sessions/:s/ice -> TURN credentials
+                                              13 pc = new RTCPeerConnection({ iceServers })
+                                              14 setRemoteDescription(offer); createAnswer; setLocalDescription;
                                                  wait for gathering complete
-                                              10 POST sessions/:s/answer {gen:1, answer}
-11 poll GET sessions/:s/answer?gen=0 every 2 s -> setRemoteDescription(answer)
-12 data channel 'open' on both sides -> hello, sync, rec state (§4.4)
+                                              15 POST sessions/:s/answer {gen, answer}
+16 poll GET sessions/:s/answer?gen=N every 2 s -> setRemoteDescription(answer)
+17 data channel 'open' on both sides -> hello, sync, rec state (§4.4)
 ```
+
+**ICE servers** (`pairing/ice.ts`): with credentials, STUN
+(`stun:stun.cloudflare.com:3478`, fallback `stun:stun.l.google.com:19302`)
+and one TURN URL per transport: UDP 3478, TCP 3478 and TLS on 443, so a
+carrier network that blocks UDP still relays (port 53 is dropped: browsers
+block it and, without trickle ICE, its timeout would hold up every
+gathering). Without credentials the list is empty, exactly the
+local-network-only connection of before. ICE tries candidate pairs by
+priority and host candidates rank highest, so two phones on one Wi-Fi still
+connect directly; only phones that cannot reach each other end up on the
+relay. Which pair carries the link is read from `getStats()` (the transport's
+selected pair) and shown in the pairing diagnostics as `direct` or `relay`;
+a peer-reflexive remote address that is one of the other phone's relay
+candidates counts as relay.
 
 **Why the camera permission matters.** WebKit withholds host ICE candidates
 until the page has camera or microphone permission; without it only
@@ -301,8 +338,18 @@ pairing screens compare the two descriptions' addresses and say so
 (`pairing/net.ts`).
 
 No trickle ICE: both sides wait for gathering to complete so one descriptor
-carries everything. With no STUN servers configured, gathering on a LAN
-completes well under a second.
+carries everything. With no ICE servers, gathering on a LAN completes well
+under a second (limit 2 s). With STUN and TURN each server needs its round
+trips (limit 5 s); once a relay candidate is in, the gathering ends after
+300 ms without another candidate rather than waiting for every server, and
+without one (UDP blocked) it waits on for TCP or TLS.
+
+When the phones are on different networks (`pairing/net.ts`) and the link is
+still not open 15 s after the answer, both pairing screens say so together
+with why the relay did not carry it: not set up, credentials could not be
+fetched (with the helper's reason), this phone gathered no relay candidate,
+the other phone offered none, or relay candidates on both sides that did not
+connect; the diagnostics log the same line.
 
 ### 4.4 Message protocol (data channel)
 
@@ -364,6 +411,16 @@ and the camera polls the answer. If the connection object is unusable a fresh
 one is created. Backoff: 2 s for the first minute, then 5 s. When the helper
 is unreachable the chip says "offline" and polling continues at 5 s until it
 answers. Nothing is lost meanwhile (R-PAIR-3, R-PAIR-4).
+
+TURN credentials are fetched per session and cached until 10 minutes before
+they expire (the scoreboard renews 20 minutes before); every new connection
+and ICE restart takes fresh ones once the cached ones are that old, through
+`setConfiguration` for a restart. A relayed link would be cut by the relay
+when its credentials expire, so the camera restarts ICE on an open relayed
+link 10 minutes before; the scoreboard's answer to it carries new credentials
+too. A failed fetch is retried after 30 s ("not configured" after 10
+minutes); until then the phone gathers with the credentials it still has, or
+with none.
 
 Clock offset (R-PAIR-5): the camera phone maps scoreboard timestamps onto its
 own clock with NTP-style round trips from the regular pings:
@@ -660,7 +717,8 @@ is untested; see roadmap.md Later.
   deployment is HTTPS, which `getUserMedia`, OPFS and service workers require.
 - `api/signal.ts` deploys as one function (§2). Install a Redis integration
   from the Marketplace on the project; redeploy after the environment
-  variables appear.
+  variables appear. For the relay, `TURN_KEY_ID` and `TURN_KEY_API_TOKEN` from
+  a Cloudflare TURN key go into the project's environment (deploy.md §3).
 - `vercel.json`: a rewrite from `/api/signal/:path*` to `/api/signal`; headers
   so the service worker and `index.html` are never cached
   (`Cache-Control: public, max-age=0, must-revalidate`) and Vite's hashed
@@ -718,7 +776,7 @@ is untested; see roadmap.md Later.
 | Canvas compositing drops frames or overheats the phone over an hour | medium | unusable recordings | Phase 0 runs the full pipeline first; 720p default if needed; power bank; D9 revisited only on a double fail |
 | `canvas.captureStream` instability on the actual iOS (history of WebKit bugs) | low-medium | black or frozen video | A14 in phase 0; segment restart on detected stalls (frame counter watchdog) |
 | Audio/video drift between canvas and mic tracks | medium | lip-sync off at the end | A13 measured; if present, record at 720p or restart segments hourly |
-| LAN WebRTC fails (mDNS blocked, hotspot quirks, iOS local-network prompt, host candidates withheld on reconnect) | medium | no live overlay | A1/A2 first; keep the viewfinder track alive through pairing; D13 (STUN) as the switch; each phone still works alone |
+| LAN WebRTC fails (mDNS blocked, hotspot quirks, iOS local-network prompt, host candidates withheld on reconnect, phones on mobile data) | medium | no live overlay | A1/A2 first; keep the viewfinder track alive through pairing; the TURN relay (D13 as revised) carries the link when no direct path exists; each phone still works alone |
 | No internet on the court | medium | no pairing, clean video without overlay | Stated in the UI; scoreboard exports its log; two-QR fallback under Later |
 | Wrong tap burned into the video | high | visible mistake | One-tap undo, 800 ms refractory, overlay delay setting (R-REC-4) |
 | Camera stops in installed iOS app (bug 273938) | low-medium | no recording | Run the camera role in a Safari tab on that iOS version; A11 |

@@ -1,6 +1,9 @@
 // What the pairing screens say when something goes wrong (ux-design.md E1).
+import { relayReason, type RelayStatus } from '../pairing/ice';
 import type { Mismatch, PairError } from '../pairing/link';
 import type { NetCheck } from '../pairing/net';
+
+export { SLOW_CONNECT_MS } from '../pairing/link';
 
 export const NO_INTERNET = 'No internet: cannot pair. Scoring and recording still work on each phone.';
 
@@ -31,16 +34,20 @@ export function mismatchText(m: Mismatch): string {
     : 'Update the app on the other phone, then pair again.';
 }
 
-/** Shown on the pairing screens when the link stays in "connecting" this long after the answer. */
-export const SLOW_CONNECT_MS = 15_000;
+/** Shown on the pairing screens when the link stays in "connecting" SLOW_CONNECT_MS after the answer. */
 export const SLOW_CONNECT_TEXT =
   'Still connecting. Both phones must be on the same Wi-Fi or hotspot, and that network must let devices see each other.';
+export const SLOW_RELAY_TEXT =
+  'Still connecting. If it does not connect, put both phones on the same Wi-Fi, or turn on Personal Hotspot on one phone and join its Wi-Fi from the other.';
 
-/** The slow-connect line, naming the two addresses when they show the phones are on different networks. */
-export function slowConnectText(net: NetCheck | null): string {
-  if (net?.verdict !== 'different') return SLOW_CONNECT_TEXT;
+/**
+ * The slow-connect line. Phones on different networks connect through the relay when it works, so the line
+ * names the two addresses together with why the relay did not carry the link (ice.ts relayReason).
+ */
+export function slowConnectText(net: NetCheck | null, relay: RelayStatus = { state: 'unknown' }): string {
+  if (net?.verdict !== 'different') return relay.state === 'ready' ? SLOW_RELAY_TEXT : SLOW_CONNECT_TEXT;
   return (
     `Not connecting: the phones are on different networks (this phone ${net.mine[0]}, the other ${net.theirs[0]}), ` +
-    'probably mobile data. Put both on the same Wi-Fi, or turn on Personal Hotspot on one phone and join its Wi-Fi from the other, then pair again.'
+    `probably mobile data, and ${relayReason(relay, net)}. Put both on the same Wi-Fi, or turn on Personal Hotspot on one phone and join its Wi-Fi from the other, then pair again.`
   );
 }

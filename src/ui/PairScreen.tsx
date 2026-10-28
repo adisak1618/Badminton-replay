@@ -110,7 +110,7 @@ export function PairScreen({ initialCode, onClose }: { initialCode: string | nul
           ? 'Connecting…'
           : l.state === 'connecting' && joinedAt != null
             ? slow
-              ? slowConnectText(l.net)
+              ? slowConnectText(l.net, l.relay)
               : 'Connecting to the camera phone…'
             : l.state === 'reconnecting' || l.state === 'lost' || l.state === 'offline'
               ? 'Paired before: reconnecting to the camera phone by itself.'
