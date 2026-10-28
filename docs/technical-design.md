@@ -420,9 +420,12 @@ canvas (the visible preview, CSS-scaled) --captureStream(30)--> composited video
 - One draw per delivered camera frame via `requestVideoFrameCallback` (Safari
   15.4+, §9), not `requestAnimationFrame`, so output frames track camera
   frames and the overlay is drawn exactly once per frame.
-- `drawOverlay` is a pure Canvas 2D function (`src/overlay/`): rounded box,
-  team colours, names, scores, shuttle marker, game count, flags, inside a
-  fixed `box` at the bottom-left (mirrored when the mirror toggle is on). It
+- `drawOverlay` is a pure Canvas 2D function (`src/overlay/`): a BWF TV style
+  two-row panel (players' names, a shuttle for the server, one cell per game
+  played, a status band for game point, interval and the like), sized S/M/L
+  and only as wide as its content, in the corner chosen in C1 (top-left by
+  default; mirroring swaps the rows), plus an optional logo in its own corner
+  (top-right by default), stacked when both share one. It
   cannot be HTML: a canvas cannot rasterise DOM, and SVG `foreignObject`
   taints canvases on WebKit. The same function can run in node-canvas for a
   later Mac re-render (R-BURN-2).
@@ -501,7 +504,11 @@ interface Segment {
   startLatencyMs: number;     // calibrated in phase 0 (A8), default 0
   endedAt: number | null; bytes: number;
   endReason: 'user' | 'interrupted' | 'quota' | 'error' | null;
-  overlay: { box: { x: number; y: number; w: number; h: number }; delayMs: number; mirrored: boolean; theme: string };
+  overlay: { box: Box;                          // area the score panel covered over the segment
+             boxes: Array<{ at: number; box: Box }>; // its box from each camera time on (it follows content)
+             corner: Corner; size: 'small' | 'medium' | 'large'; delayMs: number; mirrored: boolean; theme: string;
+             logo: { box: Box; corner: Corner; size: 'small' | 'medium' | 'large' } | null };
+  // Box = { x, y, w, h } in pixels; Corner = 'tl' | 'tr' | 'bl' | 'br'
 }
 ```
 
@@ -524,7 +531,8 @@ Stored as `matches/<matchId>/recording.json`, updated on every segment change.
   is in the video from the tap to the undo unless the overlay delay covers it;
   the raw frames under the overlay box are gone; the look is fixed at
   recording time.
-- `match.json` records the box, delay, mirroring and theme per segment, plus
+- `match.json` records the score box and corner, the logo box (if any),
+  delay, mirroring and theme per segment, plus
   every event with recording-relative time and derived state (§8). A later Mac
   tool (R-BURN-2, roadmap.md Later) can therefore paint a new overlay in the
   same box with `drawOverlay` in node-canvas and one ffmpeg `overlay` pass, to
@@ -534,7 +542,10 @@ Stored as `matches/<matchId>/recording.json`, updated on every segment change.
 
 ## 8. Export bundle
 
-Directory `match-<id>/` containing `video-1.mp4` … `video-n.mp4` and `match.json`:
+Flat files sharing one prefix, because the share sheet carries files, not a
+directory: `match-<yyyymmdd-hhmm>-video-1.mp4` … `-video-n.mp4` and
+`match-<yyyymmdd-hhmm>-match.json` (`recording.segments[].file` holds the
+exported names). `match.json`:
 
 ```ts
 interface MatchBundle {

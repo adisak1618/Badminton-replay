@@ -228,9 +228,9 @@ least 56 px.
 +---------------------------------------------------------------+
 | <  Camera                            link: paired - room 482107|
 |  +---------------------------------------------------------+  |
-|  |                                                         |  |
+|  | [ NOK / PAE  | 0 ]                           [ logo ]  |  |
+|  | [ BANK / TAO | 0 ]                                     |  |
 |  |     live preview = exactly what gets recorded           |  |
-|  |   [ A 0 > | 0 B ]  G1 0-0                               |  |
 |  +---------------------------------------------------------+  |
 |  Quality (1080p*)(720p)  Audio (on*)  Mirror overlay (off*)   |
 |  Overlay delay (0 s*)(2 s)(3 s)                               |
@@ -240,8 +240,10 @@ least 56 px.
 ```
 
 - The preview is the composited canvas itself, so what the user sees is what
-  is recorded, overlay included (R-REC-4). If the team shown on the left is
-  actually on the right of the frame, flip "Mirror overlay" once.
+  is recorded, overlay included (R-REC-4). The score panel sits in a chosen
+  corner (top-left by default) with one row per team; the top row should be
+  the team on the camera's left, otherwise flip "Mirror overlay" once. An
+  optional logo goes in its own corner (top-right by default).
 - "Overlay delay" (R-REC-4): with 0 s a wrong tap shows in the video until the
   undo; with 2 or 3 s the score changes that much later in the video but a
   quick undo never reaches it. Default 0 s; phase 3 decides from real matches.
@@ -257,9 +259,9 @@ least 56 px.
 +---------------------------------------------------------------+
 | (*) REC 12:34 - 26 min left            link ok - A 18 - 16 B  |
 |  +---------------------------------------------------------+  |
-|  |                                                         |  |
+|  | [ NOK / PAE  |21|18]  (white: finished, grey: live)  |  |
+|  | [ BANK / TAO |17|16]  [ Game Point ] band     [logo] |  |
 |  |      composited preview (dims after 30 s, tap to wake)  |  |
-|  |   [ A 18 > | 16 B ]  G2 1-0 GP                          |  |
 |  +---------------------------------------------------------+  |
 |  [ Dim screen ]                           ( hold to STOP )    |
 +---------------------------------------------------------------+
