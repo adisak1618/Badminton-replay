@@ -1,6 +1,6 @@
-// Two-browser pairing test against the local helper (server/local.ts): a camera browser and a scoreboard
-// browser, each with Chrome's fake camera, pair through the helper and talk over a real WebRTC data channel.
-// The scoreboard's fake camera plays the camera page's own QR code, so the scan path (zxing-wasm) is real.
+// Pairing test against the local helper (server/local.ts): a camera browser and scoreboard browsers, each with
+// Chrome's fake camera, pair through the helper and talk over real WebRTC data channels. The scoreboard's fake
+// camera plays the camera page's own QR code, so the scan path (zxing-wasm) is real.
 //
 //   pnpm build && pnpm e2e            # needs Google Chrome and ffmpeg; OUT=dir keeps screenshots and results
 //   HELPER=https://badminton-replay.vercel.app pnpm e2e    # the pages' /api/signal calls go to that helper
@@ -14,7 +14,10 @@
 // Steps: no-internet message on both roles (R-PAIR-1); pairing by scanning the QR; sync of a live match and
 // tap-to-camera latency; remote REC with ack (D11); a 20 s outage of the channel and the helper with points
 // scored meanwhile (R-PAIR-4/8); a dropped connection rebuilt fresh; remote stop; reloads of either phone
-// rejoining with no scan; a typed code; the QR's link opened by the iPhone camera app with the viewfinder still
+// rejoining with no scan; the screen of the scoreboard off for 20 s and on again (link back in seconds, §4.5);
+// a second scoreboard joining mid-match, both scoring, the same rally tapped on both counted once, the second
+// one's screen off and on while the first scores, the camera unpairing both (D14); a typed code; the QR's
+// link opened by the iPhone camera app with the viewfinder still
 // on that QR, claimed once; a version mismatch (R-PAIR-7); two phones on different networks told so, with the
 // pairing diagnostics; with the relay, two phones on different networks connecting through TURN while a shared
 // network still connects directly. Every ICE restart description must carry candidates. Exits non-zero on the
@@ -78,7 +81,10 @@ const text = async (p: Page, sel: string) => ((await p.locator(sel).first().text
 const chip = (p: Page) => text(p, '[data-testid=link-chip]');
 
 // Test hooks live here, not in the app: every RTCPeerConnection is kept on window.__pcs; window.__drop swallows
-// every outgoing data-channel message; sessionStorage.__v2 makes this page speak protocol version 2;
+// every outgoing data-channel message and window.__deaf every incoming one; window.__frozen holds the page's
+// timers; a channel marked __dead carries nothing either way, ever again, and window.__pcs[i].__dead makes a
+// connection say it failed: what an iPhone's connection is after its screen was locked; sessionStorage.__v3 makes this page
+// speak protocol version 3;
 // sessionStorage.__ip replaces this page's candidates with one host candidate on that address, the way an iPhone
 // on mobile data offers only its carrier address; sessionStorage.__relay does the same but keeps the relay
 // candidates and makes the connection use only those (iceTransportPolicy 'relay'), since this Mac's own host
@@ -86,14 +92,43 @@ const chip = (p: Page) => text(p, '[data-testid=link-chip]');
 // over TCP, like a carrier network that blocks UDP.
 const HOOKS = `
   (() => {
+    // window.__frozen holds this page's timers, as iOS does while the screen is locked (CDP's freeze needs a
+    // hidden page, which headless Chrome never has): intervals skip, timeouts wait for the thaw.
+    const si = window.setInterval, st = window.setTimeout, ct = window.clearTimeout;
+    const ids = new Map();
+    let nextId = 1e6;
+    window.setInterval = function (fn, ms, ...a) { return si(() => { if (!window.__frozen) fn(...a); }, ms); };
+    window.setTimeout = function (fn, ms, ...a) {
+      const id = nextId++;
+      const run = () => {
+        if (window.__frozen) return void ids.set(id, st(run, 50));
+        ids.delete(id);
+        if (typeof fn === 'function') fn(...a);
+      };
+      ids.set(id, st(run, ms));
+      return id;
+    };
+    window.clearTimeout = function (id) {
+      const real = ids.get(id);
+      ids.delete(id);
+      ct(real ?? id);
+    };
     const send = RTCDataChannel.prototype.send;
-    const v2 = sessionStorage.getItem('__v2') === '1'; // latched at load: a page being reloaded still says goodbye in v1
+    const v3 = sessionStorage.getItem('__v3') === '1'; // latched at load: a page being reloaded still says goodbye in v2
     window.__out = [];
+    window.__dcs = new Set();
     RTCDataChannel.prototype.send = function (d) {
-      if (typeof d === 'string') { window.__out.push((window.__drop ? 'x:' : '') + d.slice(0, 40)); if (window.__out.length > 300) window.__out.shift(); }
-      if (window.__drop) return;
-      if (typeof d === 'string' && v2) d = d.replace('{"v":1,', '{"v":2,');
+      window.__dcs.add(this);
+      if (typeof d === 'string') { window.__out.push((window.__drop || this.__dead ? 'x:' : '') + d.slice(0, 40)); if (window.__out.length > 300) window.__out.shift(); }
+      if (window.__drop || this.__dead) return;
+      if (typeof d === 'string' && v3) d = d.replace('{"v":2,', '{"v":3,');
       return send.call(this, d);
+    };
+    const listen = RTCDataChannel.prototype.addEventListener;
+    RTCDataChannel.prototype.addEventListener = function (type, fn, ...a) {
+      if (type !== 'message') return listen.call(this, type, fn, ...a);
+      window.__dcs.add(this);
+      return listen.call(this, type, (e) => { if (!window.__deaf && !this.__dead) fn(e); }, ...a);
     };
     const PC = window.RTCPeerConnection;
     window.__pcs = [];
@@ -106,6 +141,7 @@ const HOOKS = `
     };
     window.RTCPeerConnection = class extends PC {
       constructor(c, ...a) { super(relayOnly(c ?? {}), ...a); window.__pcs.push(this); }
+      get connectionState() { return this.__dead ? 'failed' : super.connectionState; }
       setConfiguration(c) { return super.setConfiguration(relayOnly(c)); }
       get localDescription() {
         const d = super.localDescription;
@@ -159,7 +195,8 @@ const button = (p: Page, name: string | RegExp) => p.getByRole('button', { name 
 /** The newest pairing-diagnostics line of a kind (diag.ts) once the saved log has one matching `want`. */
 async function diagLatest(p: Page, role: 'camera' | 'scoreboard', kind: string, want: (line: string) => boolean = () => true): Promise<string> {
   return until(`diagnostics ${role} ${kind}`, async () => {
-    const line = await p.evaluate(([r, k]) => JSON.parse(localStorage.getItem(`bs.diag.${r}`) ?? '{}')?.latest?.[k] as string | undefined, [role, kind] as const);
+    const raw = await p.evaluate(([r, k]) => JSON.parse(localStorage.getItem(`bs.diag.${r}`) ?? '{}')?.latest?.[k] as string | undefined, [role, kind] as const);
+    const line = raw?.replace(/^\[scoreboard \d\] /, ''); // the camera's second slot marks its lines
     return line && want(line) && line;
   }, 5000);
 }
@@ -178,6 +215,34 @@ async function tap(p: Page, zone: 'left' | 'right'): Promise<number> {
   await p.mouse.up();
   await p.waitForTimeout(850); // R-DISP-6: one point per 800 ms
   return at;
+}
+
+/**
+ * The iPhone's screen locks: iOS suspends the page. Here its timers are held, its channel traffic stops both
+ * ways, and the connection from before stays dead (it says so, and carries nothing) once the page runs again.
+ */
+async function screenOff(p: Page): Promise<void> {
+  await p.evaluate(() => {
+    const w = window as any;
+    w.__frozen = true;
+    w.__drop = true;
+    w.__deaf = true;
+    for (const pc of w.__pcs) pc.__dead = true;
+    for (const dc of w.__dcs) dc.__dead = true;
+  });
+}
+
+/** The screen comes back on: the page runs again and hears `visibilitychange`. Returns that moment. */
+async function screenOn(p: Page): Promise<number> {
+  const on = Date.now();
+  await p.evaluate(() => {
+    const w = window as any;
+    w.__frozen = false;
+    w.__drop = false;
+    w.__deaf = false;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  return on;
 }
 
 const score = async (p: Page) => `${await text(p, '[data-testid=score-A]')}-${await text(p, '[data-testid=score-B]')}`;
@@ -274,6 +339,7 @@ async function main() {
   let sb3Browser = null as Browser | null;
   let sb2: Page | null = null;
   let sb3 = null as Page | null;
+  let sbB = null as Page | null;
   let sbPage: Page | null = null;
   const netPages: Page[] = [];
   try {
@@ -347,12 +413,17 @@ async function main() {
       await until('camera chip link ok', async () => (await chip(cam)) === 'link ok');
       const ms = Date.now() - start;
       await sb.screenshot({ path: path.join(OUT, '02-scoreboard-s2-paired.png') });
+      // D14: the camera now offers a fresh code for a second scoreboard.
+      const second = await until('a code for scoreboard 2', async () => {
+        const c = await text(cam, '[data-testid=pair-code]').catch(() => '');
+        return /^\d{6}$/.test(c) && c !== code && c;
+      }, 10_000);
       await cam.screenshot({ path: path.join(OUT, '03-camera-paired.png') });
       // One network (this Mac): with STUN and TURN configured too, ICE still picks the direct pair.
       const direct = (l: string) => l.startsWith('direct: ');
       const paths = [await diagLatest(cam, 'camera', 'path', direct), await diagLatest(sb, 'scoreboard', 'path', direct)];
       const relays = [await diagLatest(cam, 'camera', 'relay'), await diagLatest(sb, 'scoreboard', 'relay')];
-      return `scan to paired on both: ${ms} ms; camera "${paths[0]}", scoreboard "${paths[1]}"; relay "${relays[0].split(' · ')[0]}" / "${relays[1].split(' · ')[0]}"`;
+      return `scan to paired on both: ${ms} ms; camera "${paths[0]}", scoreboard "${paths[1]}"; relay "${relays[0].split(' · ')[0]}" / "${relays[1].split(' · ')[0]}"; code for scoreboard 2: ${second}`;
     });
 
     let matchId = '';
@@ -468,10 +539,109 @@ async function main() {
       return `${ms} ms from reload to link ok on both`;
     });
 
-    await step('unpair; a second scoreboard pairs by typing the code (no viewfinder QR)', async () => {
+    // §4.5: iOS suspends the page while the screen is locked and the connection does not survive it.
+    await step('the scoreboard screen off for 20 s and on again: the link is back in seconds', async () => {
+      // After the reload the board waits for a tap to continue the resumed match.
+      const resumed = sb.getByRole('button', { name: 'Continue the match' });
+      if (await resumed.count()) await resumed.click();
+      await screenOff(sb);
+      await cam.waitForTimeout(20_000);
+      const camWhileOff = await chip(cam);
+      const on = await screenOn(sb);
+      const back = await until('both link ok', async () => (await chip(cam)) === 'link ok' && (await chip(sb)) === 'link ok' && Date.now() - on, 30_000, 50);
+      await tap(sb, 'left');
+      await until('camera has the tap', () => cameraShows(cam, sb), 5000);
+      const resume = await sb.evaluate(() =>
+        (JSON.parse(localStorage.getItem('bs.diag.scoreboard') ?? '{}').entries as Array<{ text: string }>)
+          .map((e) => e.text)
+          .filter((t) => t.startsWith('resume'))
+          .at(-1),
+      );
+      if (back > 6000) throw new Error(`link back only after ${back} ms`);
+      return `camera chip while off "${camWhileOff}"; link ok on both ${back} ms after the screen came on; scoreboard log "${resume?.slice(0, 90)}"`;
+    });
+
+    await step('a second scoreboard joins mid-match by its own code and takes the camera’s match (D14)', async () => {
       await cam.getByRole('button', { name: 'Menu' }).click();
-      await button(cam, 'Unpair the scoreboard').click();
-      await until('scoreboard unpaired', async () => (await sb.locator('[data-testid=pair-chip]').count()) > 0, 5000);
+      await cam.locator('[data-testid=menu-pair]').click();
+      const c = await until('code', async () => {
+        const t = await text(cam, '[data-testid=pair-code]');
+        return /^\d{6}$/.test(t) && t;
+      });
+      sbB = (await newPage(camBrowser, 'scoreboard-b')).page;
+      await sbB.goto(BASE);
+      await button(sbB, /SCOREBOARD/).click();
+      const start = Date.now();
+      await sbB.locator('[data-testid=pair-chip]').click();
+      await sbB.locator('input[data-testid=pair-code]').fill(c);
+      await sbB.locator('[data-testid=pair-submit]').click();
+      await until('paired', async () => (await sbB!.locator('[data-testid=pair-done]').count()) > 0, 30_000);
+      await button(sbB, 'OK').click();
+      await until('B shows the match', async () => (await score(sbB!)) === (await score(sb)), 5000);
+      const ms = Date.now() - start;
+      await until('camera 2/2', async () => (await text(cam, '[data-testid=boards]')) === '2/2', 5000);
+      await until('A sees the other scoreboard', async () => (await text(sb, '[data-testid=others]')) === '+1 scoreboard', 5000);
+      await sbB.screenshot({ path: path.join(OUT, '05b-scoreboard-b-joined.png') });
+      await cam.screenshot({ path: path.join(OUT, '05c-camera-two-boards.png') });
+      return `typed ${c}: ${ms} ms to the camera's ${await score(sbB)} on B; camera "2/2"; A shows "+1 scoreboard"`;
+    });
+
+    await step('both scoreboards score; every phone shows the same; the same rally tapped on both counts once', async () => {
+      const b = sbB!;
+      const [l0, r0] = (await score(sb)).split('-').map(Number);
+      await tap(sb, 'left');
+      await sb.waitForTimeout(1000); // over 1.5 s after A's tap: a new rally
+      await tap(b, 'left');
+      await tap(b, 'right');
+      const want = `${l0 + 2}-${r0 + 1}`;
+      await until('both show it', async () => (await score(sb)) === want && (await score(b)) === want && cameraShows(cam, sb), 5000);
+      // Two friends tap the same rally a moment apart.
+      await Promise.all([tap(sb, 'right'), b.waitForTimeout(300).then(() => tap(b, 'right'))]);
+      const once = `${l0 + 2}-${r0 + 2}`;
+      await until('counted once', async () => (await score(sb)) === once && (await score(b)) === once && cameraShows(cam, sb), 5000);
+      const cue = (await b.locator('[data-testid=duplicate-cue]').count()) + (await sb.locator('[data-testid=duplicate-cue]').count());
+      if (!cue) throw new Error('no "already counted" cue');
+      await sb.waitForTimeout(2000);
+      if ((await score(sb)) !== once || (await score(b)) !== once) throw new Error(`counted twice: ${await score(sb)} / ${await score(b)}`);
+      return `A and B ${want} after three taps; a tap on each 300 ms apart: ${once}, the cue shown`;
+    });
+
+    await step('scoreboard B screen off for 20 s while A scores; B back in seconds with the camera’s state', async () => {
+      const b = sbB!;
+      await screenOff(b);
+      const off = Date.now();
+      await tap(sb, 'left');
+      await tap(sb, 'left');
+      await until('20 s', async () => Date.now() - off >= 20_000, 25_000, 250);
+      const camBoards = await text(cam, '[data-testid=boards]');
+      const on = await screenOn(b);
+      const back = await until('B link ok with A’s score', async () => (await chip(b)) === 'link ok' && (await score(b)) === (await score(sb)) && Date.now() - on, 30_000, 50);
+      await until('camera 2/2', async () => (await text(cam, '[data-testid=boards]')) === '2/2', 5000);
+      await tap(b, 'right');
+      await until('A sees B’s tap', async () => (await score(sb)) === (await score(b)) && cameraShows(cam, sb), 5000);
+      if (back > 6000) throw new Error(`B back only after ${back} ms`);
+      return `camera showed "${camBoards}" while B was off; B link ok with ${await score(b)} ${back} ms after its screen came on; B's next tap reached A`;
+    });
+
+    await step('the camera unpairs both: each scoreboard is unpaired within a second, nothing of the camera left (Part 3)', async () => {
+      const b = sbB!;
+      await cam.getByRole('button', { name: 'Menu' }).click();
+      const start = Date.now();
+      await button(cam, 'Unpair both scoreboards').click();
+      const ms = await until('both unpaired', async () => (await sb.locator('[data-testid=pair-chip]').count()) > 0 && (await b.locator('[data-testid=pair-chip]').count()) > 0 && Date.now() - start, 5000, 50);
+      for (const p of [sb, b]) {
+        if (await p.locator('[data-testid=cam-rec]').count()) throw new Error('REC state still shown');
+        if (await p.evaluate(() => localStorage.getItem('bs.pair.scoreboard'))) throw new Error('saved pairing kept');
+      }
+      const left = await score(sb);
+      await tap(sb, 'left'); // each scores alone again (R-PAIR-3)
+      if ((await score(sb)) === left) throw new Error('scoring stopped after unpairing');
+      if ((await chip(cam)) !== 'not paired') throw new Error(`camera chip "${await chip(cam)}"`);
+      await sb.screenshot({ path: path.join(OUT, '05d-scoreboard-unpaired.png') });
+      return `${ms} ms from Unpair to "Pair camera" on both; no REC state, no saved pairing; A scores alone`;
+    });
+
+    await step('a new scoreboard pairs by typing the code (no viewfinder QR)', async () => {
       await cam.locator('[data-testid=cam-pair]').click();
       const c = await until('code', async () => {
         const t = await text(cam, '[data-testid=pair-code]');
@@ -489,6 +659,7 @@ async function main() {
       await until('paired', async () => (await sb2!.locator('[data-testid=pair-done]').count()) > 0, 30_000);
       await until('camera link ok', async () => (await chip(cam)) === 'link ok');
       await button(sb2, 'OK').click();
+      // The camera had no match after unpairing both: it takes the new scoreboard's (none) and stays empty.
       return `typed ${c}: ${Date.now() - start} ms to paired`;
     });
 
@@ -499,7 +670,11 @@ async function main() {
       await cam.getByRole('button', { name: 'Menu' }).click();
       await button(cam, 'Unpair the scoreboard').click();
       await until('scoreboard 2 unpaired', async () => (await sb2!.locator('[data-testid=pair-chip]').count()) > 0, 5000);
-      await cam.locator('[data-testid=cam-pair]').click();
+      // C2 is still open with the code for the other slot (D14); otherwise open it.
+      const open = await until('a code or Pair…', async () =>
+        (await cam.locator('[data-testid=pair-code]').count()) ? 'code' : (await cam.locator('[data-testid=cam-pair]').count()) ? 'pair' : null,
+      );
+      if (open === 'pair') await cam.locator('[data-testid=cam-pair]').click();
       const c = await until('code', async () => {
         const t = await text(cam, '[data-testid=pair-code]');
         return /^\d{6}$/.test(t) && t;
@@ -526,10 +701,10 @@ async function main() {
       return `link #pair=${c}: ${ms} ms to paired, one claim, still paired 5 s later with the QR in view`;
     });
 
-    // The camera pretends to be a newer build speaking protocol v2: the scoreboard is the one to update.
+    // The camera pretends to be a newer build speaking protocol v3: the scoreboard is the one to update.
     await step('version mismatch tells which phone to update (R-PAIR-7)', async () => {
       const board = sb3!;
-      await cam.evaluate(() => sessionStorage.setItem('__v2', '1'));
+      await cam.evaluate(() => sessionStorage.setItem('__v3', '1'));
       await cam.reload();
       await until('scoreboard mismatch chip', async () => (await chip(board)) === 'update app', 20_000);
       const title = (await board.locator('[data-testid=link-chip]').getAttribute('title')) ?? '';
@@ -667,6 +842,7 @@ async function main() {
       ['camera', cam],
       ['scoreboard', sbPage],
       ['scoreboard-3', sb3],
+      ['scoreboard-b', sbB],
       ['camera-net', netPages[0]],
       ['scoreboard-net', netPages[1]],
       ['camera-relay', netPages[2]],
@@ -682,7 +858,7 @@ async function main() {
     throw err;
   } finally {
     // Each page's pairing diagnostics, as Copy would give them.
-    const pages = [['camera', cam], ['scoreboard', sbPage], ['scoreboard-2', sb2], ['scoreboard-3', sb3], ['camera-net', netPages[0]], ['scoreboard-net', netPages[1]], ['camera-relay', netPages[2]], ['scoreboard-relay', netPages[3]], ['camera-relay-tcp', netPages[4]], ['scoreboard-relay-tcp', netPages[5]]] as const;
+    const pages = [['camera', cam], ['scoreboard', sbPage], ['scoreboard-2', sb2], ['scoreboard-3', sb3], ['scoreboard-b', sbB], ['camera-net', netPages[0]], ['scoreboard-net', netPages[1]], ['camera-relay', netPages[2]], ['scoreboard-relay', netPages[3]], ['camera-relay-tcp', netPages[4]], ['scoreboard-relay-tcp', netPages[5]]] as const;
     for (const [name, p] of pages) {
       const logs = await p
         ?.evaluate(() => ['camera', 'scoreboard'].map((r) => localStorage.getItem(`bs.diag.${r}`)).filter(Boolean).map((j) => JSON.parse(j!).entries))

@@ -41,11 +41,12 @@ describe('scoreboard polling', () => {
     const pcs: FakePc[] = [];
     let offer: Desc | null = { gen: 1, sdp: SDP, fresh: true };
     const helper = {
-      getOffer: async (_s: Session, gen: number) => {
+      poll: async (_s: Session, gen: number) => {
         polls.push(Date.now());
-        return offer && offer.gen > gen ? offer : null;
+        return offer && offer.gen > gen ? { offer } : null;
       },
       postAnswer: async () => {},
+      end: async () => {},
     } as unknown as HelperClient;
     const link = new PeerLink({
       role: 'scoreboard',

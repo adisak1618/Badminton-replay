@@ -1,6 +1,12 @@
 // The live match in IndexedDB, written after every event so a reload, crash or battery swap loses nothing
 // (technical-design.md §3.5, R-SCORE-9).
-import type { MatchConfig, MatchEvent } from '../engine';
+import type { Input, MatchConfig, MatchEvent } from '../engine';
+
+/** A tap or action of this scoreboard the paired camera has not answered yet (D14). */
+export interface PendingInput {
+  matchId: string;
+  input: Input;
+}
 
 export interface StoredMatch {
   matchId: string;
@@ -8,6 +14,11 @@ export interface StoredMatch {
   events: MatchEvent[];
   createdAt: number;
   updatedAt: number;
+  /**
+   * Paired: the first `confirmed` events are the camera's; the rest show `pending` inputs not yet answered.
+   * Absent for a match this phone keeps alone.
+   */
+  remote?: { confirmed: number; pending: PendingInput[] };
 }
 
 const DB_NAME = 'badminton-scoreboard';

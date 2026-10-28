@@ -82,12 +82,12 @@ describe('pairing diagnostics', () => {
     const room = await helper.createRoom('v=0\r\na=candidate:1 1 udp 1 10.0.0.2 5000 typ host\r\n');
     await helper.claimRoom(room.code);
     await helper.claimRoom(room.code).catch(() => {});
-    await helper.getAnswer(room, 1);
+    await helper.poll(room, 1, 'camera');
     const text = d.report({});
     expect(text).toContain('POST /rooms → 201');
     expect(text).toContain(`GET /rooms/${room.code} → 200`);
     expect(text).toContain(`GET /rooms/${room.code} → 404 no-room`);
-    expect(text).toContain(`GET /sessions/${room.session.slice(0, 6)}…/answer?gen=1 → 204`);
+    expect(text).toContain(`GET /sessions/${room.session.slice(0, 6)}…/poll?gen=1&role=camera → 204`);
     expect(text).not.toContain(room.secret);
     expect(text).not.toContain(room.session);
   });

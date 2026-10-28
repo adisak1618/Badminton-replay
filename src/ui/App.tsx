@@ -86,13 +86,25 @@ export function App() {
     setScreen('board');
   };
 
+  // Paired, the camera's match stays where it is until a new one starts (from this phone or the other one).
   const newMatch = () => {
-    store.close();
-    void clearCurrent().catch(() => {});
+    if (!store.paired) {
+      store.close();
+      void clearCurrent().catch(() => {});
+    }
     keepScreenOn(false);
     setResumed(false);
     setScreen('setup');
   };
+
+  // A match that arrives from the camera (pairing, or started on the other scoreboard) is shown at once.
+  const remoteMatch = snap.origin === 'remote' ? snap.match?.matchId : undefined;
+  useEffect(() => {
+    if (remoteMatch && (screen === 'setup' || screen === 'role')) {
+      setResumed(false);
+      setScreen('board');
+    }
+  }, [remoteMatch]);
 
   const update = needRefresh ? () => void updateServiceWorker(true) : null;
 

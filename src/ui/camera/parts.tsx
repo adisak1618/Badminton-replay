@@ -2,8 +2,10 @@
 // camera menu.
 import { useEffect, useRef, useState } from 'react';
 import type { LinkState } from '../../link/source';
+import type { SlotsSnapshot } from '../../pairing/slots';
 import { HOLD_TO_STOP_MS } from '../../recording/config';
 import { DiagSheet } from '../DiagSheet';
+import { boardName } from './format';
 
 const LINK: Record<LinkState, { text: string; cls: string }> = {
   unpaired: { text: 'not paired', cls: 'bg-red/25 text-red' },
@@ -14,11 +16,12 @@ const LINK: Record<LinkState, { text: string; cls: string }> = {
   offline: { text: 'offline', cls: 'bg-red/25 text-red' },
 };
 
-export function LinkChip({ link, demo }: { link: LinkState; demo: boolean }) {
+/** `text` replaces the state's word (the scoreboard's "syncing", "reconnecting · 12 s"). */
+export function LinkChip({ link, demo, text }: { link: LinkState; demo: boolean; text?: string }) {
   const l = LINK[link];
   return (
     <span className={`rounded-full px-3 py-1 text-sm font-semibold whitespace-nowrap ${l.cls}`} data-testid="link-chip">
-      {demo && link === 'paired' ? 'demo: this phone' : l.text}
+      {demo && link === 'paired' ? 'demo: this phone' : (text ?? l.text)}
     </span>
   );
 }
@@ -64,7 +67,7 @@ export function HoldButton({ onHold, label, disabled }: { onHold: () => void; la
 
 export function CameraMenu({
   demo,
-  paired,
+  slots,
   recording,
   onPair,
   onUnpair,
@@ -75,10 +78,11 @@ export function CameraMenu({
   onClose,
 }: {
   demo: boolean;
-  paired: boolean;
+  slots: SlotsSnapshot;
   recording: boolean;
   onPair: () => void;
-  onUnpair: () => void;
+  /** One scoreboard, or all (no index). */
+  onUnpair: (i?: number) => void;
   onDemo: () => void;
   onRecordings: () => void;
   onLeave: () => void;
@@ -87,6 +91,7 @@ export function CameraMenu({
 }) {
   const row = 'btn min-h-14 w-full bg-pan2 text-left';
   const [diag, setDiag] = useState(false);
+  const paired = slots.slots.map((s, i) => ({ s, i })).filter(({ s }) => s.state !== 'unpaired' && s.everOpened);
   return (
     <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/70 p-3" onClick={onClose}>
       <div
@@ -95,13 +100,30 @@ export function CameraMenu({
         aria-label="Camera menu"
         onClick={(e) => e.stopPropagation()}
       >
-        {paired ? (
-          <button className={row} onClick={onUnpair}>
-            Unpair the scoreboard
-          </button>
-        ) : (
+        {paired.length === 0 && (
           <button className={row} onClick={onPair} data-testid="menu-pair">
             Pair with the scoreboard…
+          </button>
+        )}
+        {paired.length === 1 && (
+          <button className={row} onClick={() => onUnpair(paired[0].i)}>
+            Unpair the scoreboard
+          </button>
+        )}
+        {paired.length > 1 &&
+          paired.map(({ s, i }) => (
+            <button key={i} className={row} onClick={() => onUnpair(i)}>
+              Unpair scoreboard {i + 1} <span className="text-sm font-normal text-mut">{boardName(s.remote)}</span>
+            </button>
+          ))}
+        {paired.length > 1 && (
+          <button className={row} onClick={() => onUnpair()}>
+            Unpair both scoreboards
+          </button>
+        )}
+        {paired.length > 0 && paired.length < slots.slots.length && (
+          <button className={row} onClick={onPair} data-testid="menu-pair">
+            Pair another scoreboard…
           </button>
         )}
         <button className={row} aria-pressed={demo} onClick={onDemo}>

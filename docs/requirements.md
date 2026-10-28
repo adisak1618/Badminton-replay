@@ -64,6 +64,27 @@ of the docs assume these.
   §4.2). The direct local-network path is still chosen whenever both phones
   share a network; without a TURN key on the helper the data path is local
   network only, as before.
+- **D14 One camera, one or two scoreboards; the camera holds the match.**
+  Captain, 2026-10-29, after a real session with the production build:
+  "ผมลองเอาไปใช้จริงแล้วพบว่า นักแบตที่ตีไม่ค่อยมีอารมณ์จะไปกด score board
+  เท่าไหร่ แต่เพื่อนที่นั่งดูว่างและช่วยนับคะแนนให้ด้วยอยู่แล้ว ผมเลยคิดว่าเราจะให้
+  ต่อมือถือเป็น scoreboard ได้ 3 เครื่องเลย คือ 1 เครื่องเป็นกล้อง และอีกสองเครื่อง
+  เป็น score board ใช้งานได้เหมือนกันเลย จะต่อ score board 1 หรือ 2 เครื่องก็ได้
+  และอยากให้ช่วยแก้เรื่องความเสถียรหน่อย คือเวลาปิดจอแล้วเปิดใหม่ กว่าจะ
+  reconnect ติด เราสามารถทำให้ปิดจอแล้วยัง connect อยู่ได้มั๊ยถ้าเราใช้แอพแบบ
+  add to home แล้ว และอีกเรื่องคือกล้องเวลาเรา un-pair แล้วสถานะใน score board
+  ยังอยู่ เราควรทำให้มันเคลียได้มั๊ย หรือเวลามีเครื่องใหม่ reconnect เข้ามาอย่าง
+  น้อยมันก็ควรจะ reset" (friends sitting out count the score, not the players;
+  let one camera take one or two scoreboards that work the same; reconnect
+  faster after the screen was off; clear the camera's state on the scoreboard
+  when the camera unpairs). Consequence: the camera holds the one match log and
+  each scoreboard sends inputs and shows what the camera sends (R-PAIR-10); the
+  same rally tapped on both scoreboards within 1.5 s counts once (Firstmate's
+  default, the captain may change it); protocol version 2. A locked screen
+  suspends the page whether or not the app is on the Home Screen, so the link
+  cannot stay up with the screen off: the scoreboard keeps its screen on while
+  paired and reconnects within seconds when the screen comes back (R-DISP-8,
+  R-PAIR-8). Unpairing clears the camera's state on every scoreboard (R-PAIR-11).
 - The captain also asked to see a rough UI before implementation starts:
   [mockup/index.html](mockup/index.html), described in ux-design.md §6.
 
@@ -99,7 +120,9 @@ iPhones:
   from the net post, then untouched.
 - **Scoreboard phone** propped on the net post in landscape, screen facing
   along the net so each side of the court sees "its" half of the screen.
-  Whoever wins the rally walks to the post and taps their half.
+  Whoever wins the rally walks to the post and taps their half. Since D14 a
+  friend sitting out usually holds it, and a second friend can hold a second
+  scoreboard on the same match.
 
 Conditions the design must survive: sweaty or wet fingers, players glancing
 from 6 m away, gym lighting or outdoor glare, 60 to 90 minutes of play, one
@@ -110,8 +133,8 @@ have never seen the app. Nobody wants to read instructions mid-match.
 
 | Role | Does | Must never |
 |---|---|---|
-| Scoreboard phone | Match setup, scoring, rules, announcements, source of truth for the score log, shows link and REC state, starts and stops REC remotely (D11), can export its own log | Lose a point when the link drops |
-| Camera phone | Composites the live overlay into the recording, writes to its own storage, timestamps every received event on the recording timeline, exports the finished clip plus `match.json` | Need a touch during the match |
+| Scoreboard phone (one or two, D14) | Match setup, scoring, rules, announcements; unpaired it holds the score log itself, paired it sends its taps to the camera and shows the camera's log; shows link and REC state, starts and stops REC remotely (D11), can export its own log | Lose a point when the link drops |
+| Camera phone | Holds the match log while paired (D14), composites the live overlay into the recording, writes to its own storage, timestamps every event on the recording timeline, exports the finished clip plus `match.json` | Need a touch during the match |
 
 Either phone can take either role; the role is chosen at launch (R-SETUP-1).
 
@@ -226,12 +249,21 @@ the BWF Statutes (https://corporate.bwfbadminton.com/statutes/).
   phone" screen instead of a cramped layout; iOS cannot lock orientation.
   *Accept:* rotate to portrait mid-match, score is preserved, rotating back
   restores it.
-- **R-DISP-8 Screen stays on.** While a match is live the screen never sleeps
-  (Wake Lock). *Accept:* 10 minutes without touching, the screen is still on.
+- **R-DISP-8 Screen stays on.** While a match is live, and while the
+  scoreboard is paired or on the pairing screen, the screen never sleeps (Wake
+  Lock, requested again on every return and every tap); when the lock is
+  refused or unavailable (Low Power Mode, old iOS) one line says the screen may
+  lock (D14). *Accept:* 10 minutes without touching, paired, the screen is
+  still on; with Low Power Mode on, the hint shows.
 - **R-DISP-9 Link status.** Both phones show the link state (paired,
-  reconnecting, offline) and the camera's REC state in one small chip.
-  *Accept:* turn off Wi-Fi on one phone; both chips show "reconnecting" within
-  10 s and "paired" again within 15 s of Wi-Fi returning.
+  reconnecting, offline) and the camera's REC state in one small chip. While
+  the link is down the scoreboard's chip counts the seconds since the camera
+  last sent its state, and says "syncing" until the camera's match has
+  arrived after a reconnect, so a stale score is never shown as live; it
+  shows "+1 scoreboard" when another scoreboard is linked, and the camera
+  shows how many are linked ("1/2", "2/2", D14). *Accept:* turn off Wi-Fi on
+  one phone; both chips show "reconnecting" within 10 s and "paired" again
+  within 15 s of Wi-Fi returning.
 
 ### Pairing and sync (R-PAIR)
 
@@ -249,10 +281,12 @@ the BWF Statutes (https://corporate.bwfbadminton.com/statutes/).
 - **R-PAIR-3 Scoreboard works alone.** All scoring works with no camera phone
   paired or after the link drops; nothing blocks on the link. *Accept:* play a
   whole game unpaired.
-- **R-PAIR-4 Resync.** On connect or reconnect the camera phone receives the
-  full event log and ends up with exactly the scoreboard's state; no point is
-  lost or duplicated. *Accept:* disconnect, score five points, reconnect;
-  the camera overlay shows the same score and `match.json` has five events.
+- **R-PAIR-4 Resync.** On connect or reconnect the scoreboard sends what it
+  scored meanwhile and then shows the camera's whole match, the camera's log
+  being the match (D14); a camera holding no match takes the scoreboard's. No
+  point is lost or duplicated. *Accept:* disconnect, score five points,
+  reconnect; the camera overlay shows the same score and `match.json` has five
+  events.
 - **R-PAIR-5 Clock offset.** The clock offset between phones is measured over
   the link so each event gets a recording-relative time within ±150 ms of the
   moment the tap happened. *Accept:* clap in front of the camera while tapping;
@@ -266,13 +300,33 @@ the BWF Statutes (https://corporate.bwfbadminton.com/statutes/).
 - **R-PAIR-8 Automatic reconnect.** After a link drop the phones reconnect
   through the helper with no user action, within 15 s of the network being
   back, for the whole match. Without internet the chip shows "offline" and
-  R-PAIR-3 applies. *Accept:* toggle airplane mode for 20 s on the camera
-  phone; the link is back within 15 s of airplane mode ending.
+  R-PAIR-3 applies. When a scoreboard's screen comes back on, its link is
+  checked at once and rebuilt within about 3 s on one Wi-Fi (D14;
+  technical-design.md §4.5). *Accept:* toggle airplane mode for 20 s on the
+  camera phone; the link is back within 15 s of airplane mode ending. Lock the
+  scoreboard's screen for a minute; the link is back within 5 s of unlocking.
 - **R-PAIR-9 Helper holds nothing of value.** The helper stores only
   connection descriptors and a session secret, with short lifetimes (10 min
   for a room code, a few hours for a session); it never receives scores,
   names, or video. *Accept:* the function's store contains no key with match
   data after a match; keys expire on their own.
+- **R-PAIR-10 One or two scoreboards (D14).** The camera links up to two
+  scoreboards, each paired with its own code like the first, at any time,
+  mid-match and while recording included. Both work the same: any tap, undo,
+  correction, interval, game start, match setup or end goes to the camera,
+  which applies it to its log and sends the result to both; undo undoes the
+  newest event whichever scoreboard sent it. A point to the same side from the
+  other scoreboard within 1.5 s (`DUPLICATE_WINDOW_MS`) is the same rally:
+  counted once, "Already counted" on the second. *Accept:* two scoreboards
+  score alternately and both show the camera's score; both tap the same rally
+  and it counts once; one scoreboard alone works as before.
+- **R-PAIR-11 Unpairing clears.** When either phone unpairs, the other one
+  forgets the pairing within a second (or at its next look at the helper if
+  the goodbye was lost): no camera REC state, no link chip, offer to pair
+  again; the match stays on the scoreboard as its own. A camera that died
+  without a goodbye leaves the scoreboard "link lost", and its menu offers
+  "Leave". *Accept:* unpair on the camera; every scoreboard shows "Pair
+  camera" within a second.
 
 ### Recording (R-REC)
 

@@ -54,21 +54,21 @@ describe('signaling helper', () => {
     expect(claimed.offer).toMatchObject({ gen: 1, sdp: SDP('offer1'), fresh: true });
     expect(await kind(client.claimRoom(room.code))).toBe('no-room'); // one-shot
 
-    expect(await client.getAnswer(room, 1)).toBeNull();
+    expect(await client.poll(room, 1, 'camera')).toBeNull();
     await client.postAnswer(claimed, { gen: 1, sdp: SDP('answer1'), fresh: true });
-    expect(await client.getAnswer(room, 1)).toMatchObject({ gen: 1, sdp: SDP('answer1') });
-    expect(await client.getAnswer(room, 2)).toBeNull();
+    expect(await client.poll(room, 1, 'camera')).toEqual({ answer: expect.objectContaining({ gen: 1, sdp: SDP('answer1') }) });
+    expect(await client.poll(room, 1, 'scoreboard')).toBeNull(); // nothing new for the scoreboard
   });
 
   it('reconnect generations: offers must grow, answers must match the current offer', async () => {
     const { client } = setup();
     const room = await client.createRoom(SDP('o1'));
     await client.claimRoom(room.code);
-    expect(await client.getOffer(room, 1)).toBeNull(); // nothing newer than what the scoreboard answered
+    expect(await client.poll(room, 1, 'scoreboard')).toBeNull(); // nothing newer than what the scoreboard answered
 
     await client.postOffer(room, { gen: 2, sdp: SDP('restart'), fresh: false });
-    expect(await client.getOffer(room, 1)).toMatchObject({ gen: 2, fresh: false });
-    expect(await client.getOffer(room, 2)).toBeNull();
+    expect(await client.poll(room, 1, 'scoreboard')).toEqual({ offer: expect.objectContaining({ gen: 2, fresh: false, by: 'camera' }) });
+    expect(await client.poll(room, 2, 'scoreboard')).toBeNull();
 
     const stale = await client.postOffer(room, { gen: 2, sdp: SDP('again'), fresh: true }).catch((e) => e);
     expect(stale).toBeInstanceOf(HelperError);
@@ -77,9 +77,39 @@ describe('signaling helper', () => {
     expect(await kind(client.postAnswer(room, { gen: 1, sdp: SDP('late'), fresh: false }))).toBe('stale');
     await client.postAnswer(room, { gen: 2, sdp: SDP('a2'), fresh: false });
     await client.postOffer(room, { gen: 3, sdp: SDP('fresh'), fresh: true });
-    expect(await client.getOffer(room, 2)).toMatchObject({ gen: 3, fresh: true });
-    expect(await client.getAnswer(room, 2)).toMatchObject({ gen: 2 }); // the old answer is still readable for its gen
-    expect(await client.getAnswer(room, 3)).toBeNull();
+    expect(await client.poll(room, 2, 'scoreboard')).toEqual({ offer: expect.objectContaining({ gen: 3, fresh: true }) });
+    expect(await client.poll(room, 3, 'camera')).toBeNull(); // not answered yet
+  });
+
+  it('either phone may offer: a scoreboard back from a locked screen offers, the camera answers (§4.5)', async () => {
+    const { client } = setup();
+    const room = await client.createRoom(SDP('o1'));
+    const sb = await client.claimRoom(room.code);
+    await client.postAnswer(sb, { gen: 1, sdp: SDP('a1'), fresh: true });
+    await client.postOffer(room, { gen: 2, sdp: SDP('restart'), fresh: false, by: 'camera' }); // the camera's waiting restart
+    // The scoreboard does not trust the old connection: a fresh offer of its own, above the camera's.
+    expect(await kind(client.postOffer(sb, { gen: 2, sdp: SDP('sb'), fresh: true, by: 'scoreboard' }))).toBe('stale');
+    await client.postOffer(sb, { gen: 3, sdp: SDP('sb'), fresh: true, by: 'scoreboard' });
+    expect(await client.poll(sb, 3, 'scoreboard')).toBeNull(); // its own offer is not handed back to it
+    // The camera, waiting on gen 2, sees the newer offer from the other side and answers it.
+    expect(await client.poll(room, 2, 'camera')).toEqual({ offer: expect.objectContaining({ gen: 3, by: 'scoreboard', sdp: SDP('sb') }) });
+    await client.postAnswer(room, { gen: 3, sdp: SDP('cam-answer'), fresh: true });
+    expect(await client.poll(sb, 3, 'scoreboard')).toEqual({ answer: expect.objectContaining({ gen: 3, sdp: SDP('cam-answer') }) });
+  });
+
+  it('a phone that unpairs ends the session: the other one hears "ended" at its next call, and the code is dead', async () => {
+    const { client, store } = setup();
+    const room = await client.createRoom(SDP('o1'));
+    const sb = await client.claimRoom(room.code);
+    await client.end(sb);
+    expect(await kind(client.poll(room, 1, 'camera'))).toBe('ended');
+    expect(await kind(client.postOffer(room, { gen: 2, sdp: SDP('x'), fresh: true }))).toBe('ended');
+    expect(await kind(client.end(room))).toBe('ended');
+    expect(store.keys().filter((k) => k.startsWith('offer:') || k.startsWith('answer:'))).toEqual([]);
+    // A code withdrawn before anyone claimed it cannot be claimed afterwards.
+    const r2 = await client.createRoom(SDP('o2'));
+    await client.end(r2);
+    expect(await kind(client.claimRoom(r2.code))).toBe('no-room');
   });
 
   it('every session call needs the secret', async () => {
@@ -87,8 +117,9 @@ describe('signaling helper', () => {
     const room = await client.createRoom(SDP('o1'));
     const wrong = { session: room.session, secret: '0'.repeat(32) };
     expect(await kind(client.postOffer(wrong, { gen: 2, sdp: SDP('x'), fresh: true }))).toBe('helper');
-    expect(await kind(client.getAnswer(wrong, 1))).toBe('helper');
-    expect(await kind(client.getOffer({ session: 'f'.repeat(32), secret: room.secret }, 0))).toBe('no-session');
+    expect(await kind(client.poll(wrong, 1, 'camera'))).toBe('helper');
+    expect(await kind(client.end(wrong))).toBe('helper');
+    expect(await kind(client.poll({ session: 'f'.repeat(32), secret: room.secret }, 0, 'scoreboard'))).toBe('no-session');
   });
 
   it('room codes expire after 10 minutes, sessions 6 h after their last write', async () => {
@@ -102,9 +133,9 @@ describe('signaling helper', () => {
     clock.advance(SESSION_TTL_S * 1000 - 60_000);
     await client.postOffer(r2, { gen: 2, sdp: SDP('o3'), fresh: true }); // a write refreshes the whole session
     clock.advance(SESSION_TTL_S * 1000 - 60_000);
-    expect(await client.getOffer(r2, 1)).toMatchObject({ gen: 2 });
+    expect(await client.poll(r2, 1, 'scoreboard')).toEqual({ offer: expect.objectContaining({ gen: 2 }) });
     clock.advance(120_000);
-    expect(await kind(client.getOffer(r2, 0))).toBe('no-session');
+    expect(await kind(client.poll(r2, 0, 'scoreboard'))).toBe('no-session');
     clock.advance(61_000); // the rate-limit counters are gone too
     expect(store.keys()).toEqual([]);
   });

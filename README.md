@@ -18,8 +18,9 @@ code through the signaling helper, WebRTC data channel on the local network,
 automatic reconnect, remote REC from the scoreboard). Phones on different
 networks (e.g. both on mobile data) connect through a TURN relay once a
 Cloudflare TURN key is set (docs/deploy.md §3); one Wi-Fi still connects
-directly. The camera can still follow its own phone's match through "Demo
-score" in its menu. Hosting:
+directly. One camera takes one or two scoreboard phones that work the same,
+the camera holding the match (D14 in docs/requirements.md). The camera can
+still follow its own phone's match through "Demo score" in its menu. Hosting:
 Vercel (static PWA plus one signaling function), see
 [docs/deploy.md](docs/deploy.md).
 

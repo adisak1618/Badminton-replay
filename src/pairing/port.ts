@@ -1,5 +1,5 @@
-// What the two role layers (PeerSource on the camera, ScoreboardLink on the scoreboard) need from the link.
-// PeerLink provides it over WebRTC; tests connect two role layers with an in-memory pair.
+// What the role layers (the camera's MatchHub, one port per scoreboard; ScoreboardLink on each scoreboard)
+// need from the link. PeerLink provides it over WebRTC; tests connect the role layers with in-memory pairs.
 import type { ClockEstimate } from '../link/source';
 import type { Msg, encode } from '../protocol/messages';
 import type { LinkSnapshot } from './link';

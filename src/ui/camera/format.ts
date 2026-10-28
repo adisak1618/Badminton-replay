@@ -1,3 +1,4 @@
+import type { LinkSnapshot } from '../../pairing/link';
 export function bytes(n: number | null | undefined): string {
   if (n == null) return '?';
   if (n >= 1e9) return `${(n / 1e9).toFixed(1)} GB`;
@@ -13,4 +14,12 @@ export function when(at: number, now = Date.now()): string {
   if (d.toDateString() === day.toDateString()) return `Today ${hm}`;
   if (now - at < 6 * 86_400_000) return `${d.toLocaleDateString('en-GB', { weekday: 'short' })} ${hm}`;
   return `${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} ${hm}`;
+}
+
+/** "iPhone · 7c2f": what a scoreboard is called on the camera. */
+export function boardName(remote: LinkSnapshot['remote']): string {
+  if (!remote) return 'scoreboard';
+  const ua = remote.ua ?? '';
+  const kind = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : /Android/.test(ua) ? 'Android' : /Macintosh/.test(ua) ? 'Mac' : 'phone';
+  return `${kind} · ${remote.deviceId.slice(-4)}`;
 }

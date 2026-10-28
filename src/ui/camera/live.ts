@@ -1,9 +1,8 @@
 // The camera role's long-lived objects: one controller (canvas, worker, recorder) for the app's lifetime,
-// and the same-phone and not-paired score sources (the paired one lives in pairing/live.ts).
+// and the same-phone score source (the paired scoreboards' MatchHub lives in pairing/live.ts).
 import { APP_BUILD } from '../../build';
 import { LocalSource } from '../../link/local';
 import { registerCapture } from '../../pairing/capture';
-import { NoSource } from '../../link/none';
 import type { PeerInfo } from '../../link/source';
 import { store } from '../../match/live';
 import { loadLogo } from '../../match/persist';
@@ -15,7 +14,6 @@ export const thisDevice = (): PeerInfo => ({ id: deviceId(), ua: navigator.userA
 
 let controller: CameraController | null = null;
 let local: LocalSource | null = null;
-const none = new NoSource();
 
 export function cameraController(): CameraController {
   if (!controller) {
@@ -40,5 +38,3 @@ export function demoSource(): LocalSource {
   local ??= new LocalSource(store, thisDevice());
   return local;
 }
-
-export const notPaired = (): NoSource => none;
