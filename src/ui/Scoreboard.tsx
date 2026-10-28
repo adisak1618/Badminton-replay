@@ -173,6 +173,11 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
           <b className="truncate text-fg">{gameInfo}</b>
         </span>
         <span className="flex shrink-0 items-center gap-2">
+          {resumed && (
+            <button className="btn btn-pri min-h-10 rounded-full px-4 text-sm" onClick={continueResumed}>
+              Match resumed · tap anywhere to continue
+            </button>
+          )}
           {speechWarning && <span className="text-amber">no {prefs.lang === 'th' ? 'Thai' : 'English'} voice</span>}
           {!prefs.voice && <span title="voice off">voice off</span>}
           {!prefs.sound && <span title="sound off">sound off</span>}
@@ -180,7 +185,7 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
         </span>
       </header>
 
-      <div className="relative flex min-h-0 flex-1">
+      <div className="pad-safe-bottom relative flex min-h-0 flex-1">
         {(['left', 'right'] as const).map((zone) => (
           <TeamZone
             key={`${zone}-${teamOf(zone)}`}
@@ -194,7 +199,22 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
         ))}
         <div className="pointer-events-none absolute top-0 bottom-0 left-1/2 w-px bg-line" />
 
-        {s.phase === 'interval' && <IntervalOverlay config={config} s={s} now={now} onDismiss={dismissInterval} />}
+        {s.phase === 'playing' && !resumed && (
+          // Floating Undo on the centre line. The 96 px disc around the 64 px button is a dead zone: touches on
+          // or right around it belong to Undo and never reach a tap zone. Swipe-down stays the shortcut (D6).
+          <div className="absolute top-1/2 left-1/2 z-10 flex size-24 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full">
+            <button
+              className="flex size-16 flex-col items-center justify-center rounded-full border border-line bg-btn text-fg shadow-[0_2px_12px_rgb(0_0_0/0.6)] active:brightness-125 disabled:opacity-40"
+              aria-label={redoVisible ? 'Redo' : 'Undo'}
+              onClick={redoVisible ? redo : undo}
+              disabled={!redoVisible && !store.canUndo()}
+            >
+              <span className="text-2xl leading-none">{redoVisible ? '↷' : '↶'}</span>
+              <span className="text-[11px] font-semibold">{redoVisible ? 'Redo' : 'Undo'}</span>
+            </button>
+          </div>
+        )}
+        {s.phase === 'interval' && <IntervalOverlay config={config} s={s} now={now} onDismiss={dismissInterval} onUndo={undo} />}
         {s.phase === 'gameOver' && (
           <GameOverOverlay
             config={config}
@@ -214,24 +234,6 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
           <button className="absolute inset-0 z-30 bg-bg/20" onClick={continueResumed} aria-label="Continue the match" />
         )}
       </div>
-
-      <footer className="pad-safe-bottom flex shrink-0 items-center justify-center border-t border-line">
-        <div className="flex h-[72px] items-center">
-          {resumed ? (
-            <button className="btn btn-pri h-14 rounded-full px-6 text-base" onClick={continueResumed}>
-              Match resumed · tap anywhere to continue (nothing is scored)
-            </button>
-          ) : (
-            <button
-              className="btn h-14 w-40 rounded-full text-lg"
-              onClick={redoVisible ? redo : undo}
-              disabled={!redoVisible && !store.canUndo()}
-            >
-              {redoVisible ? '↷ Redo' : '↶ Undo'}
-            </button>
-          )}
-        </div>
-      </footer>
 
       {sheet === 'menu' && (
         <Menu
@@ -297,7 +299,7 @@ function TeamZone({
     >
       {flashKey !== null && <div key={flashKey} className="flash-layer pointer-events-none absolute inset-0" style={{ background: color }} />}
       <div className="relative flex flex-col items-center">
-        <div className="max-w-full truncate px-2 text-[22px] font-semibold tracking-wide" style={{ color }}>
+        <div className="max-w-full truncate px-2 text-[30px] leading-tight font-bold tracking-wide" style={{ color }}>
           {config.teams[team].name}
           {serving && <span aria-label="serving"> {SHUTTLE}</span>}
         </div>
@@ -305,33 +307,33 @@ function TeamZone({
           {s.score[team]}
         </div>
         <div className="h-[26px] text-lg font-bold tracking-[2px] text-amber">{flag}</div>
-        <Courts zone={zone} team={team} config={config} s={s} />
+        <Courts team={team} config={config} s={s} />
       </div>
     </div>
   );
 }
 
-/** R-DISP-4: the team's two service courts; the bottom cell is the court nearest the scoreboard phone. */
-function Courts({ zone, team, config, s }: { zone: Zone; team: Team; config: MatchConfig; s: MatchState }) {
+/**
+ * R-DISP-4: the team's two service courts side by side, left court on the left and right court on the right,
+ * each with its player's name; the server's box carries the shuttle and the receiver's says "receives".
+ */
+function Courts({ team, config, s }: { team: Team; config: MatchConfig; s: MatchState }) {
   const color = config.teams[team].color;
   const serving = s.server === team;
   const court = servingCourt(s);
-  const base = 'flex min-h-[30px] items-center gap-1.5 rounded-md border px-2 py-1 text-[13px]';
   if (!s.doubles)
     return (
-      <div className="mt-1 flex w-[170px] flex-col">
-        <div
-          className={`${base} ${serving ? 'border-current font-semibold text-fg' : 'border-dashed border-line text-[#cbd2dc]'}`}
-          style={serving ? { color } : undefined}
-        >
-          {serving ? `serves from ${court} ${SHUTTLE}` : `receives in ${court}`}
-        </div>
+      <div
+        className={`mt-1 rounded-lg border px-3 py-1.5 text-lg ${serving ? 'border-current font-semibold' : 'border-dashed border-line text-[#cbd2dc]'}`}
+        style={serving ? { color } : undefined}
+      >
+        {serving ? `serves from ${court} ${SHUTTLE}` : `receives in ${court}`}
       </div>
     );
   const rcv = receiverIdx(s);
-  const order: Court[] = zone === 'left' ? ['left', 'right'] : ['right', 'left'];
+  const order: Court[] = ['left', 'right'];
   return (
-    <div className="mt-1 flex w-[170px] flex-col gap-[3px]" data-testid={`courts-${team}`}>
+    <div className="mt-1 flex gap-2" data-testid={`courts-${team}`}>
       {order.map((c) => {
         const idx = s.pos[team][c];
         const isServer = serving && s.serverIdx === idx;
@@ -340,15 +342,19 @@ function Courts({ zone, team, config, s }: { zone: Zone; team: Team; config: Mat
           <div
             key={c}
             data-court={c}
-            className={`${base} ${
-              isServer ? 'border-current font-semibold text-fg' : isReceiver ? 'border-dashed border-[#5b6678] text-[#cbd2dc]' : 'border-line text-mut'
+            className={`flex w-[164px] min-w-0 flex-col rounded-lg border px-2.5 py-1 ${
+              isServer ? 'border-2 border-current' : isReceiver ? 'border-2 border-dashed border-[#8a94a6]' : 'border-line'
             }`}
             style={isServer ? { color } : undefined}
           >
-            <small className="w-3 text-[10px] opacity-70">{c === 'right' ? 'R' : 'L'}</small>
-            <span className="truncate">{playerName(config, team, idx)}</span>
-            {isServer && <span className="ml-auto">{SHUTTLE}</span>}
-            {isReceiver && <small className="ml-auto text-[10px]">receives</small>}
+            <span className="flex h-[18px] items-center justify-between text-[12px] font-semibold tracking-wide text-mut uppercase">
+              <span>{c}</span>
+              {isServer && <span className="text-base normal-case">{SHUTTLE}</span>}
+              {isReceiver && <span className="text-[#e6eaf0] normal-case">receives</span>}
+            </span>
+            <span className={`truncate text-[22px] leading-tight font-semibold ${isServer ? 'text-fg' : isReceiver ? 'text-[#e6eaf0]' : 'text-mut'}`}>
+              {playerName(config, team, idx)}
+            </span>
           </div>
         );
       })}

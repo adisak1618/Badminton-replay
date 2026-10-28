@@ -142,7 +142,7 @@
 }
 
 .digits {
-  font-size: min(38dvh, 30vw);
+  font-size: min(42dvh, 30vw);
   line-height: 0.9;
   font-weight: 800;
   font-variant-numeric: tabular-nums;

@@ -9,11 +9,13 @@ export function IntervalOverlay({
   s,
   now,
   onDismiss,
+  onUndo,
 }: {
   config: MatchConfig;
   s: MatchState;
   now: number;
   onDismiss: () => void;
+  onUndo: () => void;
 }) {
   const [downId, setDownId] = useState<number | null>(null);
   const L = s.leftTeam;
@@ -43,6 +45,15 @@ export function IntervalOverlay({
       {s.pendingSwap && <div className="text-[22px] font-semibold text-amber">CHANGE ENDS when play resumes</div>}
       <span className="btn btn-pri px-8">Resume</span>
       <div className="text-mut">any tap resumes, nothing is scored</div>
+      {/* Takes back the point that reached 11; its touches never reach the overlay, so it does not resume. */}
+      <button
+        className="btn btn-ghost absolute bottom-3 left-1/2 -translate-x-1/2"
+        onPointerDown={(e) => e.stopPropagation()}
+        onPointerUp={(e) => e.stopPropagation()}
+        onClick={onUndo}
+      >
+        ↶ Undo last point
+      </button>
     </div>
   );
 }
