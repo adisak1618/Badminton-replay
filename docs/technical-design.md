@@ -1,7 +1,8 @@
 # Technical design
 
-Architecture and implementation plan for the two-phone scoreboard. Requirement
-ids refer to [requirements.md](requirements.md); the decisions D1 to D13
+Architecture and implementation plan for the camera phone and its one or two
+scoreboard phones. Requirement ids refer to [requirements.md](requirements.md);
+the decisions D1 to D14
 recorded there are assumed. Screens (S*, C*) refer to
 [ux-design.md](ux-design.md).
 
@@ -35,9 +36,13 @@ test on the captain's iPhones in phase 0 of [roadmap.md](roadmap.md).
   the phones and mints short-lived TURN credentials for them, nothing else
   (R-PAIR-9). Video, scores and names never leave
   the phones (N-PRIV-1).
-- **Scoreboard phone is the source of truth** for the match (config + event
-  log). The camera phone mirrors it. Only one side writes score events, so
-  there is no merge problem.
+- **The camera phone holds the match while paired (D14).** Up to two
+  scoreboard phones link to it, each over its own data channel (a star; the
+  scoreboards never talk to each other). Each scoreboard sends inputs; the
+  camera applies them to its one log and sends every applied event to every
+  scoreboard, which shows the camera's log. Only one phone writes the log, so
+  there is still no merge problem. Unpaired, a scoreboard holds its own log
+  as in Phase 1.
 - **Camera phone owns the recording timeline** and the composited video. It
   stamps every event with a recording-relative time using a measured clock
   offset (§4.5) and draws the overlay into every frame (§6).
@@ -190,15 +195,43 @@ the identity on state; a `point` during `gameOver` or `matchOver` is ignored;
 unless a `courts.swap` says otherwise; `winner` is null exactly for a 1-1 in
 fixed 2.
 
-### 3.5 Persistence and sharing
+### 3.5 Persistence and sharing (D14)
 
-- The scoreboard phone writes `{config, events}` to IndexedDB after every
-  event. On launch an unfinished match is offered for resume (R-SCORE-9). It
-  can export its log alone (R-EXP-1).
-- The camera phone keeps a mirror `{config, events}` plus its own recording
-  metadata (§6.6) in the match's OPFS directory.
-- Sharing is one-directional: every new event is sent as an `event` message;
-  on every (re)connect the scoreboard sends `sync` with the whole log (§4.4).
+- Unpaired, the scoreboard phone writes `{config, events}` to IndexedDB after
+  every event. On launch an unfinished match is offered for resume
+  (R-SCORE-9). It can export its log alone (R-EXP-1).
+- Paired, the camera holds the match (`link/hub.ts`, kept in localStorage
+  across a reload for up to 6 h, forgotten once no scoreboard is paired). A
+  scoreboard tap becomes an **input** `{id, at, by, body}`: an event body
+  whose `undo`/`redo` carry no target. The camera applies it
+  (`engine/input.ts`): it gets the next `seq`, the input's id as its id (a
+  resend is recognised), and its time on the camera's clock (`at` minus that
+  link's measured offset, never earlier than the event before, so the log
+  stays in time order); `undo`/`redo` target the newest event, whichever
+  scoreboard sent it; inputs that make no sense in the phase (a point between
+  games, a second `interval.end` when both countdowns end, a stale
+  `game.start`) are `ignored`. A `match.start` input replaces the camera's
+  match on every phone.
+- **The same rally twice.** A point to the same side from a different
+  scoreboard within `DUPLICATE_WINDOW_MS` = 1500 ms of a live point is
+  `duplicate`: not applied, and the sender shows "Already counted". One rally
+  plus the next serve takes longer, the same scoreboard tapping twice is never
+  merged (undo exists), and the window is compared on the camera's clock, so
+  it also catches a tap that arrives late after a drop. Firstmate's default;
+  one constant.
+- Each scoreboard shows the camera's log with its own unanswered inputs
+  applied on top (`match/store.ts`), so a tap shows and is announced at once and
+  scoring never waits for the link (R-PAIR-3); the camera's `event` confirms an
+  input, its `result` drops one it did not apply. The scoreboard persists that
+  view with its pending inputs, so a reload sends them later. Unpaired, what
+  it shows becomes its own match again.
+- On joining: a camera with a match gives it to the scoreboard, which drops
+  whatever it showed (pending inputs for the camera's match are kept and
+  sent); a camera without one adopts the scoreboard's (`sync`). The camera's
+  `at` times are shown as they are on the scoreboards: both phones keep
+  network time, so the difference is far below what a countdown shows.
+- The camera also writes its log plus recording metadata (§6.6) to the
+  match's OPFS directory while recording.
 
 ## 4. Pairing, signaling and reconnect
 
@@ -229,11 +262,15 @@ sends `/api/signal/:path*` to it). JSON bodies, no cookies, CORS not needed
 | `GET /api/signal/rooms/:code` | scoreboard | → `{session, secret, offer}` | deletes `room:<code>` (one-shot) |
 | `POST /api/signal/sessions/:session/answer` | scoreboard | `{secret, gen, answer}` → 204 | sets `answer:{gen,sdp,at}`, refreshes TTL |
 | `GET /api/signal/sessions/:session/answer?gen=N` | camera | → `{answer}` or 204; secret in `X-Signal-Secret` | |
-| `POST /api/signal/sessions/:session/offer` | camera | `{secret, gen, offer}` → 204 | reconnect: new offer with `gen+1` |
-| `GET /api/signal/sessions/:session/offer?gen=N` | scoreboard | → `{offer}` or 204 if none newer than N; secret in `X-Signal-Secret` | |
+| `POST /api/signal/sessions/:session/offer` | both | `{secret, gen, offer, fresh, by}` → 204 | reconnect: new offer with `gen+1`; `by` is the phone that made it (D14: a scoreboard back from a locked screen offers too) |
+| `GET /api/signal/sessions/:session/offer?gen=N` | (protocol 1) | → `{offer}` or 204 if none newer than N; secret in `X-Signal-Secret` | |
+| `GET /api/signal/sessions/:session/poll?gen=N&role=R` | both | → `{offer}` when the other phone's offer is newer than N, else `{answer}` when the answer to this phone's own offer N is there, else 204; secret in `X-Signal-Secret` | |
+| `POST /api/signal/sessions/:session/end` | both | `{secret}` → 204 | session marked `ended` (every later call: 410 `ended`), offer and answer deleted |
 | `GET /api/signal/sessions/:session/ice` | both | → `{relay:'ok', iceServers, ttl}` or `{relay:'not-configured'}`; 503 `{error:'relay-failed', reason}`; secret in `X-Signal-Secret` | rate counter only |
 
-Offers and answers are stored as `{gen, sdp, fresh, at}`; `fresh` marks a
+The camera holds one session per scoreboard slot (`pairing/slots.ts`): a
+second scoreboard pairs through a second room, so the helper needs nothing
+new for it. Offers and answers are stored as `{gen, sdp, fresh, at, by}`; `fresh` marks a
 description for a new `RTCPeerConnection` rather than an ICE restart of the
 current one (the scoreboard sets it on an answer when it had to start over,
 e.g. after a reload).
@@ -353,43 +390,56 @@ connect; the diagnostics log the same line.
 
 ### 4.4 Message protocol (data channel)
 
-One ordered, reliable channel. Every message is a JSON object with `v`
-(protocol version) and `t` (type). Unknown `t` is ignored; an unsupported `v`
-is answered with `bye` and surfaces R-PAIR-7.
+One ordered, reliable channel per scoreboard. Every message is a JSON object
+with `v` (protocol version) and `t` (type). Unknown `t` is ignored; an
+unsupported `v` is answered with `bye` and surfaces R-PAIR-7. Version 2 (D14):
+the camera holds the match; a phone on version 1 is told to update.
 
 ```ts
 type Role = 'scoreboard' | 'camera';
+type Part = [index: number, count: number];
 type Msg =
-  | { v: 1; t: 'hello'; role: Role; deviceId: string; app: string; ua?: string; matchId?: string; lastSeq?: number }
-  | { v: 1; t: 'ping'; id: number; t0: number }
-  | { v: 1; t: 'pong'; id: number; t0: number; t1: number; t2: number }
-  | { v: 1; t: 'event'; event: MatchEvent }                                  // scoreboard -> camera
-  | { v: 1; t: 'sync'; matchId: string; config: MatchConfig; events: MatchEvent[];
-      part?: [index: number, count: number] }                                // scoreboard -> camera
-  | { v: 1; t: 'rec'; state: 'idle' | 'recording' | 'stopping' | 'error';   // camera -> scoreboard
+  | { v: 2; t: 'hello'; role: Role; deviceId: string; app: string; ua?: string; matchId?: string; lastSeq?: number }
+  | { v: 2; t: 'ping'; id: number; t0: number }
+  | { v: 2; t: 'pong'; id: number; t0: number; t1: number; t2: number }
+  | { v: 2; t: 'state'; matchId: string | null; config?: MatchConfig; events?: MatchEvent[]; part?: Part }
+                                            // camera -> scoreboard: the whole match, or none, on every open
+  | { v: 2; t: 'event'; matchId: string; event: MatchEvent }   // camera -> scoreboards: one applied event
+  | { v: 2; t: 'input'; matchId: string; input: Input }        // scoreboard -> camera
+  | { v: 2; t: 'result'; id: string; result: 'applied' | 'duplicate' | 'ignored' }  // camera -> its sender
+  | { v: 2; t: 'sync'; matchId: string; config: MatchConfig; events: MatchEvent[]; part?: Part }
+                                            // scoreboard -> camera: its match, when the camera holds none
+  | { v: 2; t: 'resync' }                   // scoreboard -> camera: send the whole state again
+  | { v: 2; t: 'peers'; count: number }     // camera -> scoreboards: how many are linked
+  | { v: 2; t: 'rec'; state: 'idle' | 'recording' | 'stopping' | 'error';   // camera -> scoreboards
       segment?: number; startedAt?: number; elapsedMs?: number; bytes?: number;
       minutesLeft?: number; error?: string }
-  | { v: 1; t: 'cmd'; id: string; action: 'rec.start' | 'rec.stop' }        // scoreboard -> camera (D11)
-  | { v: 1; t: 'ack'; id: string; ok: boolean; error?: string }
-  | { v: 1; t: 'bye'; reason?: 'version' | 'leaving' | 'unpaired' };
+  | { v: 2; t: 'cmd'; id: string; action: 'rec.start' | 'rec.stop' }        // scoreboard -> camera (D11)
+  | { v: 2; t: 'ack'; id: string; ok: boolean; error?: string }             // camera -> the asker
+  | { v: 2; t: 'bye'; reason?: 'version' | 'leaving' | 'unpaired' };
 ```
 
 Examples:
 
 ```json
-{"v":1,"t":"event","event":{"seq":17,"id":"k3f9","at":1793100000123,"by":"sb-7c2","type":"point","team":"A"}}
-{"v":1,"t":"rec","state":"recording","segment":1,"startedAt":1793099000456,"elapsedMs":754000,"bytes":565000000,"minutesLeft":26}
+{"v":2,"t":"input","matchId":"m-1793099000000-3f1a","input":{"id":"k3f9","at":1793100000123,"by":"sb-7c2","body":{"type":"point","team":"A"}}}
+{"v":2,"t":"event","matchId":"m-1793099000000-3f1a","event":{"seq":17,"id":"k3f9","at":1793100000101,"by":"sb-7c2","type":"point","team":"A"}}
+{"v":2,"t":"result","id":"k3f9","result":"applied"}
+{"v":2,"t":"rec","state":"recording","segment":1,"startedAt":1793099000456,"elapsedMs":754000,"bytes":565000000,"minutesLeft":26}
 ```
 
 - **Versioning.** `v` is bumped only for incompatible changes; additive fields
   are allowed within a version. `hello.app` carries the build id so a stale
   service-worker cache on one phone is diagnosed as "update the app"
   (R-PAIR-7).
-- **Full-state resync.** On every channel open the scoreboard sends `sync`
-  with the entire log (a 3-game log is ~40 kB). The camera replaces its mirror
-  wholesale; events are deduplicated by `id` (R-PAIR-4).
-- **Message size.** Every message stays under 16 kB; `sync` is split into
-  `part` chunks. MDN notes browsers accept at least 256 kB but the SDP default
+- **Full-state resync.** On every channel open the camera sends `state`
+  with its entire match (a 3-game log is ~40 kB), or `matchId: null`. The
+  scoreboard shows nothing as live ("syncing") until it has it, then resends
+  its unanswered inputs (R-PAIR-4). The log only grows, so its length is its
+  version: an `event` whose `seq` is not the next one makes the scoreboard ask
+  for `resync`, as does an open with no `state` within 1.5 s.
+- **Message size.** Every message stays under 16 kB; `state` and `sync` are
+  split into `part` chunks. MDN notes browsers accept at least 256 kB but the SDP default
   `max-message-size` is 64 kB and large messages block the channel
   (https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API/Using_data_channels).
 - **Liveness.** `ping` every 2 s from both phones; each judges the link by its
@@ -399,7 +449,8 @@ Examples:
   clock offset comes from its own pings (the formula below then gives
   scoreboard − camera, which it negates).
 - **Commands** (`cmd`/`ack`) are idempotent and carry an id so a retry after a
-  blip cannot start two recordings.
+  blip cannot start two recordings; the ack goes to the scoreboard that asked,
+  the `rec` reports to all.
 
 ### 4.5 Reconnect and clock offset
 
@@ -411,6 +462,45 @@ and the camera polls the answer. If the connection object is unusable a fresh
 one is created. Backoff: 2 s for the first minute, then 5 s. When the helper
 is unreachable the chip says "offline" and polling continues at 5 s until it
 answers. Nothing is lost meanwhile (R-PAIR-3, R-PAIR-4).
+
+**Screen off and on (D14).** iOS suspends the page when the screen locks,
+whether it runs in a Safari tab or from the Home Screen, so the link cannot
+stay up with the screen off; the scoreboard keeps its screen on while paired
+(§5) and makes the way back fast. On `visibilitychange` to visible,
+`pageshow` and `online` (`pairing/live.ts`) each link checks itself
+(`resumeAction` in `pairing/reconnect.ts`): a channel that is not open or a
+connection that says `failed`, `disconnected` or `closed` counts as gone at
+once; otherwise one ping must be answered within `PROBE_MS` = 1 s. A gone
+link is not trusted for an ICE restart (the page was suspended): the
+scoreboard looks at the helper at once and answers the camera's offer if it
+is a fresh one, or else posts a fresh offer of its own (`by: scoreboard`, the
+generation above the camera's) and polls for the answer every 500 ms. The
+camera, while a link is down, polls `poll` every second for its first two
+minutes (2 s to 10 minutes, then 5 s), so it answers within about a second.
+Either phone's offer supersedes the other's older one; a 409 means the other
+was first, and its offer is taken. When the camera itself dropped, it
+reconnects as before.
+
+| Moment | Before (protocol 1) | Now |
+|---|---|---|
+| Screen on | nothing until a tick finds the pongs missing | probe: 0 to 1 s |
+| Camera's offer | ICE restart 10 s after the drop, already waiting; answered in place | a fresh one is answered; a restart is replaced by the scoreboard's own fresh offer |
+| Camera sees the answer | next poll: 2 s, 5 s once down over a minute | next poll: 1 s for two minutes |
+| Restart that cannot work | 10 s attempt timeout, then a fresh offer, another round trip | not tried |
+
+Measured on 2026-10-29 with two Chrome pages on one Mac (the scoreboard's timers
+held and its connection from before left dead while "locked", as iOS leaves
+it): link back 13.0 s after a 20 s lock and 19.5 s after 75 s on protocol 1;
+0.8 s and 1.5 s now. On the captain's iPhones this is device test A15.
+
+**Unpairing (R-PAIR-11).** `unpair()` sends `bye 'unpaired'`, closes the
+connection only once the goodbye has left (it was closed at once before, and
+on iPhone the goodbye was lost, so the scoreboard went on showing the camera
+reconnecting with its REC state), and posts `end` to the helper, so a phone
+whose goodbye was lost learns it at its next poll (410 `ended`). Either way the
+other phone resets to unpaired and forgets the saved pairing; the scoreboard
+drops the camera's REC state and peer count and keeps the match as its own;
+the camera frees that slot.
 
 TURN credentials are fetched per session and cached until 10 minutes before
 they expire (the scoreboard renews 20 minutes before); every new connection
@@ -452,8 +542,13 @@ is identical; only the transport of the descriptors differs.
   utterance cancels the previous one so a fast rally never queues stale
   scores. The click sound is a pre-decoded Web Audio buffer; the
   `AudioContext` is created on the "Start match" tap (iOS autoplay rules).
-- **Wake Lock** requested on "Start match", re-requested on `visibilitychange`
-  (R-DISP-8).
+- **Wake Lock** (`device/wakeLock.ts`, R-DISP-8): wanted for a live match,
+  while paired and on the pairing screen (D14: a locked screen suspends the
+  link); requested at once, again on every `visibilitychange` and every tap
+  (WebKit may refuse a request without a user gesture). Refused (Low Power
+  Mode) or unavailable (iOS before 16.4 in Safari, before 18.4 from the Home
+  Screen, §9), one line says the screen may lock. Whether the lock holds in
+  the captain's Home Screen app is device test A15.
 - **Orientation.** iOS has no lock (§9); a CSS `orientation: portrait` media
   query swaps in the "rotate" screen (R-DISP-7).
 - **Touch handling** per ux-design.md §3 with Pointer Events; `touch-action:
@@ -709,6 +804,12 @@ is untested; see roadmap.md Later.
   after 60 minutes (clap at the end, inspected in a video editor).
 - **A14** `canvas.captureStream` + MediaRecorder on current iOS produces a
   valid, continuous MP4 (no black or frozen frames) with and without timeslice.
+- **A15** (D14) A paired scoreboard in the Home Screen app keeps its screen on
+  for 10 minutes untouched (Wake Lock; BCD gives 18.4 for installed web apps,
+  16.4 in Safari), and shows the hint in Low Power Mode. After the screen was
+  locked for a minute, the link is back within 5 s of unlocking; the pairing
+  diagnostics log the `resume` line and the time. Not yet run on the
+  captain's iPhones.
 
 ## 10. Deployment on Vercel
 

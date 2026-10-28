@@ -105,6 +105,14 @@ Two buttons, each half the screen. The previous role is highlighted. The
   "No internet: cannot pair. Scoring and recording still work on each phone."
   (E1).
 - Reconnection after a drop is automatic and silent (R-PAIR-8); no screen.
+- **A second scoreboard (D14).** Once the first scoreboard is linked, C2 lists
+  it ("Scoreboard 1: iPhone · 7c2f", its chip, Unpair) and shows a fresh code
+  for a second one; Done closes it (an unused code is withdrawn), and it
+  closes by itself once two are linked. The camera menu offers "Pair another
+  scoreboard…" at any time, mid-match and while recording too; C1 says "A
+  second scoreboard can join at any time". The second scoreboard pairs
+  exactly like the first and then shows the camera's match, whatever it showed
+  before. Both scoreboards work the same.
 
 ### S3 Scoreboard (main screen)
 
@@ -140,8 +148,17 @@ Two buttons, each half the screen. The previous role is highlighted. The
 - "GAME POINT" / "MATCH POINT" sit under the digits of the team that has it
   (R-DISP-5).
 - Top bar: menu (`...`), game number, games and format, camera REC state and
-  elapsed time, link chip (R-DISP-9). It is 56 px tall and not part of the
-  tap zones.
+  elapsed time, link chip (R-DISP-9), and "+1 scoreboard" when another
+  scoreboard is linked to the same camera (D14). The chip says "syncing…"
+  until the camera's match has arrived after a (re)connect, and while the
+  link is down "reconnecting · 12 s" (seconds since the camera last sent its
+  state), so a score shown then is never taken for a live one. It is 56 px
+  tall and not part of the tap zones.
+- Paired, a tap the camera had already counted from the other scoreboard (the
+  same rally within 1.5 s) shows "Already counted on the other scoreboard" at
+  the top for 1.5 s and is not announced.
+- When the screen cannot be kept on (Low Power Mode, an old iOS) one amber line
+  at the bottom says so (R-DISP-8).
 - Undo pill at bottom centre, 160 × 56 px, in a 72 px band that is not part
   of the tap zones (D6, R-SCORE-6). After an undo it reads "Redo" for 5 s.
 - The bottom safe-area strip (iOS home indicator) is excluded from the zones.
@@ -218,9 +235,17 @@ with scores, games, serving team and player.
 
 ### S5 Menu (`...`)
 
-Correct score · Swap ends · Start/stop recording (when paired) · Pair camera ·
-Sound and voice · End match · New match · Pairing diagnostics. Each item is a
-full-height row, at least 56 px.
+Correct score · Swap ends · Start/stop recording (when paired) · Pair camera,
+or Unpair the camera (when linked) / "Leave: forget the camera" (when the link
+is lost: clears the camera's state, the match stays) · Sound and voice · End
+match · New match · Pairing diagnostics. Each item is a full-height row, at
+least 56 px. Paired, New match leaves the camera's match running for the
+other scoreboard until a new one starts.
+
+The camera's `⋯` menu: Pair with the scoreboard… (none linked), Pair another
+scoreboard… (one linked), Unpair the scoreboard, or each one and "Unpair both
+scoreboards" (two linked), Demo score, Recordings, Change role, Pairing
+diagnostics.
 
 Pairing diagnostics (here, in the camera's `⋯` menu, and as a chip on S2 and C2)
 shows this phone's pairing log under a one-line summary to read out (role,
@@ -308,7 +333,11 @@ phone the same list offers the log alone.
 | No internet while pairing | S2, C2 | "No internet: cannot pair. Scoring and recording still work on each phone." Retry button (R-PAIR-1) | Turn on data or hotspot |
 | Storage low | C1, C3 | Amber "N min left"; at zero: recording stops cleanly, file kept (R-REC-3) | Export and delete |
 | Capture interrupted (call, lock, app switch) | C3 | "Recording stopped: camera interrupted. Segment 1 saved (12:34)." Button: "Resume (segment 2)" (R-REC-5) | One tap |
-| Link lost, internet available | S3, C3 | Chip "reconnecting" after 6 s; scoreboard keeps scoring; camera keeps recording with the overlay frozen and marked "stale"; link returns by itself (R-PAIR-8), then the camera catches up (R-PAIR-4) | None needed |
+| Link lost, internet available | S3, C3 | Chip "reconnecting · N s" after 6 s; scoreboard keeps scoring (its taps are sent when the link returns); camera keeps recording with the overlay frozen and marked "stale"; link returns by itself (R-PAIR-8), then the camera catches up and the scoreboard shows the camera's match (R-PAIR-4) | None needed; "Leave" in S5 if the camera is gone for good |
+| Scoreboard screen was off | S3 | Back within a few seconds of the screen coming on ("syncing…" then "link ok", §4.5 of the technical design) | None needed |
+| Camera or scoreboard unpaired the other | S3, C1 | The scoreboard shows "Pair camera" within a second, no REC state; the camera frees that slot (R-PAIR-11) | Pair again |
+| Same rally tapped on both scoreboards | S3 | "Already counted on the other scoreboard" (D14) | None |
+| Screen cannot stay on | S3 | One amber line: Low Power Mode, or set Auto-Lock to Never (R-DISP-8) | Turn off Low Power Mode |
 | Link lost, no internet | S3, C3 | Chip "offline"; same behaviour; reconnects when internet returns | Restore internet |
 | Phones on different networks (no common Wi-Fi, e.g. both on mobile data) | S2, C2 | Connects through the TURN relay (D13) with no message. Only when the relay cannot carry it, after 15 s of connecting: "Not connecting: the phones are on different networks (this phone …, the other …), probably mobile data, and <why the relay did not work>" with the way out | Same Wi-Fi, or one phone's Personal Hotspot; set up the relay (deploy.md) |
 | Version mismatch | S2, C2 | "Update the app on the other phone, then pair again" (R-PAIR-7) | Reload the other phone |
@@ -375,8 +404,12 @@ sequenceDiagram
   end
   Note over Cam,Sb: link drops
   Cam->>H: POST new offer (session, gen+1)
-  Sb->>H: poll offer(session) -> answer
-  Cam-->>Sb: data channel opens again, full sync
+  Sb->>H: poll(session) -> offer -> answer
+  Cam-->>Sb: data channel opens again, the camera's whole match
+  Note over Cam,Sb: scoreboard screen locked, then on again (D14)
+  Sb->>H: poll at once; POST its own fresh offer (gen+1)
+  Cam->>H: poll every 1 s while down -> answer
+  Cam-->>Sb: new data channel, the camera's whole match
 ```
 
 ### Scoring loop and rule prompts
@@ -402,9 +435,9 @@ stateDiagram-v2
 2. The scoreboard keeps scoring and logging (R-PAIR-3). The camera keeps
    recording; its overlay stays at the last known score and is marked "stale".
 3. The phones re-exchange descriptors through the helper with no user action
-   (R-PAIR-8). On reconnect the camera receives the full log and computes
-   recording-relative times for the missed events from the clock offset
-   (R-PAIR-4, R-PAIR-5). The video shows the stale score for the duration of
+   (R-PAIR-8). On reconnect the scoreboard sends the taps it made meanwhile,
+   the camera applies them with their tap times from the clock offset and
+   sends its whole match back (R-PAIR-4, R-PAIR-5). The video shows the stale score for the duration of
    the drop and jumps to the right one; nothing else changes.
 
 ### Camera interruption
