@@ -11,18 +11,29 @@ score. Every point is logged with its time on the recording, so the finished
 clip is on the phone when the match ends and the overlay can still be
 re-rendered later if wanted.
 
-Status: phase 1 (single-phone scoreboard) and the camera half of phase 2
-(live-composited recording, segments, export) implemented; the camera can
-follow this phone's own match through "Demo score" in its menu until pairing
-(the rest of phase 2, docs/roadmap.md) lands. Hosting target: Vercel (static
-PWA plus one signaling function).
+Status: phase 1 (single-phone scoreboard) and phase 2 built, its acceptance on
+the iPhones pending (docs/roadmap.md): live-composited
+recording, segments and export on the camera phone, and pairing (QR or typed
+code through the signaling helper, WebRTC data channel on the local network,
+automatic reconnect, remote REC from the scoreboard). The camera can still
+follow its own phone's match through "Demo score" in its menu. Hosting:
+Vercel (static PWA plus one signaling function), see
+[docs/deploy.md](docs/deploy.md).
 
 ## Development
 
 `pnpm install`, then `pnpm dev` (dev server), `pnpm test` (Vitest: engine,
 touch guards, phrases, persistence, overlay, score source, recording worker,
-segments, export bundle), `pnpm build` (static PWA in `dist/`).
+segments, export bundle, protocol, signaling helper, reconnect policy, the
+paired roles), `pnpm build` (static PWA in `dist/`).
 `pnpm icons` regenerates the PNG icons from `public/favicon.svg`.
+
+Pairing without Vercel: `pnpm build && pnpm serve:local` serves `dist/` and the
+signaling helper (in-memory store) on one origin at `127.0.0.1:8787`; publish
+it to the phones with `tailscale serve --bg --https=<port> http://127.0.0.1:8787`.
+`pnpm dev` proxies `/api` to that server. `pnpm e2e` (needs Google Chrome and
+ffmpeg) pairs two headless Chrome browsers through it and exercises sync,
+remote REC, outages, reloads and the version check.
 
 ## Docs
 
@@ -38,3 +49,4 @@ segments, export bundle), `pnpm build` (static PWA in `dist/`).
   deployment, local development, testing, risks.
 - [docs/roadmap.md](docs/roadmap.md): phased plan with a definition of done
   per phase, and the follow-ups kept out of v1.
+- [docs/deploy.md](docs/deploy.md): putting the app and the helper on Vercel.

@@ -21,6 +21,7 @@ import { hasVoice, speak, speechAvailable } from '../speech/speech';
 import { CorrectionSheet } from './CorrectionSheet';
 import { FORMAT_LABEL, elapsed, playerName } from './format';
 import { GESTURE, GestureRecognizer, type Zone } from './gestures';
+import { CameraStatus, useCameraLink } from './CameraLink';
 import { Menu } from './Menu';
 import { GameOverOverlay, IntervalOverlay, MatchOverOverlay } from './overlays';
 import { useNow } from './useNow';
@@ -39,9 +40,11 @@ interface Props {
   onContinue: () => void;
   onNewMatch: () => void;
   onUpdate: (() => void) | null;
+  onPair: () => void;
 }
 
-export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, resumed, onContinue, onNewMatch, onUpdate }: Props) {
+export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, resumed, onContinue, onNewMatch, onUpdate, onPair }: Props) {
+  const camera = useCameraLink();
   const [sheet, setSheet] = useState<'none' | 'menu' | 'correct'>('none');
   const [flash, setFlash] = useState<{ zone: Zone; key: number } | null>(null);
   const [undoAt, setUndoAt] = useState(0);
@@ -181,6 +184,7 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
           {speechWarning && <span className="text-amber">no {prefs.lang === 'th' ? 'Thai' : 'English'} voice</span>}
           {!prefs.voice && <span title="voice off">voice off</span>}
           {!prefs.sound && <span title="sound off">sound off</span>}
+          <CameraStatus onPair={onPair} />
           <span className="rounded-full bg-pan2 px-3 py-1 tabular-nums">{elapsed(now - matchStart)}</span>
         </span>
       </header>
@@ -228,7 +232,17 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
           />
         )}
         {s.phase === 'matchOver' && (
-          <MatchOverOverlay config={config} s={s} start={matchStart} end={events[events.length - 1].at} onUndo={undo} onNewMatch={onNewMatch} />
+          <MatchOverOverlay
+            config={config}
+            s={s}
+            start={matchStart}
+            end={events[events.length - 1].at}
+            onUndo={undo}
+            onNewMatch={onNewMatch}
+            onStopRec={
+              camera.b.rec?.state === 'recording' && camera.l.state === 'paired' ? () => camera.board.command('rec.stop') : null
+            }
+          />
         )}
         {resumed && (
           <button className="absolute inset-0 z-30 bg-bg/20" onClick={continueResumed} aria-label="Continue the match" />
@@ -253,6 +267,10 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
           }}
           onNewMatch={onNewMatch}
           onUpdate={onUpdate}
+          onPair={() => {
+            setSheet('none');
+            onPair();
+          }}
         />
       )}
       {sheet === 'correct' && (

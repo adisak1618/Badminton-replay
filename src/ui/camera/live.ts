@@ -1,7 +1,8 @@
 // The camera role's long-lived objects: one controller (canvas, worker, recorder) for the app's lifetime,
-// and the two score sources it can follow in this version.
+// and the same-phone and not-paired score sources (the paired one lives in pairing/live.ts).
 import { APP_BUILD } from '../../build';
 import { LocalSource } from '../../link/local';
+import { registerCapture } from '../../pairing/capture';
 import { NoSource } from '../../link/none';
 import type { PeerInfo } from '../../link/source';
 import { store } from '../../match/live';
@@ -25,6 +26,7 @@ export function cameraController(): CameraController {
       if (s !== saved) saveCameraSettings((saved = s)); // R-SETUP-4 choices are kept per device
     });
     controller = c;
+    registerCapture(() => c.getSnapshot().camera === 'live'); // the preview gives WebKit its host candidates
     loadLogo()
       .then((png) => png && decodeLogo(png))
       .then((logo) => logo && c.setLogo(logo))

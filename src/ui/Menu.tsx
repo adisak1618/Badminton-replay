@@ -1,7 +1,9 @@
-// S5 menu: full-height rows of at least 56 px. Ending or replacing a live match asks once more.
+// S5 menu: full-height rows of at least 56 px. Ending or replacing a live match asks once more. The camera
+// rows pair, unpair, and start or stop the camera phone's recording (D11).
 import { useState } from 'react';
 import type { MatchConfig, MatchState } from '../engine';
 import type { Prefs } from '../match/prefs';
+import { CameraMenuRows } from './CameraLink';
 
 export function Menu({
   s,
@@ -13,6 +15,7 @@ export function Menu({
   onEndMatch,
   onNewMatch,
   onUpdate,
+  onPair,
 }: {
   config: MatchConfig;
   s: MatchState;
@@ -24,6 +27,7 @@ export function Menu({
   onEndMatch: () => void;
   onNewMatch: () => void;
   onUpdate: (() => void) | null;
+  onPair: () => void;
 }) {
   const [confirm, setConfirm] = useState<'end' | 'new' | null>(null);
   const over = s.phase === 'matchOver';
@@ -36,6 +40,7 @@ export function Menu({
         aria-label="Menu"
         onClick={(e) => e.stopPropagation()}
       >
+        <CameraMenuRows row={row} onPair={onPair} />
         <button className={row} onClick={onCorrect}>
           Correct score
         </button>

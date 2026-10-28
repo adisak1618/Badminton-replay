@@ -1,5 +1,5 @@
 // The live overlay as data (technical-design.md §6.2, §7): what the camera burns into every frame. Pure, so a
-// later Mac re-render (R-BURN-2) and the paired camera (phase 2b) reuse it unchanged.
+// later Mac re-render (R-BURN-2) and the paired camera reuse it unchanged.
 import {
   apply,
   initialState,

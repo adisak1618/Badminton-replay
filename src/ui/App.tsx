@@ -1,16 +1,21 @@
 // Screen flow: S0 role -> S1 setup -> S3 scoreboard, or S0 -> camera (C1/C3, C4); S0 also opens C4. An
-// unfinished match resumes on launch unless this phone was last used as the camera.
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+// unfinished match resumes on launch unless this phone was last used as the camera. S2 pairing opens over S1
+// or S3; a launch URL carrying a pairing code (the camera's QR read by the iPhone camera app) opens it directly,
+// and a scoreboard that was paired before rejoins by itself (R-PAIR-8).
+import { useCallback, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { configFromSetup, reduce, type MatchSetup } from '../engine';
 import { keepScreenOn } from '../device/wakeLock';
 import { store } from '../match/live';
 import { clearCurrent, loadCurrent } from '../match/persist';
 import { loadPrefs, loadRole, savePrefs, saveLastSetup, saveRole, type Prefs, type Role } from '../match/prefs';
+import { scoreboardPairing } from '../pairing/live';
+import { codeFromLocation } from '../pairing/qr';
 import { announce } from '../speech/announce';
 import { unlockAudio } from '../speech/sound';
 import { CameraRole } from './camera/CameraRole';
 import { Recordings } from './camera/Recordings';
+import { PairScreen } from './PairScreen';
 import { RoleScreen } from './RoleScreen';
 import { Scoreboard } from './Scoreboard';
 import { SetupScreen } from './SetupScreen';
@@ -22,6 +27,8 @@ export function App() {
   const [resumed, setResumed] = useState(false);
   const [prefs, setPrefsState] = useState<Prefs>(loadPrefs);
   const [lastRole] = useState<Role | null>(loadRole);
+  /** S2: false when closed, else the code to start with (from the launch URL) or null. */
+  const [pair, setPair] = useState<string | null | false>(false);
   const snap = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const {
     needRefresh: [needRefresh],
@@ -30,7 +37,14 @@ export function App() {
 
   useEffect(() => {
     let live = true;
+    const launchCode = codeFromLocation();
+    if (launchCode) {
+      history.replaceState(null, '', location.pathname + location.search);
+      saveRole('scoreboard');
+      setPair(launchCode);
+    }
     const camera = loadRole() === 'camera';
+    if (!camera) scoreboardPairing().link.rejoin();
     loadCurrent()
       .then((m) => {
         if (!live) return;
@@ -42,7 +56,7 @@ export function App() {
           store.load(m);
           setResumed(true);
           setScreen('board');
-        } else setScreen('role');
+        } else setScreen(launchCode ? 'setup' : 'role');
       })
       .catch(() => live && setScreen(camera ? 'camera' : 'role'));
     return () => {
@@ -81,9 +95,18 @@ export function App() {
 
   const update = needRefresh ? () => void updateServiceWorker(true) : null;
 
+  const openPair = () => setPair(null);
+  const overlay = pair !== false && <PairScreen initialCode={pair} onClose={() => setPair(false)} />;
+  const withPair = (main: ReactNode) => (
+    <>
+      {main}
+      {overlay}
+    </>
+  );
+
   if (screen === 'loading') return <div className="h-full bg-bg" />;
   if (screen === 'board' && snap.match && snap.state)
-    return (
+    return withPair(
       <Scoreboard
         store={store}
         config={snap.match.config}
@@ -95,10 +118,12 @@ export function App() {
         onContinue={() => setResumed(false)}
         onNewMatch={newMatch}
         onUpdate={update}
-      />
+        onPair={openPair}
+      />,
     );
   if (screen === 'camera') return <CameraRole onLeave={() => setScreen('role')} onUpdate={update} />;
   if (screen === 'recordings') return <Recordings onBack={() => setScreen('role')} />;
-  if (screen === 'setup') return <SetupScreen onBack={() => setScreen('role')} onStart={startMatch} onUpdate={update} />;
+  if (screen === 'setup')
+    return withPair(<SetupScreen onBack={() => setScreen('role')} onStart={startMatch} onUpdate={update} onPair={openPair} />);
   return <RoleScreen lastRole={lastRole} onPick={pickRole} onRecordings={() => setScreen('recordings')} onUpdate={update} />;
 }

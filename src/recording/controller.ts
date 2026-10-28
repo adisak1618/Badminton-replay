@@ -164,7 +164,7 @@ export class CameraController {
     return this.source;
   }
 
-  /** Swap the score source (not paired / same-phone demo; the paired channel in phase 2b). */
+  /** Swap the score source: not paired, the same-phone demo, or the paired scoreboard. */
   setSource(src: ScoreSource): void {
     this.detachSource();
     this.source = src;

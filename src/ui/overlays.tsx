@@ -130,6 +130,7 @@ export function MatchOverOverlay({
   end,
   onUndo,
   onNewMatch,
+  onStopRec,
 }: {
   config: MatchConfig;
   s: MatchState;
@@ -137,6 +138,8 @@ export function MatchOverOverlay({
   end: number;
   onUndo: () => void;
   onNewMatch: () => void;
+  /** The camera is recording: stop it from here (S3c, D11). */
+  onStopRec: (() => void) | null;
 }) {
   const pts = totalPoints(s.completed);
   const minutes = Math.max(1, Math.round((end - start) / 60_000));
@@ -163,6 +166,11 @@ export function MatchOverOverlay({
         <button className="btn btn-ghost" onClick={onUndo}>
           ↶ Undo
         </button>
+        {onStopRec && (
+          <button className="btn bg-red/80 px-6 font-bold" onClick={onStopRec} data-testid="stop-rec">
+            ■ Stop recording
+          </button>
+        )}
         <button className="btn btn-pri px-6" onClick={onNewMatch}>
           New match
         </button>
