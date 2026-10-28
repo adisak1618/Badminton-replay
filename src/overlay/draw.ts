@@ -1,8 +1,8 @@
 // drawOverlay(ctx, model, box, theme): the score panel burned into every frame, in plain Canvas 2D so it runs
 // per camera frame on the phone and in node-canvas for a later re-render (technical-design.md §6.2, §7). A
-// canvas cannot rasterise HTML, so this is not the scoreboard's DOM. The look follows a broadcast score
-// panel: two rows, one per team, players' names in white capitals, then one column per game with the
-// winner's points highlighted and the live game last.
+// canvas cannot rasterise HTML, so this is not the scoreboard's DOM. The look follows the BWF TV panel: two
+// light rows with dark names, one cell per game (finished white, live grey), a band for game point and
+// the like; the panel is only as wide as its content.
 import type { OverlayModel } from './model';
 
 export interface Box {
@@ -16,32 +16,33 @@ export interface OverlayTheme {
   id: string; // recorded per segment so a re-render knows which look was burned in
   font: string;
   panelBg: string;
+  nameBg: string;
   nameFg: string;
-  cellsBg: string;
-  liveBg: string;
-  divider: string;
-  scoreFg: string;
-  winFg: string; // the winner's points in a finished game
-  serveFg: string; // the bar beside the serving team's scores
-  flagFg: string;
-  badgeFg: string;
-  staleFg: string;
+  doneBg: string; // a finished game's cell
+  doneFg: string;
+  liveBg: string; // the game being played
+  liveFg: string;
+  shuttle: string;
+  bandBg: string;
+  bandFg: string;
+  staleBg: string;
 }
 
+/** BWF TV style: light rows with dark names, white cells for finished games, a grey cell for the live one. */
 export const DEFAULT_THEME: OverlayTheme = {
-  id: 'panel-v3',
+  id: 'bwf-tv-v4',
   font: "-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif",
-  panelBg: 'rgba(12,14,18,0.78)',
-  nameFg: '#ffffff',
-  cellsBg: 'rgba(0,0,0,0.6)',
-  liveBg: 'rgba(255,255,255,0.14)',
-  divider: 'rgba(255,255,255,0.28)',
-  scoreFg: '#ffffff',
-  winFg: '#ffd23f',
-  serveFg: '#ffd23f',
-  flagFg: '#ffb020',
-  badgeFg: '#0b0d10',
-  staleFg: '#ff4d4d',
+  panelBg: 'rgba(255,255,255,0.22)',
+  nameBg: 'rgba(244,245,247,0.92)',
+  nameFg: '#16191e',
+  doneBg: 'rgba(255,255,255,0.96)',
+  doneFg: '#111317',
+  liveBg: 'rgba(120,124,131,0.94)',
+  liveFg: '#ffffff',
+  shuttle: '#8a9099',
+  bandBg: 'rgba(118,122,129,0.92)',
+  bandFg: '#ffffff',
+  staleBg: 'rgba(200,40,40,0.92)',
 };
 
 type Ctx = CanvasRenderingContext2D;
@@ -70,108 +71,145 @@ function fit(ctx: Ctx, text: string, maxW: number, px: number, minPx: number, fo
   return `${t}…`;
 }
 
-// Panel geometry in units of box.h / 122 (the 1080p panel is 840 x 122): two 54-unit rows, then up to three
-// game columns. The box is sized for three columns so it never changes mid-match; fewer columns leave the
-// names more room.
-const PAD = 6;
-const ROW = 54;
-const GAP = 2;
-const ACCENT = 6;
-const COL = 62;
-const DIV = 2;
-const SERVE = 6;
-export const MAX_COLUMNS = 3;
-
-export function drawOverlay(ctx: Ctx, m: OverlayModel, box: Box, theme: OverlayTheme = DEFAULT_THEME): void {
-  const u = box.h / 122;
+/** A small shuttlecock, cork towards the left: a solid cork and a lighter feather skirt; vector, no emoji font. */
+function shuttle(ctx: Ctx, cx: number, cy: number, size: number, color: string): void {
+  const r = size * 0.22;
+  const corkX = cx - size / 2 + r;
+  const rimX = cx + size / 2;
   ctx.save();
-  roundRectPath(ctx, box, 10 * u);
-  ctx.fillStyle = theme.panelBg;
+  ctx.fillStyle = color;
+  ctx.globalAlpha = 0.7;
+  ctx.beginPath();
+  ctx.moveTo(corkX, cy - r * 0.8);
+  ctx.lineTo(rimX, cy - size * 0.42);
+  ctx.lineTo(rimX, cy + size * 0.42);
+  ctx.lineTo(corkX, cy + r * 0.8);
+  ctx.closePath();
   ctx.fill();
-  ctx.clip();
-  ctx.textBaseline = 'middle';
-
-  const cols = m.games.slice(-MAX_COLUMNS);
-  const x1 = box.x + box.w - PAD * u;
-  const cellsW = (cols.length * COL + Math.max(0, cols.length - 1) * DIV) * u;
-  const cellsX = x1 - cellsW;
-  const rowY = (i: number) => box.y + (PAD + i * (ROW + GAP)) * u;
-  const h = ROW * u;
-
-  // The dark cell block with thin dividers between games; the live game a shade lighter.
-  if (cols.length) {
-    ctx.fillStyle = theme.cellsBg;
-    ctx.fillRect(cellsX, rowY(0), cellsW, 2 * h + GAP * u);
-    cols.forEach((g, c) => {
-      const x = cellsX + c * (COL + DIV) * u;
-      if (g.live) {
-        ctx.fillStyle = theme.liveBg;
-        ctx.fillRect(x, rowY(0), COL * u, 2 * h + GAP * u);
-      }
-      if (c > 0) {
-        ctx.fillStyle = theme.divider;
-        ctx.fillRect(x - DIV * u, rowY(0), DIV * u, 2 * h + GAP * u);
-      }
-    });
-  }
-
-  const status = statusText(m);
-  const global = status && !m.flag ? status : '';
-  [m.left, m.right].forEach((side, i) => {
-    const y = rowY(i);
-    const cy = y + h / 2;
-    ctx.fillStyle = side.color; // a thin team-colour accent keeps A and B recognisable without flags
-    ctx.fillRect(box.x + PAD * u, y, ACCENT * u, h);
-    if (side.serving) {
-      ctx.fillStyle = theme.serveFg;
-      ctx.fillRect(cellsX - (SERVE + 4) * u, y, SERVE * u, h);
-    }
-    cols.forEach((g, c) => {
-      const pts = i === 0 ? g.left : g.right;
-      const won = g.winner === (i === 0 ? 'left' : 'right');
-      ctx.fillStyle = won ? theme.winFg : theme.scoreFg;
-      ctx.textAlign = 'center';
-      const x = cellsX + (c * (COL + DIV) + COL / 2) * u;
-      ctx.fillText(fit(ctx, String(pts), (COL - 6) * u, 38 * u, 20 * u, theme.font, 800), x, cy + 2 * u);
-    });
-    // Names, leaving room for the serve bar and a badge: game/match point on its team's row, the other
-    // states (interval, end of game, final, link lost) on the top row.
-    const nameX = box.x + (PAD + ACCENT + 12) * u;
-    let nameEnd = cellsX - (SERVE + 12) * u;
-    const badge = m.flag?.team === side.team ? status : i === 0 ? global : '';
-    if (badge) nameEnd = drawBadge(ctx, badge, nameEnd, cy, u, m.stale ? theme.staleFg : theme.flagFg, theme) - 8 * u;
-    ctx.fillStyle = theme.nameFg;
-    ctx.textAlign = 'left';
-    ctx.fillText(fit(ctx, side.players, nameEnd - nameX, 30 * u, 16 * u, theme.font), nameX, cy + u);
-  });
+  ctx.globalAlpha = 1;
+  ctx.beginPath();
+  ctx.arc(corkX, cy, r, 0, Math.PI * 2);
+  ctx.fill();
   ctx.restore();
 }
 
-/** A small filled pill ending at `right`; returns its left edge. */
-function drawBadge(ctx: Ctx, text: string, right: number, cy: number, u: number, color: string, theme: OverlayTheme): number {
-  ctx.font = `800 ${18 * u}px ${theme.font}`;
-  const w = ctx.measureText(text).width + 16 * u;
-  const b = { x: right - w, y: cy - 13 * u, w, h: 26 * u };
-  roundRectPath(ctx, b, 6 * u);
-  ctx.fillStyle = color;
+/**
+ * Panel geometry, in units: one unit is 1 px of a 1080p frame at size M. The panel is as small as its
+ * content: the longer name (up to NAME_MAX, then it shrinks and ellipsises) plus one cell per game.
+ */
+export const PANEL = {
+  edge: 8, // panel padding around the cells
+  row: 58,
+  rowGap: 4,
+  namePadL: 18,
+  namePadR: 14,
+  nameGap: 14, // between the name and the shuttle slot
+  shuttle: 30, // reserved in every name cell so the width does not change with the serve
+  nameMax: 600, // two 14-letter names in capitals fit whole
+  nameMin: 80,
+  nameFont: 32,
+  cellGap: 6, // between the name cell and the first score cell, and between score cells
+  cell: 72,
+  digits: 44,
+  bandGap: 4,
+  band: 50,
+  bandFont: 30,
+  radius: 8,
+} as const;
+
+/** The status band's text while a state applies (BWF TV wording), or null. */
+export function bandText(m: OverlayModel): string | null {
+  if (m.stale) return 'Link lost';
+  if (m.phase === 'matchOver') return m.winner ? 'Match' : 'Draw';
+  if (m.phase === 'gameOver') return 'Game';
+  if (m.phase === 'interval') return 'Interval';
+  if (m.flag) return m.flag.kind === 'matchPoint' ? 'Match Point' : 'Game Point';
+  return null;
+}
+
+const nameFontAt = (u: number, px: number, font: string) => `700 ${px * u}px ${font}`;
+
+interface Geometry {
+  w: number;
+  h: number;
+  nameW: number; // width of the name text slot
+  cells: number;
+  band: string | null;
+}
+
+function geometry(ctx: Ctx, m: OverlayModel, u: number, theme: OverlayTheme): Geometry {
+  ctx.font = nameFontAt(u, PANEL.nameFont, theme.font);
+  const widest = Math.max(ctx.measureText(m.left.players).width, ctx.measureText(m.right.players).width) / u;
+  const nameW = Math.min(PANEL.nameMax, Math.max(PANEL.nameMin, Math.ceil(widest)));
+  const cells = m.games.length;
+  const nameCell = PANEL.namePadL + nameW + PANEL.nameGap + PANEL.shuttle + PANEL.namePadR;
+  const w = PANEL.edge * 2 + nameCell + cells * (PANEL.cellGap + PANEL.cell);
+  const band = bandText(m);
+  const h = PANEL.edge * 2 + 2 * PANEL.row + PANEL.rowGap + (band ? PANEL.bandGap + PANEL.band : 0);
+  return { w: w * u, h: h * u, nameW, cells, band };
+}
+
+/** The panel's size in pixels for scale `u` (frame height / 1080 times the S/M/L factor). */
+export function panelSize(ctx: Ctx, m: OverlayModel, u: number, theme: OverlayTheme = DEFAULT_THEME): { w: number; h: number } {
+  const g = geometry(ctx, m, u, theme);
+  return { w: Math.round(g.w), h: Math.round(g.h) };
+}
+
+/** The tallest the panel gets (with the band), so a logo stacked under it never has to move. */
+export const panelMaxHeight = (u: number): number =>
+  Math.round((PANEL.edge * 2 + 2 * PANEL.row + PANEL.rowGap + PANEL.bandGap + PANEL.band) * u);
+
+export function drawOverlay(ctx: Ctx, m: OverlayModel, box: Box, u: number, theme: OverlayTheme = DEFAULT_THEME): void {
+  const g = geometry(ctx, m, u, theme);
+  ctx.save();
+  roundRectPath(ctx, box, PANEL.radius * u);
+  ctx.fillStyle = theme.panelBg;
   ctx.fill();
-  ctx.fillStyle = theme.badgeFg;
-  ctx.textAlign = 'center';
-  ctx.fillText(text, b.x + w / 2, cy + u);
-  return b.x;
+  ctx.textBaseline = 'middle';
+
+  const x0 = box.x + PANEL.edge * u;
+  const nameCellW = (PANEL.namePadL + g.nameW + PANEL.nameGap + PANEL.shuttle + PANEL.namePadR) * u;
+  const rowH = PANEL.row * u;
+  [m.left, m.right].forEach((side, i) => {
+    const y = box.y + (PANEL.edge + i * (PANEL.row + PANEL.rowGap)) * u;
+    const cy = y + rowH / 2;
+    roundRectPath(ctx, { x: x0, y, w: nameCellW, h: rowH }, 4 * u);
+    ctx.fillStyle = theme.nameBg;
+    ctx.fill();
+    ctx.fillStyle = side.color; // a hairline the eye barely notices, so the two teams can still be told apart
+    ctx.fillRect(x0, y + 6 * u, 3 * u, rowH - 12 * u);
+    ctx.fillStyle = theme.nameFg;
+    ctx.textAlign = 'left';
+    const nameX = x0 + PANEL.namePadL * u;
+    ctx.fillText(fit(ctx, side.players, g.nameW * u, PANEL.nameFont * u, 18 * u, theme.font), nameX, cy + u);
+    if (side.serving) shuttle(ctx, x0 + nameCellW - (PANEL.namePadR + PANEL.shuttle / 2) * u, cy, 24 * u, theme.shuttle);
+    // Score cells in game order: finished games white with dark digits, the live game grey with white.
+    m.games.forEach((game, c) => {
+      const x = x0 + nameCellW + (PANEL.cellGap + c * (PANEL.cell + PANEL.cellGap)) * u;
+      roundRectPath(ctx, { x, y, w: PANEL.cell * u, h: rowH }, 4 * u);
+      ctx.fillStyle = game.live ? theme.liveBg : theme.doneBg;
+      ctx.fill();
+      ctx.fillStyle = game.live ? theme.liveFg : theme.doneFg;
+      ctx.textAlign = 'center';
+      const pts = String(i === 0 ? game.left : game.right);
+      ctx.fillText(fit(ctx, pts, (PANEL.cell - 10) * u, PANEL.digits * u, 22 * u, theme.font, 800), x + (PANEL.cell * u) / 2, cy + 2 * u);
+    });
+  });
+
+  if (g.band) {
+    const y = box.y + (PANEL.edge + 2 * PANEL.row + PANEL.rowGap + PANEL.bandGap) * u;
+    const w = box.w - 2 * PANEL.edge * u;
+    roundRectPath(ctx, { x: x0, y, w, h: PANEL.band * u }, 6 * u);
+    ctx.fillStyle = m.stale ? theme.staleBg : theme.bandBg;
+    ctx.fill();
+    ctx.fillStyle = theme.bandFg;
+    ctx.textAlign = 'center';
+    ctx.fillText(fit(ctx, g.band, w - 20 * u, PANEL.bandFont * u, 16 * u, theme.font), x0 + w / 2, y + (PANEL.band * u) / 2 + u);
+  }
+  ctx.restore();
 }
 
 /** The optional channel or show logo (round 2): drawn as is, into its box. */
 export function drawLogo(ctx: Ctx, image: CanvasImageSource, box: Box): void {
   ctx.drawImage(image, box.x, box.y, box.w, box.h);
-}
-
-/** The panel's one short status word, when a state is active. */
-export function statusText(m: OverlayModel): string {
-  if (m.stale) return 'LINK LOST';
-  if (m.phase === 'matchOver') return m.winner ? 'FINAL' : 'DRAW';
-  if (m.phase === 'gameOver') return 'GAME END';
-  if (m.phase === 'interval') return 'INTERVAL';
-  if (m.flag) return m.flag.kind === 'matchPoint' ? 'MATCH PT' : 'GAME PT';
-  return '';
 }

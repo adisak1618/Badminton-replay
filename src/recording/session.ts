@@ -1,6 +1,6 @@
 // Segments and interruptions as a pure state machine (technical-design.md §6.5, §6.6; R-REC-5). The camera
 // controller feeds it what the browser reports; the UI and the `rec` report are read from it.
-import type { Box, Corner, LogoSize } from '../overlay';
+import type { Box, Corner, LogoSize, PanelSize } from '../overlay';
 
 export type EndReason = 'user' | 'interrupted' | 'quota' | 'error';
 
@@ -17,10 +17,15 @@ export interface Segment {
   endedAt: number | null;
   bytes: number;
   endReason: EndReason | null;
-  /** Where the overlays were burned in: the score panel's box and corner, and the logo's when one was shown. */
+  /**
+   * Where the overlays were burned in. The score panel follows its content, so `box` is the area it covered
+   * over the whole segment and `boxes` its exact box from each camera time `at` on; the logo's box is fixed.
+   */
   overlay: {
     box: Box;
+    boxes: Array<{ at: number; box: Box }>;
     corner: Corner;
+    size: PanelSize;
     delayMs: number;
     mirrored: boolean;
     theme: string;
@@ -50,6 +55,7 @@ export type SessionAction =
   | { type: 'start'; at: number; draft: SegmentDraft }
   | { type: 'started'; at: number }
   | { type: 'bytes'; bytes: number }
+  | { type: 'panelBox'; at: number; box: Box } // the score panel changed size or place while recording
   | { type: 'stop'; reason: EndReason; message?: string }
   | { type: 'closed'; at: number; bytes: number }
   | { type: 'failed'; message: string }
@@ -65,6 +71,15 @@ export const current = (s: Session): Segment | null =>
   isActive(s.phase) ? (s.segments[s.segments.length - 1] ?? null) : null;
 
 export const nextIndex = (s: Session): number => s.segments.length + 1;
+
+const sameBox = (a: Box, b: Box): boolean => a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
+
+/** The smallest box covering both. */
+export function union(a: Box, b: Box): Box {
+  const x = Math.min(a.x, b.x);
+  const y = Math.min(a.y, b.y);
+  return { x, y, w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y };
+}
 
 const withLast = (s: Session, patch: Partial<Segment>): Segment[] => {
   const segs = s.segments.slice();
@@ -85,6 +100,14 @@ export function sessionReduce(s: Session, a: SessionAction): Session {
     }
     case 'started':
       return s.phase === 'starting' ? { ...s, phase: 'recording', segments: withLast(s, { startedAt: a.at }) } : s;
+    case 'panelBox': {
+      const seg = current(s);
+      if (!seg) return s;
+      const last = seg.overlay.boxes[seg.overlay.boxes.length - 1]?.box;
+      if (last && sameBox(last, a.box)) return s;
+      const box = seg.overlay.boxes.length ? union(seg.overlay.box, a.box) : a.box;
+      return { ...s, segments: withLast(s, { overlay: { ...seg.overlay, box, boxes: [...seg.overlay.boxes, { at: a.at, box: a.box }] } }) };
+    }
     case 'bytes':
       return isActive(s.phase) ? { ...s, segments: withLast(s, { bytes: a.bytes }) } : s;
     case 'stop':

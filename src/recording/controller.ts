@@ -6,7 +6,7 @@ import { keepScreenOn } from '../device/wakeLock';
 import { Mirror } from '../link/mirror';
 import { NoSource } from '../link/none';
 import type { PeerInfo, RecCommand, RecReport, ScoreSource } from '../link/source';
-import { DEFAULT_THEME, OverlayClock, overlayLayout, type Layout } from '../overlay';
+import { DEFAULT_THEME, OverlayClock, overlayLayout, panelMaxHeight, panelScale, panelSize, type Layout, type OverlayModel } from '../overlay';
 import { Compositor } from './compositor';
 import type { Logo } from './logo';
 import {
@@ -87,6 +87,8 @@ export class CameraController {
   private lastStorageAt = 0;
   private startingRec = false;
   private logo: Logo | null = null;
+  private measure = document.createElement('canvas').getContext('2d')!;
+  private sized: { model: OverlayModel; u: number; size: { w: number; h: number } } | null = null;
 
   constructor(
     settings: CameraSettings,
@@ -118,9 +120,14 @@ export class CameraController {
         mirrored,
         stale: m.link !== 'paired',
       });
-      const layout = this.layout();
+      const layout = this.layout(model);
+      if (layout.score && this.snap.session.phase === 'recording') {
+        const before = this.snap.session;
+        this.dispatch({ type: 'panelBox', at: now, box: layout.score });
+        if (this.snap.session !== before) this.saveMeta(); // a new game column or the band: rare
+      }
       return {
-        score: model && { model, box: layout.score },
+        score: model && layout.score && { model, box: layout.score, u: this.panelU() },
         logo: this.logo && layout.logo ? { image: this.logo.image, box: layout.logo } : null,
       };
     });
@@ -165,12 +172,40 @@ export class CameraController {
     this.report();
   }
 
-  /** Where the score panel and the logo go in the current frame size (round 2: corners are settings). */
-  layout(): Layout {
+  private panelU(): number {
+    return panelScale(this.compositor.canvas.height, this.snap.settings.scoreSize);
+  }
+
+  /** The panel's size follows its content; measured once per change of the overlay model, not per frame. */
+  private panelSizeFor(model: OverlayModel): { w: number; h: number } {
+    const u = this.panelU();
+    if (this.sized?.model !== model || this.sized.u !== u)
+      this.sized = { model, u, size: panelSize(this.measure, model, u) };
+    return this.sized.size;
+  }
+
+  /** Where the score panel and the logo go in the current frame (corners and sizes are C1 settings). */
+  layout(model: OverlayModel | null = this.lastModel()): Layout {
     const { width, height } = this.compositor.canvas;
     const s = this.snap.settings;
     const logo = this.logo ? { corner: s.logoCorner, size: s.logoSize, aspect: this.logo.width / this.logo.height } : null;
-    return overlayLayout(width, height, { scoreCorner: s.scoreCorner, logo });
+    return overlayLayout(width, height, {
+      scoreCorner: s.scoreCorner,
+      score: model && this.panelSizeFor(model),
+      scoreMaxH: panelMaxHeight(this.panelU()),
+      logo,
+    });
+  }
+
+  private lastModel(): OverlayModel | null {
+    const m = this.mirror.getSnapshot();
+    const s = this.snap.settings;
+    return this.overlayClock.at(m.config, m.events, Date.now(), {
+      delayMs: s.delayMs,
+      offsetMs: this.source.clock()?.offsetMs ?? 0,
+      mirrored: s.mirrored,
+      stale: m.link !== 'paired',
+    });
   }
 
   /** Set or clear the overlay logo; like the other overlay settings it cannot change mid-recording. */
@@ -377,8 +412,10 @@ export class CameraController {
         fps: q.fps,
         startLatencyMs: START_LATENCY_MS,
         overlay: {
-          box: layout.score,
+          box: layout.score ?? { x: 0, y: 0, w: 0, h: 0 },
+          boxes: layout.score ? [{ at: Date.now(), box: layout.score }] : [],
           corner: settings.scoreCorner,
+          size: settings.scoreSize,
           delayMs: settings.delayMs,
           mirrored: settings.mirrored,
           theme: DEFAULT_THEME.id,

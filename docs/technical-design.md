@@ -420,9 +420,10 @@ canvas (the visible preview, CSS-scaled) --captureStream(30)--> composited video
 - One draw per delivered camera frame via `requestVideoFrameCallback` (Safari
   15.4+, §9), not `requestAnimationFrame`, so output frames track camera
   frames and the overlay is drawn exactly once per frame.
-- `drawOverlay` is a pure Canvas 2D function (`src/overlay/`): a two-row
-  panel (players' names, team-colour accent, serve bar, one column of points
-  per game played, a status badge) in a `box` in the corner chosen in C1 (top-left by
+- `drawOverlay` is a pure Canvas 2D function (`src/overlay/`): a BWF TV style
+  two-row panel (players' names, a shuttle for the server, one cell per game
+  played, a status band for game point, interval and the like), sized S/M/L
+  and only as wide as its content, in the corner chosen in C1 (top-left by
   default; mirroring swaps the rows), plus an optional logo in its own corner
   (top-right by default), stacked when both share one. It
   cannot be HTML: a canvas cannot rasterise DOM, and SVG `foreignObject`
@@ -503,7 +504,9 @@ interface Segment {
   startLatencyMs: number;     // calibrated in phase 0 (A8), default 0
   endedAt: number | null; bytes: number;
   endReason: 'user' | 'interrupted' | 'quota' | 'error' | null;
-  overlay: { box: Box; corner: Corner; delayMs: number; mirrored: boolean; theme: string;
+  overlay: { box: Box;                          // area the score panel covered over the segment
+             boxes: Array<{ at: number; box: Box }>; // its box from each camera time on (it follows content)
+             corner: Corner; size: 'small' | 'medium' | 'large'; delayMs: number; mirrored: boolean; theme: string;
              logo: { box: Box; corner: Corner; size: 'small' | 'medium' | 'large' } | null };
   // Box = { x, y, w, h } in pixels; Corner = 'tl' | 'tr' | 'bl' | 'br'
 }

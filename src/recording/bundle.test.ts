@@ -17,7 +17,7 @@ const seg = (index: number, startedAt: number, endedAt: number | null, mirrored 
   endedAt,
   bytes: 1000,
   endReason: endedAt ? 'user' : null,
-  overlay: { box: { x: 43, y: 43, w: 840, h: 122 }, corner: 'tl', delayMs: 0, mirrored, theme: 'panel-v3', logo: null },
+  overlay: { box: { x: 43, y: 43, w: 500, h: 132 }, boxes: [], corner: 'tl', size: 'medium', delayMs: 0, mirrored, theme: 'bwf-tv-v4', logo: null },
 });
 
 const camera = { id: 'cam-1', ua: 'test' };

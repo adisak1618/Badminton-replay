@@ -81,6 +81,7 @@ export function loadCameraSettings(): CameraSettings {
     scoreCorner: corner(s.scoreCorner, DEFAULT_CAMERA_SETTINGS.scoreCorner),
     logoCorner: corner(s.logoCorner, DEFAULT_CAMERA_SETTINGS.logoCorner),
     logoSize: (LOGO_SIZES as readonly unknown[]).includes(s.logoSize) ? (s.logoSize as LogoSize) : DEFAULT_CAMERA_SETTINGS.logoSize,
+    scoreSize: (LOGO_SIZES as readonly unknown[]).includes(s.scoreSize) ? (s.scoreSize as LogoSize) : DEFAULT_CAMERA_SETTINGS.scoreSize,
   };
 }
 export const saveCameraSettings = (s: CameraSettings) => write(CAMERA_KEY, s);

@@ -4,7 +4,7 @@
 import { drawLogo, drawOverlay, type Box, type OverlayModel } from '../overlay';
 
 export interface OverlayFrame {
-  score: { model: OverlayModel; box: Box } | null;
+  score: { model: OverlayModel; box: Box; u: number } | null;
   logo: { image: CanvasImageSource; box: Box } | null;
 }
 
@@ -106,7 +106,7 @@ export class Compositor {
     }
     const o = this.overlay(Date.now());
     if (o.logo) drawLogo(ctx, o.logo.image, o.logo.box);
-    if (o.score) drawOverlay(ctx, o.score.model, o.score.box);
+    if (o.score) drawOverlay(ctx, o.score.model, o.score.box, o.score.u);
 
     this.drawn++;
     if (this.lastFrame != null) this.longestGapMs = Math.max(this.longestGapMs, now - this.lastFrame);

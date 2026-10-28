@@ -8,7 +8,7 @@ const draft: SegmentDraft = {
   height: 1080,
   fps: 30,
   startLatencyMs: 0,
-  overlay: { box: { x: 43, y: 43, w: 840, h: 122 }, corner: 'tl', delayMs: 0, mirrored: false, theme: 'panel-v3', logo: null },
+  overlay: { box: { x: 43, y: 43, w: 500, h: 132 }, boxes: [], corner: 'tl', size: 'medium', delayMs: 0, mirrored: false, theme: 'bwf-tv-v4', logo: null },
 };
 
 const run = (s: Session, ...actions: SessionAction[]) => actions.reduce(sessionReduce, s);
@@ -74,6 +74,19 @@ describe('segment state machine (R-REC-5, technical-design.md §6.5)', () => {
     expect(run(initialSession, { type: 'started', at: 1 })).toBe(initialSession);
     expect(run(initialSession, { type: 'closed', at: 1, bytes: 1 })).toBe(initialSession);
     expect(run(initialSession, { type: 'stop', reason: 'user' })).toBe(initialSession);
+  });
+
+  it('records every change of the score panel box and the area it covered (round 4)', () => {
+    const b1 = { x: 43, y: 43, w: 400, h: 132 };
+    const b2 = { x: 43, y: 43, w: 478, h: 132 }; // a second game column
+    const b3 = { x: 43, y: 43, w: 478, h: 186 }; // the status band
+    let s = run(recording(), { type: 'panelBox', at: 2000, box: b1 }, { type: 'panelBox', at: 2033, box: b1 });
+    expect(current(s)!.overlay.boxes).toEqual([{ at: 2000, box: b1 }]);
+    expect(current(s)!.overlay.box).toEqual(b1);
+    s = run(s, { type: 'panelBox', at: 9000, box: b2 }, { type: 'panelBox', at: 9500, box: b3 }, { type: 'panelBox', at: 9900, box: b2 });
+    expect(current(s)!.overlay.boxes.map((x) => x.at)).toEqual([2000, 9000, 9500, 9900]);
+    expect(current(s)!.overlay.box).toEqual({ x: 43, y: 43, w: 478, h: 186 });
+    expect(run(initialSession, { type: 'panelBox', at: 1, box: b1 })).toBe(initialSession);
   });
 
   it('continues the numbering of a match recorded before (after a restart)', () => {

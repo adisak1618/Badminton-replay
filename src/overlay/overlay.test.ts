@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { reduce } from '../engine';
 import { doublesConfig, makeConfig, Match } from '../engine/test-utils';
-import { DEFAULT_THEME, drawLogo, drawOverlay, statusText } from './draw';
-import { inset, overlayLayout, scorePanelSize, type Corner } from './layout';
+import { bandText, DEFAULT_THEME, drawLogo, drawOverlay, PANEL, panelMaxHeight, panelSize } from './draw';
+import { inset, overlayLayout, panelScale, type Corner } from './layout';
 import { OverlayClock, overlayModel, playersLabel, stateAt } from './model';
 
 const plain = { mirrored: false, stale: false };
@@ -33,7 +33,7 @@ describe('overlay model', () => {
     m.point('A').startGame().scoreTo(11, 3);
     const iv = overlayModel(m.cfg, m.state, plain);
     expect(iv.phase).toBe('interval');
-    expect(statusText(iv)).toBe('INTERVAL');
+    expect(bandText(iv)).toBe('Interval');
     m.endInterval().scoreTo(20, 3);
     expect(overlayModel(m.cfg, m.state, plain).flag).toEqual({ kind: 'matchPoint', team: 'A' });
     m.point('A');
@@ -41,7 +41,7 @@ describe('overlay model', () => {
     expect(fin.phase).toBe('matchOver');
     expect(fin.winner).toBe('A');
     expect(fin.left.serving || fin.right.serving).toBe(false);
-    expect(statusText(fin)).toBe('FINAL');
+    expect(bandText(fin)).toBe('Match');
   });
 
   it('names the doubles server and court (R-SCORE-3 sequence)', () => {
@@ -51,7 +51,7 @@ describe('overlay model', () => {
 
   it('marks a stale link above every other status', () => {
     const m = new Match(makeConfig()).scoreTo(20, 15);
-    expect(statusText(overlayModel(m.cfg, m.state, { mirrored: false, stale: true }))).toBe('LINK LOST');
+    expect(bandText(overlayModel(m.cfg, m.state, { mirrored: false, stale: true }))).toBe('Link lost');
   });
 });
 
@@ -151,62 +151,59 @@ describe('players on the panel (round 2)', () => {
   });
 });
 
-describe('overlay layout: corners, inset, logo (round 2)', () => {
+describe('overlay layout: corners, inset, logo', () => {
   const sizes = [
     [1920, 1080],
     [1280, 720],
   ] as const;
+  const panel = { w: 500, h: 132 };
+  const lay = (W: number, H: number, o: Partial<Parameters<typeof overlayLayout>[2]> = {}) =>
+    overlayLayout(W, H, { scoreCorner: 'tl', score: panel, scoreMaxH: 186, logo: null, ...o });
 
   it('puts the score panel top-left by default, inset by the same fraction at 1080p and 720p', () => {
-    expect(overlayLayout(1920, 1080, { scoreCorner: 'tl', logo: null })).toEqual({ score: { x: 43, y: 43, w: 840, h: 122 }, logo: null });
-    expect(overlayLayout(1280, 720, { scoreCorner: 'tl', logo: null }).score).toEqual({ x: 29, y: 29, w: 560, h: 81 });
+    expect(lay(1920, 1080)).toEqual({ score: { x: 43, y: 43, w: 500, h: 132 }, logo: null });
+    expect(lay(1280, 720).score).toMatchObject({ x: 29, y: 29 });
     for (const [, H] of sizes) expect(inset(H) / H).toBeCloseTo(0.04, 2);
   });
 
   it('places the panel in each of the four corners, inside the frame', () => {
     for (const [W, H] of sizes) {
       const m = inset(H);
-      const { w, h } = scorePanelSize(H);
-      const at = (c: Corner) => overlayLayout(W, H, { scoreCorner: c, logo: null }).score;
+      const at = (c: Corner) => lay(W, H, { scoreCorner: c }).score!;
       expect(at('tl')).toMatchObject({ x: m, y: m });
-      expect(at('tr')).toMatchObject({ x: W - m - w, y: m });
-      expect(at('bl')).toMatchObject({ x: m, y: H - m - h });
-      expect(at('br')).toMatchObject({ x: W - m - w, y: H - m - h });
+      expect(at('tr')).toMatchObject({ x: W - m - panel.w, y: m });
+      expect(at('bl')).toMatchObject({ x: m, y: H - m - panel.h });
+      expect(at('br')).toMatchObject({ x: W - m - panel.w, y: H - m - panel.h });
     }
   });
 
   it('logo top-right by size, keeping its aspect; a very wide logo is capped', () => {
-    const l = overlayLayout(1920, 1080, { scoreCorner: 'tl', logo: { corner: 'tr', size: 'medium', aspect: 2 } }).logo!;
+    const l = lay(1920, 1080, { logo: { corner: 'tr', size: 'medium', aspect: 2 } }).logo!;
     expect(l).toEqual({ x: 1920 - 43 - 260, y: 43, w: 260, h: 130 });
-    const small = overlayLayout(1920, 1080, { scoreCorner: 'tl', logo: { corner: 'tr', size: 'small', aspect: 1 } }).logo!;
-    const large = overlayLayout(1920, 1080, { scoreCorner: 'tl', logo: { corner: 'tr', size: 'large', aspect: 1 } }).logo!;
+    const small = lay(1920, 1080, { logo: { corner: 'tr', size: 'small', aspect: 1 } }).logo!;
+    const large = lay(1920, 1080, { logo: { corner: 'tr', size: 'large', aspect: 1 } }).logo!;
     expect(small.h).toBeLessThan(l.h);
     expect(large.h).toBeGreaterThan(l.h);
-    const wide = overlayLayout(1920, 1080, { scoreCorner: 'tl', logo: { corner: 'br', size: 'large', aspect: 10 } }).logo!;
-    expect(wide.w).toBe(576);
-    expect(wide.h).toBe(58);
-    expect(wide.x + wide.w).toBe(1920 - 43);
-    expect(wide.y + wide.h).toBe(1080 - 43);
+    const wide = lay(1920, 1080, { logo: { corner: 'br', size: 'large', aspect: 10 } }).logo!;
+    expect(wide).toEqual({ x: 1920 - 43 - 576, y: 1080 - 43 - 58, w: 576, h: 58 });
   });
 
-  it('stacks the logo under (top) or over (bottom) the panel when both share a corner', () => {
+  it('stacks the logo past the tallest panel (band included) when both share a corner, so it never jumps', () => {
     for (const [W, H] of sizes)
       for (const c of ['tl', 'tr', 'bl', 'br'] as const) {
-        const { score, logo } = overlayLayout(W, H, { scoreCorner: c, logo: { corner: c, size: 'medium', aspect: 1.5 } });
-        const overlap = logo!.x < score.x + score.w && score.x < logo!.x + logo!.w && logo!.y < score.y + score.h && score.y < logo!.y + logo!.h;
-        expect(overlap).toBe(false);
-        if (c[0] === 't') expect(logo!.y).toBeGreaterThan(score.y + score.h);
-        else expect(logo!.y + logo!.h).toBeLessThan(score.y);
-        // Same edge as the panel.
-        if (c[1] === 'l') expect(logo!.x).toBe(score.x);
-        else expect(logo!.x + logo!.w).toBe(score.x + score.w);
-        expect(logo!.y).toBeGreaterThanOrEqual(0);
-        expect(logo!.y + logo!.h).toBeLessThanOrEqual(H);
+        const { score, logo } = lay(W, H, { scoreCorner: c, logo: { corner: c, size: 'medium', aspect: 1.5 } });
+        if (c[0] === 't') expect(logo!.y).toBeGreaterThan(score!.y + 186);
+        else expect(logo!.y + logo!.h).toBeLessThan(score!.y + score!.h - 186);
+        if (c[1] === 'l') expect(logo!.x).toBe(score!.x);
+        else expect(logo!.x + logo!.w).toBe(score!.x + score!.w);
+        // The same logo box whatever the panel's current height.
+        expect(lay(W, H, { scoreCorner: c, score: { w: 300, h: 80 }, logo: { corner: c, size: 'medium', aspect: 1.5 } }).logo).toEqual(logo);
       }
   });
 
-  it('no logo box without a usable image', () => {
-    expect(overlayLayout(1920, 1080, { scoreCorner: 'tl', logo: { corner: 'tr', size: 'small', aspect: 0 } }).logo).toBeNull();
+  it('logo alone when there is no score to show; no logo box without a usable image', () => {
+    expect(lay(1920, 1080, { score: null, logo: { corner: 'tl', size: 'small', aspect: 1 } })).toEqual({ score: null, logo: { x: 43, y: 43, w: 86, h: 86 } });
+    expect(lay(1920, 1080, { logo: { corner: 'tr', size: 'small', aspect: 0 } }).logo).toBeNull();
   });
 });
 
@@ -231,7 +228,7 @@ describe('game columns (round 3)', () => {
     const d = overlayModel(f2.cfg, f2.state, plain);
     expect(d.phase).toBe('matchOver');
     expect(d.games.map((x) => x.live)).toEqual([false, false]);
-    expect(statusText(d)).toBe('DRAW');
+    expect(bandText(d)).toBe('Draw');
     const f1 = new Match(makeConfig({ format: 'fixed1' })).game(21, 3);
     expect(overlayModel(f1.cfg, f1.state, plain).games).toHaveLength(1);
   });
@@ -245,116 +242,119 @@ describe('game columns (round 3)', () => {
   });
 });
 
-describe('drawOverlay', () => {
-  const box = overlayLayout(1920, 1080, { scoreCorner: 'tl', logo: null }).score;
-  const inBox = (b: typeof box, calls: ReturnType<typeof fakeCtx>['calls']) => {
-    for (const r of calls.filter((c) => c.op === 'fillRect')) {
-      const [x, y, w, h] = r.args as number[];
-      expect(x).toBeGreaterThanOrEqual(b.x - 0.001);
-      expect(y).toBeGreaterThanOrEqual(b.y - 0.001);
-      expect(x + w).toBeLessThanOrEqual(b.x + b.w + 0.001);
-      expect(y + h).toBeLessThanOrEqual(b.y + b.h + 0.001);
-    }
-    for (const t of calls.filter((c) => c.op === 'fillText')) {
-      const [, x, y] = t.args as number[];
-      expect(x).toBeGreaterThanOrEqual(b.x);
-      expect(x).toBeLessThanOrEqual(b.x + b.w);
-      expect(y).toBeGreaterThanOrEqual(b.y);
-      expect(y).toBeLessThanOrEqual(b.y + b.h);
-    }
-  };
-  const draw = (m: Match, b = box, opts = plain) => {
+describe('drawOverlay: BWF TV panel (round 4)', () => {
+  const U = 1; // 1080p, size M
+  const at = (b: { x: number; y: number }, m: Match, opts = plain, u = U) => {
+    const model = overlayModel(m.cfg, m.state, opts);
     const r = fakeCtx();
-    drawOverlay(r.ctx, overlayModel(m.cfg, m.state, opts), b);
-    return { ...r, texts: r.calls.filter((c) => c.op === 'fillText').map((c) => String(c.args[0])) };
+    const size = panelSize(r.ctx, model, u);
+    const box = { x: b.x, y: b.y, ...size };
+    const d = fakeCtx();
+    drawOverlay(d.ctx, model, box, u);
+    const texts = d.calls.filter((c) => c.op === 'fillText');
+    return { box, model, calls: d.calls, texts, words: texts.map((t) => String(t.args[0])) };
   };
-  const dividers = (calls: ReturnType<typeof fakeCtx>['calls']) => calls.filter((c) => c.op === 'fillRect' && c.fill === DEFAULT_THEME.divider).length;
-
-  it('game 1: two rows, players in capitals and the live score, no footer text, all inside the box', () => {
-    const m = new Match(doublesConfig()).rallies('AAB');
-    const { calls, texts } = draw(m);
-    expect(texts).toEqual(['2', 'NOK / PAE', '1', 'BANK / TAO']);
-    expect(texts.some((t) => t.startsWith('GAME'))).toBe(false);
-    expect(calls.some((c) => c.op === 'fillRect' && c.fill === m.cfg.teams.A.color)).toBe(true); // team accents
-    expect(calls.some((c) => c.op === 'fillRect' && c.fill === m.cfg.teams.B.color)).toBe(true);
-    expect(dividers(calls)).toBe(0);
-    inBox(box, calls);
-    expect(calls[0].op).toBe('save');
-    expect(calls[calls.length - 1].op).toBe('restore');
-  });
-
-  it('1, 2 and 3 columns with dividers between them; each finished game highlights its winner', () => {
-    const m = new Match(makeConfig()).point('A');
-    expect(dividers(draw(m).calls)).toBe(0);
-    m.game(21, 15).point('B');
-    expect(dividers(draw(m).calls)).toBe(1);
-    m.game(17, 21).scoreTo(5, 3);
-    const { calls, texts } = draw(m);
-    expect(dividers(calls)).toBe(2);
-    expect(texts).toEqual(['21', '17', '5', 'A', '15', '21', '3', 'B']);
-    const fills = calls.filter((c) => c.op === 'fillText').map((c) => c.fill);
-    const W = DEFAULT_THEME.winFg;
-    const F = DEFAULT_THEME.scoreFg;
-    expect(fills.slice(0, 3)).toEqual([W, F, F]); // A won game 1
-    expect(fills.slice(4, 7)).toEqual([F, W, F]); // B won game 2; the live game is white
-    expect(calls.filter((c) => c.op === 'fillRect' && c.fill === DEFAULT_THEME.liveBg)).toHaveLength(1);
-    inBox(box, calls);
-  });
-
-  it('long names and three columns fit at 720p: 14-letter names whole, longer ones ellipsised before the scores', () => {
-    const named = (a: string, b: string) =>
-      makeConfig({
-        doubles: true,
-        teams: {
-          A: { name: 'A', color: 0, players: [a, b], startRight: 0 },
-          B: { name: 'B', color: 1, players: ['Bank', 'Tao'], startRight: 0 },
-        },
-      });
-    for (const H of [1080, 720]) {
-      const b = overlayLayout((H * 16) / 9, H, { scoreCorner: 'tl', logo: null }).score;
-      for (const [a1, a2, whole] of [
-        ['Chaiyakulsiri', 'Wongsuwanchai', true],
-        ['Supercalifragilisticexpialidocious', 'Pneumonoultramicroscopicsilicovolcano', false],
-      ] as const) {
-        const m = new Match(named(a1, a2)).game(21, 15).game(17, 21).scoreTo(5, 3);
-        const { calls } = draw(m, b);
-        inBox(b, calls);
-        const t = calls.find((c) => c.op === 'fillText' && String(c.args[0]).includes(a1.slice(0, 5).toUpperCase()))!;
-        expect(String(t.args[0]).endsWith('…')).toBe(!whole);
-        if (whole) expect(t.args[0]).toBe(`${a1} / ${a2}`.toUpperCase());
-        // The name ends before the serve bar and the first score column.
-        const px = Number(/(\d+(?:\.\d+)?)px/.exec(t.font)![1]);
-        const firstScore = calls.find((c) => c.op === 'fillText')!;
-        expect((t.args[1] as number) + String(t.args[0]).length * px * 0.6).toBeLessThan(firstScore.args[1] as number);
-      }
+  const origin = { x: 43, y: 43 };
+  const inBox = (box: { x: number; y: number; w: number; h: number }, calls: ReturnType<typeof fakeCtx>['calls']) => {
+    for (const r of calls.filter((c) => c.op === 'fillRect' || c.op === 'fillText')) {
+      const [x, y] = (r.op === 'fillRect' ? r.args : r.args.slice(1)) as number[];
+      expect(x).toBeGreaterThanOrEqual(box.x - 0.001);
+      expect(x).toBeLessThanOrEqual(box.x + box.w + 0.001);
+      expect(y).toBeGreaterThanOrEqual(box.y - 0.001);
+      expect(y).toBeLessThanOrEqual(box.y + box.h + 0.001);
     }
+  };
+  const named = (a: string, b: string) =>
+    makeConfig({
+      doubles: true,
+      teams: {
+        A: { name: 'A', color: 0, players: [a, b], startRight: 0 },
+        B: { name: 'B', color: 1, players: ['Bank', 'Tao'], startRight: 0 },
+      },
+    });
+
+  it('is only as wide as its names: short names make a small panel, longer ones a wider one, capped', () => {
+    const short = at(origin, new Match(named('Goh', 'Izz')).point('A'));
+    const long = at(origin, new Match(named('Chaiyakulsiri', 'Wongsuwanchai')).point('A'));
+    const huge = at(origin, new Match(named('Supercalifragilisticexpialidocious', 'Pneumonoultramicroscopic')).point('A'));
+    expect(short.box.w).toBeLessThan(long.box.w);
+    expect(long.box.w).toBeLessThan(huge.box.w);
+    // Width = padding + name slot + shuttle slot + one cell per game; the name slot stops at the cap.
+    const fixed = 2 * PANEL.edge + PANEL.namePadL + PANEL.nameGap + PANEL.shuttle + PANEL.namePadR + PANEL.cellGap + PANEL.cell;
+    expect(huge.box.w).toBe(fixed + PANEL.nameMax);
+    expect(huge.words.find((w) => w.startsWith('SUPER'))!.endsWith('…')).toBe(true);
+    expect(long.words).toContain('CHAIYAKULSIRI / WONGSUWANCHAI');
   });
 
-  it('one serving mark: a bar beside the serving team scores, no shuttle', () => {
-    const m = new Match(makeConfig()).point('B');
-    const { calls } = draw(m);
-    const bars = calls.filter((c) => c.op === 'fillRect' && c.fill === DEFAULT_THEME.serveFg);
-    expect(bars).toHaveLength(1);
-    expect(bars[0].args[1]).toBeGreaterThan(box.y + box.h / 2 - 10); // bottom row: B
-    expect(calls.filter((c) => c.op === 'arc')).toHaveLength(0);
+  it('keeps padding between the name and the first score cell', () => {
+    const { texts, calls } = at(origin, new Match(named('Chaiyakulsiri', 'Wongsuwanchai')).point('B'));
+    const name = texts.find((t) => String(t.args[0]).startsWith('CHAI'))!;
+    const px = Number(/(\d+(?:\.\d+)?)px/.exec(name.font)![1]);
+    const nameEnd = (name.args[1] as number) + String(name.args[0]).length * px * 0.6;
+    const score = texts.find((t) => t.args[0] === '0')!; // A's live score, centred in the first cell
+    const cellLeft = (score.args[1] as number) - PANEL.cell / 2;
+    expect(cellLeft - nameEnd).toBeGreaterThanOrEqual(PANEL.nameGap + PANEL.shuttle + PANEL.namePadR + PANEL.cellGap - 1);
+    inBox(at(origin, new Match(named('Chaiyakulsiri', 'Wongsuwanchai')).point('B')).box, calls);
   });
 
-  it('game point is a badge on that team row; interval, final and link lost a badge on the top row', () => {
-    const gp = draw(new Match(makeConfig()).scoreTo(15, 20));
-    expect(gp.texts).toEqual(['15', 'A', '20', 'GAME PT', 'B']);
-    const iv = draw(new Match(makeConfig()).scoreTo(11, 4));
-    expect(iv.texts).toEqual(['11', 'INTERVAL', 'A', '4', 'B']);
-    const fin = draw(new Match(makeConfig()).game(21, 10).game(21, 12));
-    // Ends changed for game 2, so B is the top row at the end.
-    expect(fin.texts).toEqual(['10', '12', 'FINAL', 'B', '21', '21', 'A']);
-    const lost = draw(new Match(makeConfig()).scoreTo(20, 15), box, { mirrored: false, stale: true });
-    expect(lost.texts).toContain('LINK LOST');
-    expect(lost.calls.some((c) => c.op === 'fill' && c.fill === DEFAULT_THEME.staleFg)).toBe(true);
+  it('cells run in game order: finished games white with dark digits, the live game grey with white, at the right end', () => {
+    const m = new Match(makeConfig()).game(21, 15).game(17, 21).scoreTo(5, 3);
+    const { words, texts, calls, box } = at(origin, m);
+    expect(words).toEqual(['A', '21', '17', '5', 'B', '15', '21', '3']);
+    const D = DEFAULT_THEME;
+    expect(texts.filter((t) => /^\d+$/.test(String(t.args[0]))).map((t) => t.fill)).toEqual([D.doneFg, D.doneFg, D.liveFg, D.doneFg, D.doneFg, D.liveFg]);
+    const cellFills = calls.filter((c) => c.op === 'fill' && (c.fill === D.doneBg || c.fill === D.liveBg)).map((c) => c.fill);
+    expect(cellFills).toEqual([D.doneBg, D.doneBg, D.liveBg, D.doneBg, D.doneBg, D.liveBg]);
+    const xs = texts.filter((t) => /^\d+$/.test(String(t.args[0]))).slice(0, 3).map((t) => t.args[1] as number);
+    expect(xs[0]).toBeLessThan(xs[1]);
+    expect(xs[1]).toBeLessThan(xs[2]);
+    expect(xs[2] + PANEL.cell / 2).toBeLessThanOrEqual(box.x + box.w - PANEL.edge + 0.001);
+    inBox(box, calls);
+  });
+
+  it('a new game adds a cell and widens the panel', () => {
+    const m = new Match(makeConfig()).point('A');
+    const one = at(origin, m).box.w;
+    m.game(21, 15).point('B');
+    expect(at(origin, m).box.w).toBe(one + PANEL.cell + PANEL.cellGap);
+  });
+
+  it('the status band shows while a state applies, and the panel is taller only then', () => {
+    const rows = 2 * PANEL.edge + 2 * PANEL.row + PANEL.rowGap;
+    const withBand = rows + PANEL.bandGap + PANEL.band;
+    const band = (m: Match, opts = plain) => {
+      const r = at(origin, m, opts);
+      return { h: r.box.h, text: r.words[r.words.length - 1] };
+    };
+    expect(band(new Match(makeConfig()).scoreTo(5, 3)).h).toBe(rows);
+    expect(band(new Match(makeConfig()).scoreTo(20, 13))).toEqual({ h: withBand, text: 'Game Point' });
+    expect(band(new Match(makeConfig()).game(21, 10).scoreTo(20, 4))).toEqual({ h: withBand, text: 'Match Point' });
+    expect(band(new Match(makeConfig()).scoreTo(11, 4))).toEqual({ h: withBand, text: 'Interval' });
+    expect(band(new Match(makeConfig()).game(21, 10, { start: false }))).toEqual({ h: withBand, text: 'Game' });
+    expect(band(new Match(makeConfig()).game(21, 10).game(21, 12))).toEqual({ h: withBand, text: 'Match' });
+    expect(band(new Match(makeConfig({ format: 'fixed2' })).game(21, 15).game(15, 21))).toEqual({ h: withBand, text: 'Draw' });
+    expect(band(new Match(makeConfig()).scoreTo(5, 3), { mirrored: false, stale: true })).toEqual({ h: withBand, text: 'Link lost' });
+    expect(panelMaxHeight(1)).toBe(withBand);
+  });
+
+  it('a small grey shuttle at the end of the serving team name cell only', () => {
+    const { calls } = at(origin, new Match(makeConfig()).point('B'));
+    expect(calls.filter((c) => c.op === 'arc')).toHaveLength(1);
+    expect(calls.find((c) => c.op === 'arc')!.fill).toBe(DEFAULT_THEME.shuttle);
+  });
+
+  it('sizes S, M and L scale the whole panel', () => {
+    const m = new Match(named('Chaiyakulsiri', 'Wongsuwanchai')).game(21, 15).scoreTo(20, 13);
+    const [s, md, l] = (['small', 'medium', 'large'] as const).map((z) => at(origin, m, plain, panelScale(1080, z)).box);
+    expect(s.w).toBeLessThan(md.w);
+    expect(md.w).toBeLessThan(l.w);
+    expect(l.h / md.h).toBeCloseTo(1.25, 1);
+    expect(at(origin, m, plain, panelScale(720, 'medium')).box.h).toBe(Math.round(md.h * (720 / 1080)));
   });
 
   it('the mirrored panel puts the other team on top', () => {
-    const { texts } = draw(new Match(doublesConfig()), box, { mirrored: true, stale: false });
-    expect(texts[1]).toBe('BANK / TAO');
+    const { words } = at(origin, new Match(doublesConfig()).point('A'), { mirrored: true, stale: false });
+    expect(words[0]).toBe('BANK / TAO');
   });
 
   it('draws a logo into its box', () => {

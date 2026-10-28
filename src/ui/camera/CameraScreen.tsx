@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalS
 import { other, reduce } from '../../engine';
 import type { LocalSource } from '../../link/local';
 import { saveLogo } from '../../match/persist';
-import type { Corner } from '../../overlay';
+import type { Corner, LogoSize } from '../../overlay';
 import { DIM_AFTER_MS, LOW_MINUTES, OVERLAY_DELAYS_MS, QUALITIES, type Quality } from '../../recording/config';
 import type { CameraController } from '../../recording/controller';
 import { LOGO_TYPES, prepareLogo } from '../../recording/logo';
@@ -29,6 +29,12 @@ const CORNER_OPTIONS: Array<[Corner, string]> = [
   ['tr', '↗'],
   ['bl', '↙'],
   ['br', '↘'],
+];
+
+const SIZE_OPTIONS: Array<[LogoSize, string]> = [
+  ['small', 'S'],
+  ['medium', 'M'],
+  ['large', 'L'],
 ];
 
 function Seg<T extends string | number | boolean>({
@@ -252,6 +258,7 @@ export function CameraScreen({ ctrl, demo, onToggleDemo, onRecordings, onLeave, 
                   onChange={(delayMs) => ctrl.setSettings({ delayMs })}
                 />
                 <Seg label="Score at" value={settings.scoreCorner} options={CORNER_OPTIONS} onChange={(scoreCorner) => ctrl.setSettings({ scoreCorner })} />
+                <Seg label="Score size" value={settings.scoreSize} options={SIZE_OPTIONS} onChange={(scoreSize) => ctrl.setSettings({ scoreSize })} />
                 <span className="lab self-center">Logo</span>
                 <span className="flex gap-1.5">
                   <button className="btn min-h-9 flex-1 px-2 py-1 text-sm" onClick={() => fileRef.current?.click()} data-testid="logo-add">
@@ -266,16 +273,7 @@ export function CameraScreen({ ctrl, demo, onToggleDemo, onRecordings, onLeave, 
                 {snap.logo && (
                   <>
                     <Seg label="Logo at" value={settings.logoCorner} options={CORNER_OPTIONS} onChange={(logoCorner) => ctrl.setSettings({ logoCorner })} />
-                    <Seg
-                      label="Logo size"
-                      value={settings.logoSize}
-                      options={[
-                        ['small', 'S'],
-                        ['medium', 'M'],
-                        ['large', 'L'],
-                      ]}
-                      onChange={(logoSize) => ctrl.setSettings({ logoSize })}
-                    />
+                    <Seg label="Logo size" value={settings.logoSize} options={SIZE_OPTIONS} onChange={(logoSize) => ctrl.setSettings({ logoSize })} />
                   </>
                 )}
               </div>
