@@ -228,8 +228,8 @@ least 56 px.
 +---------------------------------------------------------------+
 | <  Camera                            link: paired - room 482107|
 |  +---------------------------------------------------------+  |
-|  | [ NOK / PAE    > 0 | 0 ]                     [ logo ]  |  |
-|  | [ BANK / TAO     0 | 0 ]                               |  |
+|  | [ NOK / PAE   | 0 ]                          [ logo ]  |  |
+|  | [ BANK / TAO  | 0 ]                                    |  |
 |  |     live preview = exactly what gets recorded           |  |
 |  +---------------------------------------------------------+  |
 |  Quality (1080p*)(720p)  Audio (on*)  Mirror overlay (off*)   |
@@ -259,8 +259,8 @@ least 56 px.
 +---------------------------------------------------------------+
 | (*) REC 12:34 - 26 min left            link ok - A 18 - 16 B  |
 |  +---------------------------------------------------------+  |
-|  | [ NOK / PAE   > 1 | 18 ]                     [ logo ]  |  |
-|  | [ BANK / TAO    0 | 16 ]                               |  |
+|  | [ NOK / PAE   | 21 | 18 ]                    [ logo ]  |  |
+|  | [ BANK / TAO  | 17 | 16 ]  (a column per game)        |  |
 |  |      composited preview (dims after 30 s, tap to wake)  |  |
 |  +---------------------------------------------------------+  |
 |  [ Dim screen ]                           ( hold to STOP )    |

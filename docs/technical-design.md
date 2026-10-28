@@ -421,8 +421,8 @@ canvas (the visible preview, CSS-scaled) --captureStream(30)--> composited video
   15.4+, §9), not `requestAnimationFrame`, so output frames track camera
   frames and the overlay is drawn exactly once per frame.
 - `drawOverlay` is a pure Canvas 2D function (`src/overlay/`): a two-row
-  panel (players' names, shuttle marker, games, score, team-colour accent,
-  game number and flags) in a `box` in the corner chosen in C1 (top-left by
+  panel (players' names, team-colour accent, serve bar, one column of points
+  per game played, a status badge) in a `box` in the corner chosen in C1 (top-left by
   default; mirroring swaps the rows), plus an optional logo in its own corner
   (top-right by default), stacked when both share one. It
   cannot be HTML: a canvas cannot rasterise DOM, and SVG `foreignObject`

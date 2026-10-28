@@ -25,11 +25,21 @@ export interface OverlaySide {
   serving: boolean;
 }
 
+/** One column of the panel: a finished game with its winner, or the game being played (live). */
+export interface OverlayGame {
+  left: number;
+  right: number;
+  winner: 'left' | 'right' | null;
+  live: boolean;
+}
+
 export interface OverlayModel {
   /** The team drawn on the left of the box: the scoreboard's left team, or the other one when mirrored. */
   left: OverlaySide;
   right: OverlaySide;
   game: number;
+  /** Every finished game, then the live one while a game is in play; games not started are absent. */
+  games: OverlayGame[];
   phase: Phase;
   /** Game or match point, for the team that has it. */
   flag: { kind: 'gamePoint' | 'matchPoint'; team: Team } | null;
@@ -65,6 +75,15 @@ export function overlayModel(cfg: MatchConfig, s: MatchState, opts: OverlayOptio
     games: s.games[team],
     serving: s.server === team && (s.phase === 'playing' || s.phase === 'interval'),
   });
+  const rightTeam = other(leftTeam);
+  const games: OverlayGame[] = s.completed.map((g) => ({
+    left: g[leftTeam],
+    right: g[rightTeam],
+    winner: g[leftTeam] > g[rightTeam] ? 'left' : g[rightTeam] > g[leftTeam] ? 'right' : null,
+    live: false,
+  }));
+  if (s.phase === 'playing' || s.phase === 'interval')
+    games.push({ left: s.score[leftTeam], right: s.score[rightTeam], winner: null, live: true });
   const flag = s.matchPoint
     ? { kind: 'matchPoint' as const, team: s.matchPoint }
     : s.gamePoint
@@ -72,8 +91,9 @@ export function overlayModel(cfg: MatchConfig, s: MatchState, opts: OverlayOptio
       : null;
   return {
     left: side(leftTeam),
-    right: side(other(leftTeam)),
+    right: side(rightTeam),
     game: s.game,
+    games,
     phase: s.phase,
     flag,
     server: { team: s.server, name: cfg.teams[s.server].players[s.serverIdx] ?? cfg.teams[s.server].name, court: servingCourt(s) },

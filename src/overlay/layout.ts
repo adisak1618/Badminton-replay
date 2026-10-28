@@ -28,10 +28,10 @@ export interface Layout {
 /** The safe inset from the frame edges: 4 % of the height (43 px at 1080p, 29 px at 720p). */
 export const inset = (H: number): number => Math.round(H * 0.04);
 
-/** The score panel's size; it is laid out in units of H / 1080 (768 x 160 at 1080p). */
+/** The score panel's size, room for names and three game columns, in units of H / 1080 (840 x 122 at 1080p). */
 export function scorePanelSize(H: number): { w: number; h: number } {
   const u = H / 1080;
-  return { w: Math.round(768 * u), h: Math.round(160 * u) };
+  return { w: Math.round(840 * u), h: Math.round(122 * u) };
 }
 
 function place(corner: Corner, W: number, H: number, w: number, h: number, stackOffset: number): Box {

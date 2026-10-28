@@ -1,8 +1,9 @@
 // drawOverlay(ctx, model, box, theme): the score panel burned into every frame, in plain Canvas 2D so it runs
 // per camera frame on the phone and in node-canvas for a later re-render (technical-design.md §6.2, §7). A
 // canvas cannot rasterise HTML, so this is not the scoreboard's DOM. The look follows a broadcast score
-// panel: two rows, one per team, players' names in white capitals, the score in a lighter cell at the end.
-import type { OverlayModel, OverlaySide } from './model';
+// panel: two rows, one per team, players' names in white capitals, then one column per game with the
+// winner's points highlighted and the live game last.
+import type { OverlayModel } from './model';
 
 export interface Box {
   x: number;
@@ -16,26 +17,30 @@ export interface OverlayTheme {
   font: string;
   panelBg: string;
   nameFg: string;
-  scoreBg: string;
+  cellsBg: string;
+  liveBg: string;
+  divider: string;
   scoreFg: string;
-  gamesBg: string;
-  gamesFg: string;
-  footFg: string;
+  winFg: string; // the winner's points in a finished game
+  serveFg: string; // the bar beside the serving team's scores
   flagFg: string;
+  badgeFg: string;
   staleFg: string;
 }
 
 export const DEFAULT_THEME: OverlayTheme = {
-  id: 'panel-v2',
+  id: 'panel-v3',
   font: "-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif",
   panelBg: 'rgba(12,14,18,0.78)',
   nameFg: '#ffffff',
-  scoreBg: 'rgba(255,255,255,0.22)',
+  cellsBg: 'rgba(0,0,0,0.6)',
+  liveBg: 'rgba(255,255,255,0.14)',
+  divider: 'rgba(255,255,255,0.28)',
   scoreFg: '#ffffff',
-  gamesBg: 'rgba(255,255,255,0.08)',
-  gamesFg: '#c9d0da',
-  footFg: '#9aa3b0',
+  winFg: '#ffd23f',
+  serveFg: '#ffd23f',
   flagFg: '#ffb020',
+  badgeFg: '#0b0d10',
   staleFg: '#ff4d4d',
 };
 
@@ -65,95 +70,95 @@ function fit(ctx: Ctx, text: string, maxW: number, px: number, minPx: number, fo
   return `${t}…`;
 }
 
-/** A small shuttlecock, cork towards `corkLeft`: a solid cork and a lighter feather skirt; vector, no emoji font. */
-function shuttle(ctx: Ctx, cx: number, cy: number, size: number, color: string, corkLeft: boolean): void {
-  const d = corkLeft ? -1 : 1;
-  const r = size * 0.22;
-  const corkX = cx + d * (size / 2 - r);
-  const rimX = cx - d * (size / 2);
-  ctx.save();
-  ctx.fillStyle = color;
-  ctx.globalAlpha = 0.6;
-  ctx.beginPath();
-  ctx.moveTo(corkX, cy - r * 0.8);
-  ctx.lineTo(rimX, cy - size * 0.46);
-  ctx.lineTo(rimX, cy + size * 0.46);
-  ctx.lineTo(corkX, cy + r * 0.8);
-  ctx.closePath();
-  ctx.fill();
-  ctx.globalAlpha = 1;
-  ctx.beginPath();
-  ctx.arc(corkX, cy, r, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-}
-
-// Panel geometry in units of box.h / 160 (the 1080p panel is 768 x 160): padding, two 54-unit rows, a footer.
-const PAD = 8;
+// Panel geometry in units of box.h / 122 (the 1080p panel is 840 x 122): two 54-unit rows, then up to three
+// game columns. The box is sized for three columns so it never changes mid-match; fewer columns leave the
+// names more room.
+const PAD = 6;
 const ROW = 54;
-const GAP = 4;
-const FOOT = 28;
+const GAP = 2;
 const ACCENT = 6;
-const SCORE_W = 76;
-const GAMES_W = 36;
-const MARK_W = 34;
+const COL = 62;
+const DIV = 2;
+const SERVE = 6;
+export const MAX_COLUMNS = 3;
 
 export function drawOverlay(ctx: Ctx, m: OverlayModel, box: Box, theme: OverlayTheme = DEFAULT_THEME): void {
-  const u = box.h / 160;
+  const u = box.h / 122;
   ctx.save();
-  roundRectPath(ctx, box, 12 * u);
+  roundRectPath(ctx, box, 10 * u);
   ctx.fillStyle = theme.panelBg;
   ctx.fill();
   ctx.clip();
   ctx.textBaseline = 'middle';
 
-  const x0 = box.x + PAD * u;
+  const cols = m.games.slice(-MAX_COLUMNS);
   const x1 = box.x + box.w - PAD * u;
-  const row = (i: number, s: OverlaySide) => {
-    const y = box.y + (PAD + i * (ROW + GAP)) * u;
-    const h = ROW * u;
+  const cellsW = (cols.length * COL + Math.max(0, cols.length - 1) * DIV) * u;
+  const cellsX = x1 - cellsW;
+  const rowY = (i: number) => box.y + (PAD + i * (ROW + GAP)) * u;
+  const h = ROW * u;
+
+  // The dark cell block with thin dividers between games; the live game a shade lighter.
+  if (cols.length) {
+    ctx.fillStyle = theme.cellsBg;
+    ctx.fillRect(cellsX, rowY(0), cellsW, 2 * h + GAP * u);
+    cols.forEach((g, c) => {
+      const x = cellsX + c * (COL + DIV) * u;
+      if (g.live) {
+        ctx.fillStyle = theme.liveBg;
+        ctx.fillRect(x, rowY(0), COL * u, 2 * h + GAP * u);
+      }
+      if (c > 0) {
+        ctx.fillStyle = theme.divider;
+        ctx.fillRect(x - DIV * u, rowY(0), DIV * u, 2 * h + GAP * u);
+      }
+    });
+  }
+
+  const status = statusText(m);
+  const global = status && !m.flag ? status : '';
+  [m.left, m.right].forEach((side, i) => {
+    const y = rowY(i);
     const cy = y + h / 2;
-    // A thin team-colour accent keeps A and B recognisable without flags.
-    ctx.fillStyle = s.color;
-    ctx.fillRect(x0, y, ACCENT * u, h);
-    const scoreX = x1 - SCORE_W * u;
-    ctx.fillStyle = theme.scoreBg;
-    ctx.fillRect(scoreX, y, SCORE_W * u, h);
-    ctx.fillStyle = theme.scoreFg;
-    ctx.textAlign = 'center';
-    ctx.fillText(fit(ctx, String(s.score), (SCORE_W - 8) * u, 42 * u, 22 * u, theme.font, 800), scoreX + (SCORE_W * u) / 2, cy + 2 * u);
-    if (m.flag?.team === s.team) {
-      // The team with game or match point gets an amber underline under its score.
-      ctx.fillStyle = theme.flagFg;
-      ctx.fillRect(scoreX, y + h - 4 * u, SCORE_W * u, 4 * u);
+    ctx.fillStyle = side.color; // a thin team-colour accent keeps A and B recognisable without flags
+    ctx.fillRect(box.x + PAD * u, y, ACCENT * u, h);
+    if (side.serving) {
+      ctx.fillStyle = theme.serveFg;
+      ctx.fillRect(cellsX - (SERVE + 4) * u, y, SERVE * u, h);
     }
-    const gamesX = scoreX - GAMES_W * u;
-    ctx.fillStyle = theme.gamesBg;
-    ctx.fillRect(gamesX, y, GAMES_W * u, h);
-    ctx.fillStyle = theme.gamesFg;
-    ctx.fillText(fit(ctx, String(s.games), (GAMES_W - 6) * u, 24 * u, 14 * u, theme.font), gamesX + (GAMES_W * u) / 2, cy);
-    const markX = gamesX - MARK_W * u;
-    if (s.serving) shuttle(ctx, markX + (MARK_W * u) / 2, cy, 26 * u, theme.nameFg, false);
-    const nameX = x0 + (ACCENT + 12) * u;
+    cols.forEach((g, c) => {
+      const pts = i === 0 ? g.left : g.right;
+      const won = g.winner === (i === 0 ? 'left' : 'right');
+      ctx.fillStyle = won ? theme.winFg : theme.scoreFg;
+      ctx.textAlign = 'center';
+      const x = cellsX + (c * (COL + DIV) + COL / 2) * u;
+      ctx.fillText(fit(ctx, String(pts), (COL - 6) * u, 38 * u, 20 * u, theme.font, 800), x, cy + 2 * u);
+    });
+    // Names, leaving room for the serve bar and a badge: game/match point on its team's row, the other
+    // states (interval, end of game, final, link lost) on the top row.
+    const nameX = box.x + (PAD + ACCENT + 12) * u;
+    let nameEnd = cellsX - (SERVE + 12) * u;
+    const badge = m.flag?.team === side.team ? status : i === 0 ? global : '';
+    if (badge) nameEnd = drawBadge(ctx, badge, nameEnd, cy, u, m.stale ? theme.staleFg : theme.flagFg, theme) - 8 * u;
     ctx.fillStyle = theme.nameFg;
     ctx.textAlign = 'left';
-    ctx.fillText(fit(ctx, s.players, markX - 6 * u - nameX, 30 * u, 18 * u, theme.font), nameX, cy + u);
-  };
-  row(0, m.left);
-  row(1, m.right);
-
-  // Footer: the game number, and the status (game/match point, interval, final, link lost) when there is one.
-  const fy = box.y + (PAD + 2 * (ROW + GAP)) * u + (FOOT * u) / 2;
-  ctx.textAlign = 'left';
-  ctx.fillStyle = theme.footFg;
-  ctx.fillText(fit(ctx, `GAME ${m.game}`, 200 * u, 20 * u, 12 * u, theme.font), x0 + (ACCENT + 12) * u, fy);
-  const status = statusText(m);
-  if (status) {
-    ctx.textAlign = 'right';
-    ctx.fillStyle = m.stale ? theme.staleFg : theme.flagFg;
-    ctx.fillText(fit(ctx, status, x1 - x0 - 230 * u, 20 * u, 12 * u, theme.font, 800), x1 - 4 * u, fy);
-  }
+    ctx.fillText(fit(ctx, side.players, nameEnd - nameX, 30 * u, 16 * u, theme.font), nameX, cy + u);
+  });
   ctx.restore();
+}
+
+/** A small filled pill ending at `right`; returns its left edge. */
+function drawBadge(ctx: Ctx, text: string, right: number, cy: number, u: number, color: string, theme: OverlayTheme): number {
+  ctx.font = `800 ${18 * u}px ${theme.font}`;
+  const w = ctx.measureText(text).width + 16 * u;
+  const b = { x: right - w, y: cy - 13 * u, w, h: 26 * u };
+  roundRectPath(ctx, b, 6 * u);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.fillStyle = theme.badgeFg;
+  ctx.textAlign = 'center';
+  ctx.fillText(text, b.x + w / 2, cy + u);
+  return b.x;
 }
 
 /** The optional channel or show logo (round 2): drawn as is, into its box. */
@@ -161,11 +166,12 @@ export function drawLogo(ctx: Ctx, image: CanvasImageSource, box: Box): void {
   ctx.drawImage(image, box.x, box.y, box.w, box.h);
 }
 
+/** The panel's one short status word, when a state is active. */
 export function statusText(m: OverlayModel): string {
   if (m.stale) return 'LINK LOST';
-  if (m.phase === 'matchOver') return m.winner ? 'FINAL' : 'FINAL · DRAW';
-  if (m.phase === 'gameOver') return 'GAME OVER';
+  if (m.phase === 'matchOver') return m.winner ? 'FINAL' : 'DRAW';
+  if (m.phase === 'gameOver') return 'GAME END';
   if (m.phase === 'interval') return 'INTERVAL';
-  if (m.flag) return m.flag.kind === 'matchPoint' ? 'MATCH POINT' : 'GAME POINT';
+  if (m.flag) return m.flag.kind === 'matchPoint' ? 'MATCH PT' : 'GAME PT';
   return '';
 }

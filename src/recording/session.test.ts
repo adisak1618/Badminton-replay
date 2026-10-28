@@ -8,7 +8,7 @@ const draft: SegmentDraft = {
   height: 1080,
   fps: 30,
   startLatencyMs: 0,
-  overlay: { box: { x: 43, y: 43, w: 768, h: 160 }, corner: 'tl', delayMs: 0, mirrored: false, theme: 'panel-v2', logo: null },
+  overlay: { box: { x: 43, y: 43, w: 840, h: 122 }, corner: 'tl', delayMs: 0, mirrored: false, theme: 'panel-v3', logo: null },
 };
 
 const run = (s: Session, ...actions: SessionAction[]) => actions.reduce(sessionReduce, s);
