@@ -1,6 +1,6 @@
 // C1 camera setup and C3 recording (ux-design.md), plus their E1 states. Both show the composited canvas
 // itself as the preview, so what the user sees is what is recorded (R-REC-4).
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { other, reduce } from '../../engine';
 import type { LocalSource } from '../../link/local';
 import { saveLogo } from '../../match/persist';
@@ -18,7 +18,14 @@ import { CameraMenu, HoldButton, LinkChip } from './parts';
 interface Props {
   ctrl: CameraController;
   demo: LocalSource | null;
+  paired: boolean;
   onToggleDemo: () => void;
+  onPair: () => void;
+  onUnpair: () => void;
+  /** C2, shown over the preview while open. */
+  c2: ReactNode;
+  /** Why the last pairing ended (version mismatch, expired), shown in C1. */
+  pairNote: string | null | false;
   onRecordings: () => void;
   onLeave: () => void;
   onUpdate: (() => void) | null;
@@ -62,7 +69,7 @@ function Seg<T extends string | number | boolean>({
   );
 }
 
-export function CameraScreen({ ctrl, demo, onToggleDemo, onRecordings, onLeave, onUpdate }: Props) {
+export function CameraScreen({ ctrl, demo, paired, onToggleDemo, onPair, onUnpair, c2, pairNote, onRecordings, onLeave, onUpdate }: Props) {
   const snap = useSyncExternalStore(ctrl.subscribe, ctrl.getSnapshot);
   const mirror = useSyncExternalStore(ctrl.mirror.subscribe, ctrl.mirror.getSnapshot);
   const [menu, setMenu] = useState(false);
@@ -166,7 +173,11 @@ export function CameraScreen({ ctrl, demo, onToggleDemo, onRecordings, onLeave, 
       </span>
       <span className="flex min-w-0 items-center gap-2">
         <LinkChip link={mirror.link} demo={!!demo} />
-        {lastScore && <span className="truncate">{lastScore}</span>}
+        {lastScore && (
+          <span className="truncate" data-testid="last-score">
+            {lastScore}
+          </span>
+        )}
       </span>
     </>
   );
@@ -195,6 +206,7 @@ export function CameraScreen({ ctrl, demo, onToggleDemo, onRecordings, onLeave, 
         <div className="relative min-w-0 flex-1 overflow-hidden rounded-xl border border-line bg-black" data-testid="preview">
           <div ref={previewRef} className="absolute inset-0" />
           {demo && <DemoPanel source={demo} />}
+          {c2}
           {!c3 && snap.camera !== 'live' && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-4 text-center">
               {snap.camera === 'starting' && <span className="text-mut">Starting the camera…</span>}
@@ -291,7 +303,19 @@ export function CameraScreen({ ctrl, demo, onToggleDemo, onRecordings, onLeave, 
                   </button>
                 </div>
               )}
-              {mirror.link === 'unpaired' && !mirror.config && <div className="text-xs text-mut">Not paired: records without the score.</div>}
+              {pairNote && (
+                <div className="text-xs font-semibold text-amber" data-testid="pair-note">
+                  {pairNote}
+                </div>
+              )}
+              {mirror.link === 'unpaired' && !demo && (
+                <div className="flex items-center gap-2 text-xs text-mut">
+                  <span className="flex-1">Not paired: records without the score.</span>
+                  <button className="btn min-h-9 px-2 py-1 text-sm" onClick={onPair} data-testid="cam-pair">
+                    Pair…
+                  </button>
+                </div>
+              )}
             </div>
             <div className="flex shrink-0 items-center justify-between gap-2">
               <button className="btn btn-ghost text-sm" onClick={onRecordings}>
@@ -318,7 +342,16 @@ export function CameraScreen({ ctrl, demo, onToggleDemo, onRecordings, onLeave, 
       {menu && (
         <CameraMenu
           demo={!!demo}
+          paired={paired}
           recording={active}
+          onPair={() => {
+            setMenu(false);
+            onPair();
+          }}
+          onUnpair={() => {
+            setMenu(false);
+            onUnpair();
+          }}
           onDemo={() => {
             onToggleDemo();
             setMenu(false);

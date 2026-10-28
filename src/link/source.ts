@@ -1,10 +1,11 @@
 // What the camera role consumes from the scoreboard, whatever carries it. Shapes follow the data-channel
 // protocol (technical-design.md §4.4): a full-state `sync`, incremental `event`s, `cmd` in, `rec` and `ack`
-// out, plus the link state for the chip (R-DISP-9). Phase 2b puts the WebRTC channel behind this interface;
-// the recording code only ever sees a ScoreSource.
+// out, plus the link state for the chip (R-DISP-9). The paired WebRTC channel (peer.ts) sits behind this
+// interface like the others; the recording code only ever sees a ScoreSource.
 import type { MatchConfig, MatchEvent } from '../engine';
 
-export type LinkState = 'unpaired' | 'connecting' | 'paired' | 'reconnecting' | 'offline';
+/** `reconnecting` is amber (from 6 s without pongs); `lost` is red (30 s), still trying; `offline`: no helper. */
+export type LinkState = 'unpaired' | 'connecting' | 'paired' | 'reconnecting' | 'lost' | 'offline';
 
 export interface MatchLog {
   matchId: string;

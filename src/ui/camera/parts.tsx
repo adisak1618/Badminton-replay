@@ -9,6 +9,7 @@ const LINK: Record<LinkState, { text: string; cls: string }> = {
   connecting: { text: 'connecting', cls: 'bg-amber/20 text-amber' },
   paired: { text: 'link ok', cls: 'bg-ok/20 text-ok' },
   reconnecting: { text: 'reconnecting', cls: 'bg-amber/20 text-amber' },
+  lost: { text: 'link lost', cls: 'bg-red/25 text-red' },
   offline: { text: 'offline', cls: 'bg-red/25 text-red' },
 };
 
@@ -62,7 +63,10 @@ export function HoldButton({ onHold, label, disabled }: { onHold: () => void; la
 
 export function CameraMenu({
   demo,
+  paired,
   recording,
+  onPair,
+  onUnpair,
   onDemo,
   onRecordings,
   onLeave,
@@ -70,7 +74,10 @@ export function CameraMenu({
   onClose,
 }: {
   demo: boolean;
+  paired: boolean;
   recording: boolean;
+  onPair: () => void;
+  onUnpair: () => void;
   onDemo: () => void;
   onRecordings: () => void;
   onLeave: () => void;
@@ -86,6 +93,15 @@ export function CameraMenu({
         aria-label="Camera menu"
         onClick={(e) => e.stopPropagation()}
       >
+        {paired ? (
+          <button className={row} onClick={onUnpair}>
+            Unpair the scoreboard
+          </button>
+        ) : (
+          <button className={row} onClick={onPair} data-testid="menu-pair">
+            Pair with the scoreboard…
+          </button>
+        )}
         <button className={row} aria-pressed={demo} onClick={onDemo}>
           Demo score (this phone): <b>{demo ? 'on' : 'off'}</b>
         </button>
@@ -105,7 +121,7 @@ export function CameraMenu({
         </button>
         <p className="col-span-2 text-sm text-mut">
           Demo score lets this phone play the scoreboard too: a small panel on the preview scores points, undoes, and
-          sends REC and Stop the way the scoreboard phone will once pairing arrives.
+          sends REC and Stop the way the paired scoreboard phone does. While it is on, the overlay follows it.
         </p>
       </div>
     </div>

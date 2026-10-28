@@ -2,6 +2,7 @@
 import { useState, type ReactNode } from 'react';
 import { DEFAULT_SETUP, PALETTE, type Format, type MatchSetup, type Points, type Team, type TeamSetup } from '../engine';
 import { loadLastSetup } from '../match/prefs';
+import { CameraStatus } from './CameraLink';
 import { UpdateBanner } from './RoleScreen';
 
 function Seg<T extends string | number | boolean>({
@@ -112,10 +113,12 @@ export function SetupScreen({
   onBack,
   onStart,
   onUpdate,
+  onPair,
 }: {
   onBack: () => void;
   onStart: (s: MatchSetup) => void;
   onUpdate: (() => void) | null;
+  onPair: () => void;
 }) {
   const [last] = useState(loadLastSetup);
   const [setup, setSetup] = useState<MatchSetup>(() => last ?? DEFAULT_SETUP);
@@ -129,6 +132,7 @@ export function SetupScreen({
           ‹
         </button>
         <h1 className="flex-1 text-base font-semibold text-mut">Match setup</h1>
+        <CameraStatus onPair={onPair} />
         {last && (
           <button className="btn btn-ghost" onClick={() => onStart(last)}>
             Same as last

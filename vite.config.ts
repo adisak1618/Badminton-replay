@@ -34,10 +34,16 @@ export default defineConfig({
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,webmanifest}'],
+        // wasm: the QR decoder for S2 (zxing-wasm, ~0.9 MB), so pairing works from the installed app offline-first.
+        globPatterns: ['**/*.{js,css,html,svg,png,webmanifest,wasm}'],
+        navigateFallbackDenylist: [/^\/api\//],
       },
     }),
   ],
+  // `pnpm dev` talks to a local helper (`pnpm serve:local`, port 8787) for pairing.
+  server: {
+    proxy: { '/api': process.env.SIGNAL_ORIGIN ?? 'http://127.0.0.1:8787' },
+  },
   test: {
     include: ['src/**/*.test.ts'],
   },
