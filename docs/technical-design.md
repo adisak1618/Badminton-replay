@@ -534,7 +534,10 @@ Stored as `matches/<matchId>/recording.json`, updated on every segment change.
 
 ## 8. Export bundle
 
-Directory `match-<id>/` containing `video-1.mp4` … `video-n.mp4` and `match.json`:
+Flat files sharing one prefix, because the share sheet carries files, not a
+directory: `match-<yyyymmdd-hhmm>-video-1.mp4` … `-video-n.mp4` and
+`match-<yyyymmdd-hhmm>-match.json` (`recording.segments[].file` holds the
+exported names). `match.json`:
 
 ```ts
 interface MatchBundle {

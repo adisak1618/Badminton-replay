@@ -5,7 +5,7 @@ import { LocalSource } from '../../link/local';
 import { NoSource } from '../../link/none';
 import type { PeerInfo } from '../../link/source';
 import { store } from '../../match/live';
-import { deviceId, loadCameraSettings } from '../../match/prefs';
+import { deviceId, loadCameraSettings, saveCameraSettings } from '../../match/prefs';
 import { CameraController } from '../../recording/controller';
 
 export const thisDevice = (): PeerInfo => ({ id: deviceId(), ua: navigator.userAgent, app: APP_BUILD });
@@ -15,7 +15,15 @@ let local: LocalSource | null = null;
 const none = new NoSource();
 
 export function cameraController(): CameraController {
-  controller ??= new CameraController(loadCameraSettings(), thisDevice());
+  if (!controller) {
+    const c = new CameraController(loadCameraSettings(), thisDevice());
+    let saved = c.getSnapshot().settings;
+    c.subscribe(() => {
+      const s = c.getSnapshot().settings;
+      if (s !== saved) saveCameraSettings((saved = s)); // R-SETUP-4 choices are kept per device
+    });
+    controller = c;
+  }
   return controller;
 }
 
