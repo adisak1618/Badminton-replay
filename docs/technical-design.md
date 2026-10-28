@@ -1,82 +1,82 @@
 # Technical design
 
 Architecture and implementation plan for the two-phone scoreboard. Requirement
-ids refer to [requirements.md](requirements.md); open choices (D1 to D13) live
-only there and this doc assumes the recommended defaults. Screens (S*, C*)
-refer to [ux-design.md](ux-design.md).
+ids refer to [requirements.md](requirements.md); the decisions D1 to D13
+recorded there are assumed. Screens (S*, C*) refer to
+[ux-design.md](ux-design.md).
 
-Every browser-support claim in §9 was checked on 2026-10-27 against MDN's
+Every browser-support claim in §9 was checked on 2026-10-27/28 against MDN's
 browser-compat-data, WebKit's blog and bug tracker, or Chromium sources, and
 cites the page. Claims that could not be verified are listed as assumptions to
-test on the captain's phones in phase 0 of [roadmap.md](roadmap.md).
+test on the captain's iPhones in phase 0 of [roadmap.md](roadmap.md).
 
 ## 1. Architecture
 
 ```
-            Vercel (static files only, HTTPS)
-                       |
-          first visit / updates only
-                       |
-   +-------------------+-------------------+
-   |                                       |
- Scoreboard phone (PWA)             Camera phone (PWA)
-   score engine, event log            getUserMedia + MediaRecorder
-   speech, UI                         worker -> OPFS (video file)
-   localStorage/IDB: live match       event mirror, overlay, export
-   |                                       |
-   +----- WebRTC data channel (LAN) -------+
-           JSON messages, no media
+                 Vercel
+   static PWA shell + assets        api/signal (one function)
+          |                                 |  <-> Redis (Marketplace, Upstash)
+   first visit / updates          pairing + reconnect: offers/answers only
+          |                                 |
+   +------+---------------------------------+------+
+   |                                               |
+ Scoreboard phone (PWA)                   Camera phone (PWA)
+   score engine, event log                  getUserMedia -> <video> -> canvas
+   speech, UI                                 + overlay -> captureStream + mic
+   IDB: live match                            -> MediaRecorder -> worker -> OPFS
+   |                                          event mirror, export
+   +-------- WebRTC data channel (LAN) --------+
+             JSON messages, no media
 ```
 
 - **One static web app, two roles.** The same bundle serves both phones; the
-  role is chosen at launch (R-SETUP-1). No server-side code in v1.
-- **No backend.** Vercel serves the shell and assets. Video, scores and names
-  never leave the phones (N-PRIV-1). The only case that would add a backend is
-  D2(b), a signaling helper, and even then it only relays connection
-  descriptors.
+  role is chosen at launch (R-SETUP-1).
+- **One function.** The signaling helper exchanges WebRTC descriptors between
+  the phones and nothing else (R-PAIR-9). Video, scores and names never leave
+  the phones (N-PRIV-1).
 - **Scoreboard phone is the source of truth** for the match (config + event
-  log). The camera phone mirrors it and adds recording metadata. There is no
-  merge problem because only one side writes score events.
-- **Camera phone owns the recording timeline.** It stamps every event with a
-  recording-relative time using a measured clock offset (§4.5).
+  log). The camera phone mirrors it. Only one side writes score events, so
+  there is no merge problem.
+- **Camera phone owns the recording timeline** and the composited video. It
+  stamps every event with a recording-relative time using a measured clock
+  offset (§4.5) and draws the overlay into every frame (§6).
 
 ## 2. Tech stack
 
-Recommendation (D3): **Vite + React + TypeScript + Tailwind v4 +
-vite-plugin-pwa, pnpm, Vitest.** Minimal, familiar, no server runtime.
+D3: **Vite + React + TypeScript + Tailwind v4 + vite-plugin-pwa, pnpm,
+Vitest**, plus one Vercel function.
 
 | Concern | Choice | Why |
 |---|---|---|
-| Language | TypeScript | Captain's default; the engine and protocol benefit from types |
-| Build | Vite | Static output, fast dev server with `--host` for phone testing, first-class PWA plugin |
-| UI | React | Four screens with real state (setup forms, overlays, link state); the captain knows it. Preact would save ~35 kB and is a drop-in if bundle size ever matters |
+| Language | TypeScript | Captain's default; the engine, protocol and helper benefit from shared types |
+| Build | Vite | Static output, fast dev server, first-class PWA plugin |
+| UI | React | A handful of screens with real state; the captain knows it |
 | Styling | Tailwind v4 | Already used on story-platform; the UI is mostly layout and large type |
-| PWA | vite-plugin-pwa (Workbox `generateSW`) | Manifest + service worker with precached shell; `registerType: 'prompt'` so an update never swaps code mid-match |
-| State | React state + a pure `reduce(events)` function; `zustand` only if prop-drilling hurts | The engine is pure; keep the store thin |
-| Tests | Vitest (engine, reducer, protocol), Playwright later for the two-browser protocol test | Pure functions carry the risk; UI tests can wait |
-| QR | `qrcode` (generate), `BarcodeDetector` where present with `zxing-wasm` fallback (scan) | iOS Safari ships `BarcodeDetector` behind a default-off preference (§9), so a JS decoder is mandatory |
-| WebRTC | Browser APIs directly, no wrapper | One peer, one data channel; a library would hide the signaling choices in §4 |
-| Validation | Hand-written type guards for the ~9 message types | Smaller than a schema library and easy to read |
+| PWA | vite-plugin-pwa (Workbox `generateSW`) | Manifest + precached shell; `registerType: 'prompt'` so an update never swaps code mid-match |
+| State | React state + a pure `reduce(config, events)` | The engine is pure; keep the store thin |
+| Helper | `api/signal.ts`, a single `fetch` handler on the Node runtime, `@upstash/redis` | Vercel builds one function per file under `api/` for non-framework projects and recommends one handler that routes by pathname (https://vercel.com/docs/functions/quickstart) |
+| Tests | Vitest (engine, reducer, protocol, helper with an in-memory store); Playwright later | Pure functions carry the risk |
+| QR | `qrcode` (generate), `zxing-wasm` (scan; `BarcodeDetector` is off by default on iOS, §9) | |
+| WebRTC | Browser APIs directly | One peer, one data channel |
+| Overlay | Canvas 2D drawing function in `src/overlay/` | Runs on the camera phone per frame; reusable on a Mac later (node-canvas) |
+| Validation | Hand-written type guards for the ~9 message types and the helper's bodies | Smaller than a schema library |
 
-Next.js (the story-platform stack) was considered and rejected: there is no
-server rendering, no API route (unless D2(b)), and no multi-page routing. Its
-build pipeline and runtime add nothing here and complicate the PWA setup.
-If D2(b) is chosen later, a single Vercel serverless function can live in
-`api/` next to the Vite app without switching frameworks.
+Next.js was considered and rejected: no server rendering, one API route, no
+multi-page routing. The function lives beside the Vite app without a framework.
 
 Repository layout (for later, not created by this task):
 
 ```
+api/signal.ts    the helper (routes /api/signal/*)
 src/
-  engine/      match config, events, reducer, rules  (pure, tested)
-  protocol/    message types, guards, sdp compaction, clock offset
-  pairing/     RTCPeerConnection setup, QR show/scan
-  recording/   getUserMedia, MediaRecorder, opfs worker, export
-  ui/          screens S0..S5, C1..C4, shared components
-  speech/      phrases, speechSynthesis wrapper, click sounds
-tools/
-  burnin/      Mac-side renderer (phase 3)
-docs/
+  engine/        config, events, reducer, rules, positions (pure, tested)
+  protocol/      message types, guards, clock offset
+  pairing/       helper client, RTCPeerConnection, QR show/scan, reconnect
+  recording/     getUserMedia, compositor, MediaRecorder, opfs worker, export
+  overlay/       drawOverlay(ctx, state, box, theme), theme
+  ui/            screens S0..S5, C1..C4
+  speech/        phrases, speechSynthesis wrapper, click sounds
+docs/            these docs, docs/mockup
 ```
 
 ## 3. Score engine
@@ -85,16 +85,19 @@ docs/
 
 ```ts
 type Team = 'A' | 'B';
+type Format = 'bestOf3' | 'fixed2' | 'fixed1';            // D12
 interface MatchConfig {
-  pointsToWin: 11 | 15 | 21;      // D12
+  pointsToWin: 11 | 15 | 21;
   winBy: 2;
-  cap: number;                    // 30 for 21-point games; pointsToWin + 9 otherwise
-  gamesToWin: 1 | 2;              // best of 1 or 3
-  intervalAt: number | null;      // 11, or null to disable (D12)
+  cap: number;                    // 30 for 21; pointsToWin + 9 otherwise
+  format: Format;
+  intervalAt: number | null;      // 11, or null to disable
   intervalMs: { midGame: 60_000; betweenGames: 120_000 };
-  teams: Record<Team, { name: string; color: string }>;
+  doubles: boolean;
+  teams: Record<Team, { name: string; color: string; players: string[] }>;  // 1 or 2 names
   firstServer: Team;
-  leftTeamAtStart: Team;          // left of the scoreboard screen (S1)
+  startRight: Record<Team, 0 | 1>;   // doubles: index of the player who starts in the right court
+  leftTeamAtStart: Team;             // left of the scoreboard screen (S1)
 }
 ```
 
@@ -103,23 +106,29 @@ interface MatchConfig {
 ```ts
 interface MatchState {
   phase: 'playing' | 'interval' | 'gameOver' | 'matchOver';
-  game: number;                          // 1-based
-  score: Record<Team, number>;           // current game
-  games: Record<Team, number>;           // games won
+  game: number;                               // 1-based
+  score: Record<Team, number>;
+  games: Record<Team, number>;
   completed: Array<Record<Team, number>>;
   server: Team;
-  serviceCourt: 'right' | 'left';        // right when server's score is even (Laws 10.1, 11.1)
-  leftTeam: Team;                        // which team is on the left of the scoreboard
+  serverIdx: number;                          // index into teams[server].players
+  pos: Record<Team, { right: number; left: number }>;   // who stands in which service court
+  leftTeam: Team;                             // which team is on the left of the scoreboard
   gamePoint: Team | null;
   matchPoint: Team | null;
+  winner: Team | null;                        // null until decided; stays null for a fixed-2 draw
   intervalKind: 'midGame' | 'betweenGames' | null;
-  intervalEndsAt: number | null;         // wall clock, for the countdown
+  pendingSwap: boolean;                       // ends change when the current interval closes
 }
 ```
 
-Derived flags: `gamePoint` when a team is one point from winning the game
-under the win-by-2/cap rule; `matchPoint` when that game would also win the
-match.
+Derived helpers: `servingCourt(s)` is `right` when the server's score is even,
+`left` when odd (Laws 10.1, 11.1); `receiverIdx(s)` is the receiving team's
+player in the court of the same name (diagonal). `gamePoint` when a team is
+one point from winning the game; `matchPoint` when that game would also decide
+the match: in best of 3 when it would be the second game won, in fixed
+formats only in the last game and only if it would give that team more games
+than the other (a 1-1 is a draw, not a match point).
 
 ### 3.3 Events (append-only)
 
@@ -132,11 +141,12 @@ type MatchEvent = EventBase & (
   | { type: 'undo'; target: number }      // seq of the event being voided
   | { type: 'redo'; target: number }      // seq of the undo being voided
   | { type: 'correct'; score: Record<Team, number>; games?: Record<Team, number>;
-      server: Team; leftTeam?: Team }
-  | { type: 'sides.swap' }
-  | { type: 'server.set'; team: Team }
+      server: Team; serverIdx?: number; leftTeam?: Team }
+  | { type: 'sides.swap' }                // ends
+  | { type: 'courts.swap'; team: Team }   // the two players of one team swap service courts
+  | { type: 'server.set'; team: Team; idx?: number }
   | { type: 'interval.end' }              // user dismissed or countdown ended
-  | { type: 'game.start'; game: number }  // explicit, see ux-design.md §5
+  | { type: 'game.start'; game: number; serverIdx?: number; receiverIdx?: number }
   | { type: 'match.end'; reason: 'won' | 'abandoned' }
 );
 ```
@@ -144,11 +154,11 @@ type MatchEvent = EventBase & (
 - `seq` is dense and increasing on the scoreboard phone; `id` is random so a
   resent event is deduplicated.
 - **Undo as events.** `undo` voids its target; `redo` voids an `undo`. The
-  reducer first computes the void set (an `undo` that is itself voided voids
-  nothing), then replays the remaining events in order. Undo targets the last
-  non-voided *user* event (`point`, `correct`, `sides.swap`, `server.set`,
-  `game.start`). This keeps the log honest for burn-in: the voided point still
-  shows when it was tapped and when it was taken back.
+  reducer first computes the void set, then replays the remaining events in
+  order. Undo targets the last non-voided *user* event (`point`, `correct`,
+  `sides.swap`, `courts.swap`, `server.set`, `game.start`, `interval.end`).
+  The log keeps the voided point, so the video timeline still shows when it
+  was tapped and taken back.
 - **Derivable state.** `reduce(config, events) -> MatchState` is pure. The UI
   never stores the score separately (R-SCORE-8).
 
@@ -156,134 +166,151 @@ type MatchEvent = EventBase & (
 
 | On | Rule | Source |
 |---|---|---|
-| `point(team)` while `playing` or `interval` | `score[team]++`; `server = team`; `serviceCourt` from the server's score parity | Laws 7.3, 10.1, 11.1 |
-| after a point | game won when `score >= pointsToWin && lead >= winBy`, or `score == cap`; then `games[winner]++`, `completed.push`, `phase = gameOver` or `matchOver` | Laws 7.2, 7.4, 7.5 |
-| after a point, not game-winning | if `intervalAt` and the leading score just became `intervalAt` for the first time this game: `phase = interval`, `intervalKind = midGame`; in the deciding game also swap `leftTeam` when the interval ends | Laws 16.2.1, 8.1.3 |
-| `interval.end` | `phase = playing`; apply the pending deciding-game side swap | |
-| `game.start(n)` | reset `score`; `server` = winner of the previous game; swap `leftTeam`; `phase = playing` | Laws 7.6, 8.1.1, 8.1.2 |
-| `correct` | overwrite `score`, `games`, `server`, optionally `leftTeam`; recompute flags and phase | R-SCORE-7 |
-| `sides.swap`, `server.set` | as named | |
-| `match.end` | `phase = matchOver` | |
+| `point(team)` while `playing` or `interval` | `score[team]++`. Singles: `server = team`. Doubles, serving side scored: same `serverIdx`, the two players of `team` swap courts. Doubles, receiving side scored: `server = team`, nobody moves, `serverIdx` = the player of `team` in the court matching its score parity | Laws 7.3, 10.1, 11.2, 11.3 |
+| after a point | game won when `score >= pointsToWin && lead >= winBy`, or `score == cap`; then `games[winner]++`, `completed.push`; match over when best of 3 reaches two games, or the last fixed game is done; `winner` = team with more games, else null (draw) | Laws 7.2, 7.4, 7.5; D12 |
+| after a point, not game-winning | if `intervalAt` and the leading score just became `intervalAt` for the first time this game: `phase = interval`; `pendingSwap` when this is the third game of a best of 3 or a fixed-1 game | Laws 16.2.1, 8.1.3 |
+| `interval.end` | `phase = playing`; apply `pendingSwap` to `leftTeam` | |
+| `game.start(n, serverIdx?, receiverIdx?)` | reset `score`; `server` = winner of the previous game; swap `leftTeam`; doubles: the chosen server and receiver (defaults: current right-court players) are placed in their right courts | Laws 7.6, 8.1.1, 8.1.2, 11.1 |
+| `correct` | overwrite `score`, `games`, `server`, `serverIdx`, optionally `leftTeam`; in doubles rotate the serving pair so the server stands in the parity court; recompute flags; `phase = playing` | R-SCORE-7 |
+| `sides.swap`, `courts.swap`, `server.set` | as named; `courts.swap` changes positions only (the serving player stays the same person) | R-SCORE-7 |
+| `match.end` | `phase = matchOver`, `winner` from games | |
 
 The BWF Laws of Badminton are published in the BWF Statutes, section 4.1
 (https://corporate.bwfbadminton.com/statutes/). The reducer is table-driven so
-the 11/15-point variants only change `pointsToWin` and `cap`.
+formats and point targets are config only. The plain-JS engine in
+`docs/mockup/index.html` implements exactly this table and passed the
+R-SCORE-3 sequence, deuce, cap, undo/redo across a game boundary, the
+deciding-game ends change and the fixed-2 draw; it is the reference for the
+phase 1 tests.
 
 Invariants the tests enforce: replay is deterministic; `undo` then `redo` is
-the identity on state; a `point` during `gameOver` or `matchOver` is rejected
-(the UI never emits it); `seq` has no gaps; the serving court always matches
-the server's score parity unless a `correct` said otherwise.
+the identity on state; a `point` during `gameOver` or `matchOver` is ignored;
+`seq` has no gaps; in doubles the server always stands in the parity court
+unless a `courts.swap` says otherwise; `winner` is null exactly for a 1-1 in
+fixed 2.
 
 ### 3.5 Persistence and sharing
 
 - The scoreboard phone writes `{config, events}` to IndexedDB after every
-  event (localStorage would do, but a 3-game log is ~40 kB and IDB keeps it
-  off the main thread). On launch, an unfinished match is offered for resume
-  (R-SCORE-9).
+  event. On launch an unfinished match is offered for resume (R-SCORE-9). It
+  can export its log alone (R-EXP-1).
 - The camera phone keeps a mirror `{config, events}` plus its own recording
   metadata (§6.6) in the match's OPFS directory.
 - Sharing is one-directional: every new event is sent as an `event` message;
-  on (re)connect the scoreboard sends a `sync` with the whole log (§4.4).
+  on every (re)connect the scoreboard sends `sync` with the whole log (§4.4).
 
-## 4. Pairing and signaling
+## 4. Pairing, signaling and reconnect
 
-### 4.1 Options compared
+### 4.1 Shape (D2)
 
-| | (a) Offline two-QR handshake | (b) Signaling helper on Vercel | (c) Third-party signaling (PeerJS cloud) |
+The helper is a mailbox for WebRTC session descriptions. The phones still
+connect to each other over the local network (host candidates; no STUN per
+D13); the helper never sees match data. Internet is needed on both phones
+whenever descriptors are exchanged: at pairing and at each reconnect.
+
+Options the captain chose between are summarised for the record: the offline
+two-QR handshake (no server, two scans, manual re-pair after drops) is kept
+as a later fallback in §4.6; third-party signaling (PeerJS cloud) was rejected
+for the external dependency.
+
+### 4.2 Helper API
+
+One function, `api/signal.ts`, routes by pathname (a `vercel.json` rewrite
+sends `/api/signal/:path*` to it). JSON bodies, no cookies, CORS not needed
+(same origin).
+
+| Method and path | Who | Body → response | Store effect |
 |---|---|---|---|
-| Infrastructure | None | Serverless function + a store with TTL (Upstash Redis via the Vercel Marketplace, or Vercel Blob); secrets; polling because function WebSockets are beta and close at the function's max duration ([Vercel guide](https://vercel.com/guides/do-vercel-serverless-functions-support-websocket-connections)) | None to run, but an external service and its uptime |
-| Needs internet on the court | No | Yes, both phones, at pairing and every reconnect | Yes |
-| Scans | 2 (offer, answer) | 1 (room code) | 1 (peer id) |
-| Reconnect after link drop | Re-scan (2 scans) | Automatic | Automatic |
-| Privacy | Nothing leaves the LAN | Connection descriptors (local hostnames, fingerprints) pass through the helper | Same, through a third party |
-| Code | QR show + scan on both roles, SDP compaction (§4.3) | QR show + scan, API client, function, store | PeerJS client |
-| Failure modes | QR too dense to scan; mDNS blocked on the Wi-Fi | Offline court; store misconfigured; cold starts | Service down or rate-limited |
+| `POST /api/signal/rooms` | camera | `{offer}` → `{code, session, secret}` | `room:<code>` → session (TTL 600 s); `sess:<session>` → `{secret, offer:{gen:1,sdp,at}}` (TTL 6 h) |
+| `GET /api/signal/rooms/:code` | scoreboard | → `{session, secret, offer}` | deletes `room:<code>` (one-shot) |
+| `POST /api/signal/sessions/:session/answer` | scoreboard | `{secret, gen, answer}` → 204 | sets `answer:{gen,sdp,at}`, refreshes TTL |
+| `GET /api/signal/sessions/:session/answer?gen=N` | camera | → `{answer}` or 204 | |
+| `POST /api/signal/sessions/:session/offer` | camera | `{secret, gen, offer}` → 204 | reconnect: new offer with `gen+1` |
+| `GET /api/signal/sessions/:session/offer?gen=N` | scoreboard | → `{offer}` or 204 if none newer than N | |
 
-**Recommendation for v1: (a).** It is the only option that works on a court
-without internet, it needs no account, secret or store, and the extra cost is
-one more scan per session. QR show and scan are needed in every option
-anyway. If the phase-2 soak test shows the link dropping more than once per
-match on real courts, add (b) as an *optional* path in phase 4; nothing in the
-protocol changes, only how the descriptors travel.
+- **Room code:** six random digits, collision-checked, valid 10 minutes, deleted
+  on first read. Shown as a QR (`https://<app>/pair#c=482107&s=<secret>`) and
+  as digits for typing (R-PAIR-1).
+- **Session:** 128-bit random id plus a 128-bit secret generated by the camera
+  phone; every write carries the secret. Lifetime 6 h, refreshed on each write,
+  so a match never outlives its session (R-PAIR-9).
+- **Polling, not push:** the waiting side polls every 2 s. A match produces a
+  few hundred requests, which is nothing. Vercel function WebSockets exist in
+  beta but close at the function's maximum duration and need external state
+  anyway (https://vercel.com/guides/do-vercel-serverless-functions-support-websocket-connections).
+- **Rate limit:** `GET rooms/:code` is limited to 20 per minute per IP with a
+  Redis counter, so a six-digit code cannot be brute-forced within its
+  lifetime. The remaining risk (someone guessing a live code) is accepted for a
+  personal app; the secret in the QR path is never guessable.
+- **Store:** a Redis database from the Vercel Marketplace (Upstash; Vercel KV
+  was retired into it in December 2024, https://vercel.com/docs/redis). The
+  integration injects the REST URL and token as project environment variables
+  (names are shown in the project's Environment Variables after install) and
+  `Redis.fromEnv()` from `@upstash/redis` reads them
+  (https://upstash.com/docs/redis/howto/vercelintegration). All keys are
+  written with `EX` so nothing lives past its TTL. Local development uses an
+  in-memory `Map` behind the same interface when `SIGNAL_STORE=memory`.
 
-### 4.2 Handshake (two QR)
+### 4.3 Pairing sequence
 
 ```
 Camera phone                                  Scoreboard phone
-1  getUserMedia (already granted for preview)
-2  pc = new RTCPeerConnection({ iceServers: [] })   // D13: none
+1  preview stream running (camera permission granted)
+2  pc = new RTCPeerConnection({ iceServers: [] })      // D13
 3  dc = pc.createDataChannel('match', { ordered: true })
-4  offer = createOffer; setLocalDescription
-5  wait for iceGatheringState == 'complete' (<= 2 s timeout)
-6  show QR1 = compact(localDescription)
-                                              7  open camera, scan QR1 (needs getUserMedia)
+4  createOffer; setLocalDescription; wait for gathering complete (<= 2 s)
+5  POST rooms {offer} -> code, session, secret; show QR + digits
+                                              6  open camera (viewfinder); scan QR or type digits
+                                              7  GET rooms/:code -> offer, session, secret
                                               8  pc = new RTCPeerConnection({ iceServers: [] })
-                                              9  setRemoteDescription(expand(QR1)); createAnswer; setLocalDescription
-                                              10 wait for gathering complete; show QR2 = compact(answer)
-11 scan QR2; setRemoteDescription(expand(QR2))
-12 datachannel 'open' on both sides -> hello exchange (§4.4)
+                                              9  setRemoteDescription(offer); createAnswer; setLocalDescription;
+                                                 wait for gathering complete
+                                              10 POST sessions/:s/answer {gen:1, answer}
+11 poll GET sessions/:s/answer?gen=0 every 2 s -> setRemoteDescription(answer)
+12 data channel 'open' on both sides -> hello, sync, rec state (§4.4)
 ```
 
-Why the order matters: **WebKit withholds host ICE candidates until the page
-has camera or microphone permission.** Without that permission only
-server-reflexive and relay candidates are produced, which on a LAN with no
-STUN/TURN means no candidates at all (WebKit, "A Closer Look Into WebRTC",
-https://webkit.org/blog/7763/a-closer-look-into-webrtc/; WebKit bug 174500
-"WebRTC data channel only applications require capture permissions for direct
-connections", https://bugs.webkit.org/show_bug.cgi?id=174500). Both phones
-use the camera to scan, so both hold the permission before they gather. The
-camera phone must create its offer *after* its preview stream is running.
+**Why the camera permission matters.** WebKit withholds host ICE candidates
+until the page has camera or microphone permission; without it only
+server-reflexive and relay candidates are produced, which with no STUN/TURN
+means none (WebKit, "A Closer Look Into WebRTC",
+https://webkit.org/blog/7763/a-closer-look-into-webrtc/; WebKit bug 174500,
+https://bugs.webkit.org/show_bug.cgi?id=174500). The camera phone has the
+permission from its preview; the scoreboard phone gets it from the viewfinder
+in S2, which stays open even when the code is typed. Whether WebKit keeps
+exposing host candidates in a later gathering (reconnect) after that
+viewfinder track was stopped is assumption A1; the fallback is to reopen a
+camera track for the duration of the reconnect.
 
-Browsers publish host candidates as mDNS names (`<uuid>.local`) rather than
-raw IPs (Chrome M73+ experiment, https://groups.google.com/g/discuss-webrtc/c/4Yggl6ZzqZk/m/nV24XkXXAQAJ;
-WebKit's implementation in bug 174500). The peer resolves them with multicast
-DNS on the same network. This works on a normal home or club Wi-Fi and on a
-phone hotspot, and fails on networks with client isolation. Phase 0 tests
-exactly this on the captain's phones (§9 assumptions A1, A2).
+Host candidates are published as mDNS names (`<uuid>.local`) and resolved by
+the peer with multicast DNS on the same network (Chrome M73+,
+https://groups.google.com/g/discuss-webrtc/c/4Yggl6ZzqZk/m/nV24XkXXAQAJ;
+WebKit bug 174500). This works on a normal Wi-Fi and on a phone hotspot and
+fails on networks with client isolation (A2).
 
-No trickle ICE: both sides wait for gathering to complete so one QR carries
-everything. With no STUN servers configured, gathering on a LAN completes in
-well under a second; the 2 s timeout then shows whatever was gathered.
-
-### 4.3 SDP compaction
-
-A data-channel-only SDP from Safari or Chrome is 600 to 1 200 bytes, mostly
-boilerplate. QR capacity at version 40 is 2 953 bytes binary, but anything past
-about version 15 (~500 bytes) scans unreliably from another phone's screen.
-`compact()` keeps only what the peer needs and `expand()` rebuilds a valid SDP:
-
-```
-{ v:1, r:'o'|'a', u:<ice-ufrag>, p:<ice-pwd>, f:<dtls fingerprint sha-256 hex>,
-  s:'actpass'|'active'|'passive', c:[ '<ip-or-mdns> <port> udp <priority>', ... ],
-  m:<sctp-port>, x:<max-message-size> }
-```
-
-Encoded as a compact JSON string, base64url, typically 250 to 400 bytes (QR
-version 10 to 13, error-correction level L). Same idea as the `sdpmin` npm
-package; writing it by hand is ~80 lines and avoids a dependency with an
-opaque format. A unit test round-trips real SDPs captured from both phones in
-phase 0.
+No trickle ICE: both sides wait for gathering to complete so one descriptor
+carries everything. With no STUN servers configured, gathering on a LAN
+completes well under a second.
 
 ### 4.4 Message protocol (data channel)
 
-One ordered, reliable channel. Every message is a JSON object with `v` (protocol
-version, integer) and `t` (type). Unknown `t` is ignored; a `v` the receiver
-does not implement is answered with `bye` and surfaces R-PAIR-7.
+One ordered, reliable channel. Every message is a JSON object with `v`
+(protocol version) and `t` (type). Unknown `t` is ignored; an unsupported `v`
+is answered with `bye` and surfaces R-PAIR-7.
 
 ```ts
 type Role = 'scoreboard' | 'camera';
 type Msg =
-  | { v: 1; t: 'hello'; role: Role; deviceId: string; app: string;   // app = build id
-      matchId?: string; lastSeq?: number }
-  | { v: 1; t: 'ping'; id: number; t0: number }                      // sender's clock
+  | { v: 1; t: 'hello'; role: Role; deviceId: string; app: string; matchId?: string; lastSeq?: number }
+  | { v: 1; t: 'ping'; id: number; t0: number }
   | { v: 1; t: 'pong'; id: number; t0: number; t1: number; t2: number }
-  | { v: 1; t: 'event'; event: MatchEvent }                           // scoreboard -> camera
-  | { v: 1; t: 'sync'; matchId: string; config: MatchConfig;         // scoreboard -> camera
-      events: MatchEvent[]; part?: [index: number, count: number] }
+  | { v: 1; t: 'event'; event: MatchEvent }                                  // scoreboard -> camera
+  | { v: 1; t: 'sync'; matchId: string; config: MatchConfig; events: MatchEvent[];
+      part?: [index: number, count: number] }                                // scoreboard -> camera
   | { v: 1; t: 'rec'; state: 'idle' | 'recording' | 'stopping' | 'error';   // camera -> scoreboard
-      segment?: number; startedAt?: number; elapsedMs?: number;
-      bytes?: number; minutesLeft?: number; error?: string }
-  | { v: 1; t: 'cmd'; id: string; action: 'rec.start' | 'rec.stop' } // scoreboard -> camera (D11)
+      segment?: number; startedAt?: number; elapsedMs?: number; bytes?: number;
+      minutesLeft?: number; error?: string }
+  | { v: 1; t: 'cmd'; id: string; action: 'rec.start' | 'rec.stop' }        // scoreboard -> camera (D11)
   | { v: 1; t: 'ack'; id: string; ok: boolean; error?: string }
   | { v: 1; t: 'bye' };
 ```
@@ -295,33 +322,36 @@ Examples:
 {"v":1,"t":"rec","state":"recording","segment":1,"startedAt":1793099000456,"elapsedMs":754000,"bytes":565000000,"minutesLeft":26}
 ```
 
-Rules:
-
-- **Versioning.** `v` is bumped only for incompatible changes; additive
-  fields are allowed within a version. `hello.app` carries the build id so a
-  stale service-worker cache on one phone is diagnosed as "update the app"
+- **Versioning.** `v` is bumped only for incompatible changes; additive fields
+  are allowed within a version. `hello.app` carries the build id so a stale
+  service-worker cache on one phone is diagnosed as "update the app"
   (R-PAIR-7).
 - **Full-state resync.** On every channel open the scoreboard sends `sync`
-  with the entire log, regardless of `lastSeq` (a 3-game log is ~40 kB; not
-  worth a delta protocol). The camera replaces its mirror wholesale. Events
-  are deduplicated by `id`, so a `sync` arriving after live `event`s is
-  harmless (R-PAIR-4).
-- **Message size.** Keep every message under 16 kB; `sync` is split into
-  `part` chunks of ≤ 16 kB. MDN notes browsers accept at least 256 kB but the
-  SDP default `max-message-size` is 64 kB and large messages block the channel
+  with the entire log (a 3-game log is ~40 kB). The camera replaces its mirror
+  wholesale; events are deduplicated by `id` (R-PAIR-4).
+- **Message size.** Every message stays under 16 kB; `sync` is split into
+  `part` chunks. MDN notes browsers accept at least 256 kB but the SDP default
+  `max-message-size` is 64 kB and large messages block the channel
   (https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API/Using_data_channels).
-- **Liveness.** `ping` every 2 s from the scoreboard; 3 missed pongs → "link
-  lost" (6 s), 30 s → red. ICE `connectionState` changes are shown too.
-  Reconnection without re-signaling is left to ICE itself (it recovers from
-  short blips); an IP change needs a new handshake, which with (a) means
-  re-scan (ux-design.md E1).
+- **Liveness.** `ping` every 2 s from the scoreboard; 3 missed pongs → chip
+  "reconnecting" (6 s) and the reconnect procedure (§4.5 below). ICE
+  `connectionState` is watched too.
 - **Commands** (`cmd`/`ack`) are idempotent and carry an id so a retry after a
   blip cannot start two recordings.
 
-### 4.5 Clock offset
+### 4.5 Reconnect and clock offset
 
-Phones' wall clocks can differ by seconds. The camera phone maps scoreboard
-timestamps onto its own clock with NTP-style round trips:
+Reconnect (R-PAIR-8): when ICE reports `failed`, or pongs are missing for
+10 s, the camera phone creates a new offer with `iceRestart: true` on the same
+`RTCPeerConnection` and posts it with `gen + 1`; the scoreboard phone, which
+polls `offer?gen=N` every 2 s while the link is down, applies it, answers,
+and the camera polls the answer. If the connection object is unusable a fresh
+one is created. Backoff: 2 s for the first minute, then 5 s. When the helper
+is unreachable the chip says "offline" and polling continues at 5 s until it
+answers. Nothing is lost meanwhile (R-PAIR-3, R-PAIR-4).
+
+Clock offset (R-PAIR-5): the camera phone maps scoreboard timestamps onto its
+own clock with NTP-style round trips from the regular pings:
 
 ```
 offset_i = ((t1 - t0) + (t2 - t3)) / 2      // t0,t3 scoreboard; t1,t2 camera
@@ -329,24 +359,30 @@ rtt_i    = (t3 - t0) - (t2 - t1)
 offset   = median of the last 8 samples with rtt < 50 ms
 ```
 
-Samples come from the regular pings. On a LAN `rtt` is 2 to 20 ms, so the
-offset error is a few milliseconds, well inside R-PAIR-5. Events received live
-are also stamped with the camera's receive time as a cross-check; events that
-arrive by `sync` after a disconnect rely on the offset alone. The offset and
-sample count are stored in `match.json` so the Mac tool can see how trustworthy
-the times are.
+On a LAN `rtt` is 2 to 20 ms, so the offset error is a few milliseconds.
+Events received live are also stamped with the camera's receive time; events
+that arrive by `sync` after a drop rely on the offset alone. Offset and sample
+count go into `match.json`.
+
+### 4.6 Later fallback: offline two-QR handshake
+
+For courts without any internet: the camera shows its compacted offer as a
+QR, the scoreboard scans it and shows its compacted answer, the camera scans
+that. A data-channel-only description shrinks to 250 to 400 bytes (ICE
+credentials, DTLS fingerprint, candidates, SCTP port) which is a QR of
+version 10 to 13 at error-correction L. It costs a second scan and a manual
+re-pair after every drop, which is why it is not v1. The data-channel protocol
+is identical; only the transport of the descriptors differs.
 
 ## 5. Scoreboard phone specifics
 
-- **Speech.** `speechSynthesis` with an English voice by default (D5); phrases
-  are short, each utterance cancels the previous one so a fast rally never
-  queues stale scores. iOS and Android both ship speech synthesis (§9). The
-  click sound is a pre-decoded Web Audio buffer; the `AudioContext` is created
-  on the "Start match" tap (iOS autoplay rules).
+- **Speech.** `speechSynthesis` with an English voice by default (D5); each
+  utterance cancels the previous one so a fast rally never queues stale
+  scores. The click sound is a pre-decoded Web Audio buffer; the
+  `AudioContext` is created on the "Start match" tap (iOS autoplay rules).
 - **Wake Lock** requested on "Start match", re-requested on `visibilitychange`
-  (the lock is released whenever the page is hidden).
-- **Orientation.** `screen.orientation.lock('landscape')` in the installed
-  app on Android; iOS has no lock (§9), so a CSS `orientation: portrait` media
+  (R-DISP-8).
+- **Orientation.** iOS has no lock (§9); a CSS `orientation: portrait` media
   query swaps in the "rotate" screen (R-DISP-7).
 - **Touch handling** per ux-design.md §3 with Pointer Events; `touch-action:
   none` on the zones so the browser never interprets the swipe.
@@ -356,38 +392,64 @@ the times are.
 ### 6.1 Capture
 
 ```ts
-const stream = await navigator.mediaDevices.getUserMedia({
-  video: { facingMode: { ideal: 'environment' },
-           width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
-  audio: recordAudio ? { echoCancellation: false, noiseSuppression: false } : false, // D7
+const cam = await navigator.mediaDevices.getUserMedia({
+  video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
+  audio: recordAudio ? { echoCancellation: false, noiseSuppression: false } : false,   // D7
 });
 ```
 
 The phone must already be in landscape when the stream starts; iOS captures
-in the device orientation at that moment (assumption A6, phase 0).
+in the device orientation at that moment (A6).
 
-### 6.2 MediaRecorder
+### 6.2 Compositing (D9)
 
-Pick the first supported type, in this order, with `isTypeSupported`:
+```
+cam video track -> <video playsinline muted autoplay> (kept in the DOM, visually hidden)
+   |  video.requestVideoFrameCallback(frame => {
+   |     ctx.drawImage(video, 0, 0, W, H);           // W×H = 1920×1080 or 1280×720
+   |     drawOverlay(ctx, stateAt(now - delayMs), box, theme);
+   |     video.requestVideoFrameCallback(...);       // one draw per camera frame
+   |  })
+   v
+canvas (the visible preview, CSS-scaled) --captureStream(30)--> composited video track
+                                                     + cam audio track
+                                                     -> new MediaStream([video, audio])
+                                                     -> MediaRecorder -> worker -> OPFS (§6.4)
+```
 
-1. `video/mp4;codecs=avc1.42E01E,mp4a.40.2` (H.264 + AAC)
-2. `video/mp4`
-3. `video/webm;codecs=h264,opus` (Chrome, keeps H.264 for the Mac)
-4. `video/webm;codecs=vp9,opus`, then `video/webm`
+- One draw per delivered camera frame via `requestVideoFrameCallback` (Safari
+  15.4+, §9), not `requestAnimationFrame`, so output frames track camera
+  frames and the overlay is drawn exactly once per frame.
+- `drawOverlay` is a pure Canvas 2D function (`src/overlay/`): rounded box,
+  team colours, names, scores, shuttle marker, game count, flags, inside a
+  fixed `box` at the bottom-left (mirrored when the mirror toggle is on). It
+  cannot be HTML: a canvas cannot rasterise DOM, and SVG `foreignObject`
+  taints canvases on WebKit. The same function can run in node-canvas for a
+  later Mac re-render (R-BURN-2).
+- `stateAt(t)` reduces only events with `at + offset <= t`, which implements
+  the optional overlay delay (R-REC-4) with no frame buffering: the camera
+  frame is live, the score shown is from `delayMs` ago. Unpaired, nothing is
+  drawn.
+- Single encode: only the canvas stream is encoded. The cost is the per-frame
+  `drawImage` upload and the overlay draw, which is what A4/A13/A14 measure.
+- Known history: WebKit's `canvas.captureStream` produced black or single
+  frames on Safari 15.x (bugs 216832, 229611, §9). Those are old, but it is
+  why phase 0 runs the full 60-minute pipeline before any app code exists.
 
+### 6.3 MediaRecorder
+
+Pick the first supported type with `isTypeSupported`:
+`video/mp4;codecs=avc1.42E01E,mp4a.40.2`, then `video/mp4`.
 `videoBitsPerSecond` 6 000 000 for 1080p, 3 500 000 for 720p (D8);
 `start(1000)` for one-second chunks (R-REC-2).
 
-What the browsers actually produce (§9 for sources): Safari writes MP4 with
-H.264 and AAC and, since 18.4, fragmented MP4; Chrome writes WebM by default
-and MP4 since Chrome 126 with H.264 where the platform has an encoder
-(Android is listed). Both produce *fragmented* MP4 with `moov` first and a
-zero duration in the headers, so players show no length and no seek bar until
-the file is remuxed. The Mac tool (§7) always remuxes with
-`ffmpeg -c copy -movflags +faststart`, which also writes the duration. Whether
-a given Android phone offers MP4 with AAC is assumption A4.
+Safari writes MP4 with H.264 and AAC and, since 18.4, fragmented MP4 with
+`moov` first and a zero duration in the headers; QuickTime and Photos play
+it, some players show no length until it is remuxed (§9). A later
+`ffmpeg -c copy -movflags +faststart` fixes the duration; v1 does not require
+it (A3 confirms Photos playback).
 
-### 6.3 Writing to OPFS
+### 6.4 Writing to OPFS
 
 ```
 main thread                                   recording worker
@@ -398,52 +460,36 @@ MediaRecorder.ondataavailable(blob)
 on stop:  postMessage('close')               -->  flush(); close(); reply with size
 ```
 
-- The worker opens `matches/<matchId>/video-<n>.<ext>` with
-  `createSyncAccessHandle()`. This is the only OPFS write path on iOS before
-  Safari 26 (`createWritable` arrived in Safari 26, §9) and it keeps disk I/O
-  off the UI thread. On Safari 26+ and Chrome it is still the simplest path,
-  so there is one code path everywhere.
+- The worker opens `matches/<matchId>/video-<n>.mp4` with
+  `createSyncAccessHandle()`, the only OPFS write path on iOS before
+  Safari 26 (`createWritable` arrived in Safari 26, §9); it keeps disk I/O
+  off the thread that draws frames.
 - Each `write` is one second of video (~750 kB at 6 Mbit/s) and happens as
-  soon as the chunk arrives, so an app or tab crash loses under a second
-  (R-REC-2). `flush` every 5 s bounds what an OS-level crash could lose while
-  limiting fsync churn; phase 0 measures the real loss (A3).
-- A `QuotaExceededError` on write stops the recorder cleanly, closes the file,
-  and reports `rec.state = 'error'` with the reason (R-REC-3).
-- **IndexedDB fallback: recommend not building it (D10).** Every supported
-  browser has OPFS; the fallback would only serve private browsing, where
-  storage is wiped anyway.
+  soon as the chunk arrives, so an app crash loses under a second (R-REC-2).
+  `flush` every 5 s bounds what an OS-level crash could lose (A3).
+- `QuotaExceededError` on write stops the recorder cleanly, closes the file,
+  and reports `rec.state = 'error'` (R-REC-3). No IndexedDB fallback (D10).
 
-### 6.4 Storage estimate and persistence
+### 6.5 Storage estimate, persistence, wake lock, interruptions
 
 - `navigator.storage.estimate()` gives `usage` and `quota`; minutes left =
-  `(quota - usage) / bytesPerMinute`, shown on C1/C3 (R-REC-3). Safari may
-  report a reduced quota to limit fingerprinting, and the quota is an upper
-  bound, not a promise, so the write path must still handle
-  `QuotaExceededError` (WebKit, "Updates to Storage Policy").
+  `(quota - usage) / bytesPerMinute` (R-REC-3). Safari may under-report the
+  quota and it is an upper bound, so the write path still handles
+  `QuotaExceededError` (WebKit, "Updates to Storage Policy", §9).
 - `navigator.storage.persist()` is called once at first launch and the result
-  shown on C1. WebKit grants it by heuristics such as being an installed Home
-  Screen app; Chrome decides from engagement, no prompt (§9). Persisted
-  origins are skipped by LRU eviction.
-- Expect 1080p30 at 6 Mbit/s to use ~2.7 GB/hour. Free space, not the quota
-  (60 % of *total* disk), is the practical limit: 40 GB free is about 14 hours.
-
-### 6.5 Wake lock, backgrounding, interruptions
-
-- `navigator.wakeLock.request('screen')` on REC start; re-request when the
-  page becomes visible again. Installed iOS web apps need iOS 18.4+ for this
-  (§9); on older iOS run the camera role in a Safari tab.
+  shown on C1; WebKit grants it by heuristics such as being an installed Home
+  Screen app (§9).
+- 1080p30 at 6 Mbit/s uses ~2.7 GB/hour; free space is the practical limit.
+- `navigator.wakeLock.request('screen')` on REC start, re-requested on
+  visibility change; installed iOS web apps need iOS 18.4+ (§9).
 - iOS ends or mutes capture tracks when Safari is backgrounded for more than
   ~30 s, and a muted track cannot be unmuted from script (WebKit bugs 179363,
-  204681). A phone call or a screen lock has the same effect. The recorder
-  listens for `track.onended`, `track.onmute` and `recorder.onerror`; on any
-  of them it stops the recorder, closes the segment, and offers "Resume" which
-  calls `getUserMedia` again and opens segment `n+1` (R-REC-5). Segments are
-  never stitched on the phone.
-- The preview `<video>` is dimmed with CSS; the track keeps delivering frames.
-  Whether iOS keeps delivering full-rate frames to a mostly black screen is
-  assumption A7.
-- Recommend Do Not Disturb and a power bank in the C1 tips. Thermal
-  throttling at 1080p30 for 90 minutes is measured in phase 0 (N-POWER-1).
+  204681); a phone call or screen lock does the same, and a hidden page also
+  stops `requestVideoFrameCallback`. The recorder listens for `track.onended`,
+  `track.onmute`, `visibilitychange` and `recorder.onerror`; on any of them it
+  stops, closes the segment, and offers "Resume", which re-acquires the camera
+  and opens segment `n+1` (R-REC-5). Segments are never stitched on the phone.
+- The preview dims with CSS; the canvas keeps being drawn (A7).
 
 ### 6.6 Recording metadata (camera-local)
 
@@ -452,214 +498,207 @@ interface Segment {
   index: number; file: string; mimeType: string;
   width: number; height: number; fps: number;
   startedAt: number;          // camera wall clock at recorder 'start' event
-  startLatencyMs: number;     // calibrated in phase 0 (clap test), default 0
+  startLatencyMs: number;     // calibrated in phase 0 (A8), default 0
   endedAt: number | null; bytes: number;
   endReason: 'user' | 'interrupted' | 'quota' | 'error' | null;
+  overlay: { box: { x: number; y: number; w: number; h: number }; delayMs: number; mirrored: boolean; theme: string };
 }
 ```
 
-Stored as `matches/<matchId>/recording.json` and updated on every segment
-change.
+Stored as `matches/<matchId>/recording.json`, updated on every segment change.
 
 ### 6.7 Export
 
 - Build `match.json` (§8) from the mirrored log, `recording.json` and the
   clock offset; write it next to the video in OPFS.
-- `const files = [await videoHandle.getFile(), matchJsonFile]`; if
-  `navigator.canShare({ files })` then `navigator.share({ files, title })`
-  from the tap handler (transient activation is required), else an
-  `<a download>` per file using `URL.createObjectURL` (R-EXP-2).
-- A `File` from `getFile()` is disk-backed, so sharing a multi-GB video should
-  not load it into memory; whether iOS's share sheet handles a 2 GB file from
-  a web app, and offers "Save Video", is assumption A5.
+- `navigator.canShare({ files })` then `navigator.share({ files, title })`
+  from the tap handler; else `<a download>` per file via
+  `URL.createObjectURL` (R-EXP-2). A `File` from `getFile()` is disk-backed;
+  whether iOS's share sheet handles a 2 GB file from a web app and offers
+  "Save Video" is assumption A5.
 - Delete removes the OPFS directory and refreshes the usage figure (R-EXP-3).
 
-## 7. Burn-in options
+## 7. Overlay and later re-render
 
-| Path | Where | Cost | Quality | Use when |
-|---|---|---|---|---|
-| **A. Live canvas** | camera phone, while recording: draw frames + overlay on a canvas, `canvas.captureStream()` into MediaRecorder | continuous GPU/CPU work for the whole match; heat, battery; a second encode | re-encoded from a canvas, worse than the raw track; overlay animations easy | "share from the court" without a Mac (phase 4, R-BURN-3) |
-| **B. On-phone ffmpeg.wasm** | camera phone, after the match | software x264 at ~0.1 to 0.3× real time; needs the whole file in wasm memory (practical limit ~1 to 2 GB); multi-threading needs COOP/COEP headers on Vercel | fine | clips under a few minutes (later, if ever) |
-| **C. Mac-side (recommended, D9)** | Mac Studio: ffmpeg (installed), HTML overlay rendered by Puppeteer (the gods-eye-view exporter) | one HTML page, one script; hardware H.264 via `h264_videotoolbox` runs faster than real time | full quality; any design the HTML can draw | the default for every match |
-
-### 7.1 Mac-side pipeline (v1)
-
-1. **Remux** every segment: `ffmpeg -i video-1.mp4 -c copy -movflags +faststart seg-1.mp4`
-   (fixes the missing duration; WebM input from Android gets `-c:v copy` into
-   MKV or a transcode to H.264 here).
-2. **States → frames.** Walk `match.json` events and emit one overlay state
-   per change (score, server, game, interval, side mapping), with its
-   recording-relative start time. A 3-game match has 100 to 150 states.
-3. **Render** each state once with the HTML scoreboard template to a
-   transparent PNG at the video's resolution (Puppeteer screenshot with
-   `omitBackground`). ~150 screenshots take well under a minute.
-4. **Overlay track.** Write a concat list with per-image durations and build
-   one transparent overlay movie: `ffmpeg -f concat -safe 0 -i states.txt
-   -c:v prores_ks -profile:v 4444 -pix_fmt yuva444p10le overlay.mov`. One image per state, exact durations, no
-   per-frame rendering.
-5. **Composite:** `ffmpeg -i seg-1.mp4 -i overlay.mov -filter_complex overlay
-   -c:v h264_videotoolbox -b:v 12M -c:a copy out-1.mp4`.
-6. Multiple segments produce multiple outputs; concatenation is a user choice.
-
-Why not `drawtext` only (D9(b)): it works and has zero rendering
-dependencies, but a scoreboard that looks like a broadcast one needs shapes,
-colours and a font, which is what the HTML template is for. Why not a
-per-frame overlay render: the overlay changes ~150 times per match, not 30
-times per second.
-
-The same HTML template is used by the camera-phone preview (R-REC-4) and,
-later, by path A, so the look is defined once.
+- v1 burns the overlay live (§6.2). Consequences, stated plainly: a wrong tap
+  is in the video from the tap to the undo unless the overlay delay covers it;
+  the raw frames under the overlay box are gone; the look is fixed at
+  recording time.
+- `match.json` records the box, delay, mirroring and theme per segment, plus
+  every event with recording-relative time and derived state (§8). A later Mac
+  tool (R-BURN-2, roadmap.md Later) can therefore paint a new overlay in the
+  same box with `drawOverlay` in node-canvas and one ffmpeg `overlay` pass, to
+  change the look or fix a logged correction, but not to reveal what was under
+  the live overlay. A raw + composited dual recording (two MediaRecorders)
+  would allow that at double the encode and storage cost; also Later.
 
 ## 8. Export bundle
 
-Directory `match-<id>/` containing `video-1.<mp4|webm>` … `video-n` and
-`match.json`:
+Directory `match-<id>/` containing `video-1.mp4` … `video-n.mp4` and `match.json`:
 
 ```ts
 interface MatchBundle {
   format: 'badminton-scoreboard/match'; version: 1;
   matchId: string; createdAt: number; app: string;
   config: MatchConfig;
-  devices: { scoreboard: { id: string; ua: string }; camera: { id: string; ua: string } };
-  clock: { offsetMs: number; samples: number; medianRttMs: number };   // camera − scoreboard
-  recording: { mirrored: boolean; segments: Segment[] };               // §6.6; mirrored per R-REC-4
+  devices: { scoreboard: { id: string; ua: string }; camera?: { id: string; ua: string } };
+  clock?: { offsetMs: number; samples: number; medianRttMs: number };   // camera − scoreboard; absent in a scoreboard-only export
+  recording?: { segments: Segment[] };                                  // §6.6; absent in a scoreboard-only export
   events: Array<MatchEvent & {
-    tRec: { segment: number; ms: number } | null;   // null if no segment was recording
-    after: MatchState;                              // derived state after this event
-    leftOnCamera: Team;                             // after.leftTeam, flipped if mirrored
+    tRec: { segment: number; ms: number } | null;   // null if no segment was recording or no camera
+    after: MatchState;                              // derived state after this event, positions included
+    leftOnCamera: Team;                             // after.leftTeam, flipped if the segment is mirrored
   }>;
   result: { winner: Team | null; games: Record<Team, number>; completed: Array<Record<Team, number>> };
 }
 ```
 
 `after` and `leftOnCamera` are redundant with `events` + `config` (the log
-stays the source of truth) but let the Mac tool stay a renderer with no copy
-of the rules. `tRec.ms = (event.at + clock.offsetMs) − segment.startedAt −
-segment.startLatencyMs` (R-BURN-1).
+stays the source of truth) but let a later renderer stay a renderer.
+`tRec.ms = (event.at + clock.offsetMs) − segment.startedAt − segment.startLatencyMs`
+(R-BURN-1).
 
-## 9. Browser support matrix
+## 9. Browser support matrix (iPhone, D1)
 
-Minimum versions (N-BROWSER-1): **iOS 17** (Safari tab) / **iOS 18.4**
-(installed app), **Android Chrome 126**. BCD = MDN browser-compat-data,
-checked 2026-10-27 at https://github.com/mdn/browser-compat-data (files under
-`api/`).
+Minimum versions (N-BROWSER-1): **iOS 17** (Safari tab), **iOS 18.4**
+(installed Home Screen app); iPhone 13 and newer all run the current iOS.
+BCD = MDN browser-compat-data, checked 2026-10-27/28 at
+https://github.com/mdn/browser-compat-data (files under `api/`).
 
-| API | iOS Safari | Android Chrome | Notes | Source |
-|---|---|---|---|---|
-| OPFS `navigator.storage.getDirectory()` | 15.2 | 109 | | BCD `StorageManager.json` |
-| `FileSystemFileHandle.createSyncAccessHandle()` | 15.2 | 109 | Dedicated workers only; `mode` option Chrome 121+, not Safari | BCD `FileSystemFileHandle.json`; https://developer.mozilla.org/en-US/docs/Web/API/FileSystemFileHandle/createSyncAccessHandle |
-| `FileSystemFileHandle.createWritable()` | 26 | 109 | Not usable as the only path on iOS 17/18 | BCD `FileSystemFileHandle.json` |
-| `navigator.storage.estimate()` | 17 | 61 | Safari may under-report quota | BCD `StorageManager.json`; https://webkit.org/blog/14403/updates-to-storage-policy/ |
-| `navigator.storage.persist()` | 15.2 | 55 | Granted by heuristics, no prompt; WebKit counts Home Screen apps | BCD; WebKit 14403; https://developer.mozilla.org/en-US/docs/Web/API/Storage_API/Storage_quotas_and_eviction_criteria |
-| Origin quota | ~60 % of total disk (Safari 17+), 80 % overall; same for Home Screen apps; no prompt; LRU whole-origin eviction | ~60 % per origin, 80 % overall, LRU eviction of best-effort origins | Before Safari 17: 1 GiB then a prompt | WebKit 14403; MDN quotas page; https://web.dev/articles/storage-for-the-web |
-| 7-day storage deletion (ITP) | Script-written storage deleted after 7 days of Safari use without interaction; Home Screen apps have their own counter and are not expected to lose data | n/a | Install to the Home Screen | https://webkit.org/blog/10218/full-third-party-cookie-blocking-and-more/ |
-| `MediaRecorder` | 14.1 (iOS 14) | 47 | | BCD `MediaRecorder.json` |
-| MediaRecorder containers | MP4 H.264 + AAC from the start; 18.4 adds WebM (VP8/VP9 + Opus), fragmented MP4, HEVC, AV1 | WebM (VP8/VP9/AV1/H.264 + Opus); MP4 since 126 (VP9/AV1/H.264/H.265 + Opus/AAC); H.26x platform encoding on Windows, macOS, Android | Both emit fragmented MP4 with zero duration; remux on the Mac | https://webkit.org/blog/11353/mediarecorder-api/; https://webkit.org/blog/16574/webkit-features-in-safari-18-4/; https://chromium.googlesource.com/chromium/src/media/+/refs/heads/main/muxers/README.md; https://groups.google.com/a/chromium.org/g/blink-dev/c/YJ1QijNiHeM; https://blog.addpipe.com/duration-in-mp4-files-produced-by-chrome-safari/ |
-| `getUserMedia` | 11 | 47 | In installed iOS web apps: fixed in iOS 13.4 (bug 185448) but a camera-in-standalone failure was reported on iOS 17.4.1 to 17.6.1 and said to be gone on iOS 18 (bug 273938, still open) | BCD `Navigator.json`; https://bugs.webkit.org/show_bug.cgi?id=185448; https://bugs.webkit.org/show_bug.cgi?id=273938 |
-| Capture ends when backgrounded | Tracks end/mute after ~30 s in background; cannot unmute from script | Similar on screen lock | Segment resume (§6.5) | https://bugs.webkit.org/show_bug.cgi?id=179363; https://bugs.webkit.org/show_bug.cgi?id=204681 |
-| WebRTC data channel | yes | yes | Host candidates only after capture permission (WebKit); mDNS `.local` candidates | https://webkit.org/blog/7763/a-closer-look-into-webrtc/; https://bugs.webkit.org/show_bug.cgi?id=174500 |
-| Screen Wake Lock | 16.4 in Safari; **18.4 in Home Screen apps** | 84 | Released when the page is hidden | BCD `WakeLock.json`, `Navigator.json`; https://bugs.webkit.org/show_bug.cgi?id=254545 |
-| Web Share with files | 14 (`canShare`/`share` files) | 76 | Needs a user gesture; check `canShare` first | BCD `Navigator.json`; https://developer.mozilla.org/en-US/docs/Web/API/Navigator/share |
-| Vibration | **no** | 32 | Haptics only on Android | BCD `Navigator.json` |
-| `screen.orientation.lock()` | **no** | 38 | Android: installed/fullscreen only | BCD `ScreenOrientation.json` |
-| `BarcodeDetector` | 17, **behind a default-off preference** | 83 | Use `zxing-wasm` on iOS | BCD `BarcodeDetector.json` |
-| `speechSynthesis` | 7 | 33 | Voice list differs per device | BCD `SpeechSynthesis.json` |
-| `navigator.userActivation` | 16.4 | 72 | For share/audio gating | BCD `Navigator.json` |
-| Home Screen install | Any site, iOS 26 opens it as a web app by default | Chrome install prompt via manifest | | https://webkit.org/blog/17333/webkit-features-in-safari-26-0/ |
+| API | iOS Safari | Notes | Source |
+|---|---|---|---|
+| `getUserMedia` | 11 | In installed web apps: fixed in iOS 13.4 (bug 185448); a camera-in-standalone failure was reported on iOS 17.4.1 to 17.6.1 and said to be gone on iOS 18 (bug 273938, still open) | BCD `Navigator.json`; https://bugs.webkit.org/show_bug.cgi?id=185448; https://bugs.webkit.org/show_bug.cgi?id=273938 |
+| `HTMLVideoElement.requestVideoFrameCallback` | 15.4 | One callback per delivered camera frame | BCD `HTMLVideoElement.json` |
+| `HTMLCanvasElement.captureStream` | 11 | Black/single-frame output reported on Safari 15.x (bugs 216832, 229611); verify on current iOS (A14) | BCD `HTMLCanvasElement.json`; https://bugs.webkit.org/show_bug.cgi?id=216832; https://bugs.webkit.org/show_bug.cgi?id=229611 |
+| `MediaRecorder` | 14 (Safari 14.1) | MP4 H.264 + AAC from the start; 18.4 adds fragmented MP4 (also WebM, HEVC, AV1); zero duration in headers | BCD `MediaRecorder.json`; https://webkit.org/blog/11353/mediarecorder-api/; https://webkit.org/blog/16574/webkit-features-in-safari-18-4/; https://blog.addpipe.com/duration-in-mp4-files-produced-by-chrome-safari/ |
+| Capture ends when backgrounded | Tracks end/mute after ~30 s in background; cannot unmute from script | Segment resume (§6.5) | https://bugs.webkit.org/show_bug.cgi?id=179363; https://bugs.webkit.org/show_bug.cgi?id=204681 |
+| OPFS `navigator.storage.getDirectory()` | 15.2 | | BCD `StorageManager.json` |
+| `FileSystemFileHandle.createSyncAccessHandle()` | 15.2 | Dedicated workers only | BCD `FileSystemFileHandle.json`; https://developer.mozilla.org/en-US/docs/Web/API/FileSystemFileHandle/createSyncAccessHandle |
+| `FileSystemFileHandle.createWritable()` | 26 | Not usable as the only path on iOS 17/18 | BCD `FileSystemFileHandle.json` |
+| `navigator.storage.estimate()` | 17 | Safari may under-report quota | BCD `StorageManager.json`; https://webkit.org/blog/14403/updates-to-storage-policy/ |
+| `navigator.storage.persist()` | 15.2 | Granted by heuristics, no prompt; installed Home Screen app counts | BCD; WebKit 14403; https://developer.mozilla.org/en-US/docs/Web/API/Storage_API/Storage_quotas_and_eviction_criteria |
+| Origin quota | ~60 % of total disk (Safari 17+), 80 % overall; same for Home Screen apps; no prompt; LRU whole-origin eviction | Before Safari 17: 1 GiB then a prompt | WebKit 14403; MDN quotas page; https://web.dev/articles/storage-for-the-web |
+| 7-day storage deletion (ITP) | Script-written storage deleted after 7 days of Safari use without interaction; Home Screen apps have their own counter and are not expected to lose data | Install to the Home Screen | https://webkit.org/blog/10218/full-third-party-cookie-blocking-and-more/ |
+| WebRTC data channel | yes | Host candidates only after capture permission; mDNS `.local` candidates | https://webkit.org/blog/7763/a-closer-look-into-webrtc/; https://bugs.webkit.org/show_bug.cgi?id=174500 |
+| Screen Wake Lock | 16.4 in Safari; **18.4 in Home Screen apps** | Released when the page is hidden | BCD `WakeLock.json`, `Navigator.json`; https://bugs.webkit.org/show_bug.cgi?id=254545 |
+| Web Share with files | 14 | Needs a user gesture; check `canShare` first | BCD `Navigator.json`; https://developer.mozilla.org/en-US/docs/Web/API/Navigator/share |
+| Vibration | **no** | No haptics | BCD `Navigator.json` |
+| `screen.orientation.lock()` | **no** | Rotate prompt instead | BCD `ScreenOrientation.json` |
+| `BarcodeDetector` | 17, **behind a default-off preference** | Use `zxing-wasm` | BCD `BarcodeDetector.json` |
+| `speechSynthesis` | 7 | Voice list differs per device | BCD `SpeechSynthesis.json` |
+| `navigator.userActivation` | 16.4 | For share/audio gating | BCD `Navigator.json` |
+| Home Screen install | Any site; iOS 26 opens it as a web app by default | | https://webkit.org/blog/17333/webkit-features-in-safari-26-0/ |
 
-### Assumptions to test on the captain's phones (phase 0)
+Android Chrome 126+ has every API above (OPFS 109, Wake Lock 84, MP4
+recording 126, Vibration 32, orientation lock 38, BarcodeDetector 83; BCD) and
+is untested; see roadmap.md Later.
 
-- **A1** Two phones on the same Wi-Fi connect over mDNS host candidates with
-  no STUN server, in Safari and Chrome, after both have camera permission.
-- **A2** The same works on a phone hotspot (one phone hosting, one joining),
-  with the host phone in either role. Also: does iOS show a "Local Network"
-  permission prompt, and does the connection survive it?
-- **A3** Safari's 1-second MediaRecorder chunks, appended byte-for-byte,
-  form a file that ffmpeg remuxes cleanly, on the actual iOS version. The
-  addpipe test and WebKit's 18.4 notes say fragmented MP4; confirm on-device.
-- **A4** Which `isTypeSupported` strings the Android phone accepts, and whether
-  its MP4 includes AAC audio.
-- **A5** `navigator.share` with a 2 GB file from OPFS on iOS: completes, and
-  the sheet offers "Save Video" and AirDrop.
+### Assumptions to test on the captain's iPhones (phase 0)
+
+- **A1** After pairing through the helper, a later ICE gathering (reconnect)
+  still yields host candidates once the scoreboard's viewfinder track has been
+  stopped; if not, reopening a camera track during reconnect fixes it.
+- **A2** Two phones connect over mDNS host candidates with no STUN on the
+  same Wi-Fi and on a phone hotspot (host phone in either role); whether iOS
+  shows a "Local Network" prompt and the connection survives it.
+- **A3** Safari's 1-second MediaRecorder chunks, appended byte-for-byte, form
+  a file that Photos plays and ffmpeg remuxes cleanly, on the actual iOS
+  version.
+- **A4** Sustained compositing: `requestVideoFrameCallback` → `drawImage` →
+  overlay → `captureStream(30)` + mic → MediaRecorder for 60 minutes at
+  1080p30 and at 720p30: average fps, longest gap, temperature, battery (plugged
+  and unplugged), thermal throttling (R-REC-8).
+- **A5** `navigator.share` with a 2 GB file from OPFS: completes, and the
+  sheet offers "Save Video" and AirDrop.
 - **A6** Capture orientation: stream started in landscape stays landscape;
   what happens if the phone is rotated after start.
-- **A7** A dimmed preview does not reduce the captured frame rate.
+- **A7** A CSS-dimmed canvas keeps being drawn and captured at full rate.
 - **A8** Recorder start latency (`start()` to first encoded frame) measured
   with a clap, to fill `startLatencyMs`.
-- **A9** `speechSynthesis` on iOS: audible with the silent switch on? Thai
-  voice present? Loud enough at 3 m in a gym?
-- **A10** Battery and temperature after 60 minutes: scoreboard phone with
-  screen on; camera phone at 1080p30 unplugged and plugged.
+- **A9** `speechSynthesis`: audible with the silent switch on? Thai voice
+  present? Loud enough at 3 m in a gym?
+- **A10** Scoreboard phone battery after 60 minutes with the screen on.
 - **A11** Installed Home Screen app on the actual iOS version: camera works
   in standalone mode (bug 273938), Wake Lock holds, `persist()` granted.
-- **A12** `estimate().quota` values on both phones, and how Safari reports it
-  for an installed app.
+- **A12** `estimate().quota` values and how Safari reports them for an
+  installed app.
+- **A13** Audio/video drift between the canvas track and the microphone track
+  after 60 minutes (clap at the end, inspected in a video editor).
+- **A14** `canvas.captureStream` + MediaRecorder on current iOS produces a
+  valid, continuous MP4 (no black or frozen frames) with and without timeslice.
 
 ## 10. Deployment on Vercel
 
-- Framework preset: Vite; build `pnpm build`; output `dist/` (set
-  `outputDirectory` only if the preset misses it;
-  https://vercel.com/docs/project-configuration/vercel-json). Every
+- Framework preset: Vite; build `pnpm build`; output `dist/`
+  (https://vercel.com/docs/project-configuration/vercel-json). Every
   deployment is HTTPS, which `getUserMedia`, OPFS and service workers require.
-- `vercel.json` headers: the service worker and `index.html` must not be
-  cached (`Cache-Control: public, max-age=0, must-revalidate`); Vite's hashed
-  `assets/*` get `public, max-age=31536000, immutable`. Syntax per the Vercel
-  docs example (`headers[].source`, `headers[].headers[].{key,value}`).
-- No COOP/COEP headers in v1; they are only needed if ffmpeg.wasm threads
-  (path B) are ever added, and they would break nothing else here.
-- PWA: manifest with `display: standalone`, `orientation: landscape`
-  (honoured by Android, ignored by iOS), icons; Workbox precache of the shell;
-  update flow `prompt` (never auto-reload while a match or recording is live).
-- Preview deployments give an HTTPS URL per branch for phone testing without
-  any local setup; that is the default way to test a build on both phones.
+- `api/signal.ts` deploys as one function (§2). Install a Redis integration
+  from the Marketplace on the project; redeploy after the environment
+  variables appear.
+- `vercel.json`: a rewrite from `/api/signal/:path*` to `/api/signal`; headers
+  so the service worker and `index.html` are never cached
+  (`Cache-Control: public, max-age=0, must-revalidate`) and Vite's hashed
+  `assets/*` are `public, max-age=31536000, immutable` (syntax per the Vercel
+  docs example: `headers[].source`, `headers[].headers[].{key,value}`).
+- No COOP/COEP headers; nothing here needs cross-origin isolation.
+- PWA: manifest with `display: standalone`, icons; Workbox precache of the
+  shell; update flow `prompt` (never auto-reload while a match or recording is
+  live).
+- Preview deployments give an HTTPS URL per branch, with the function and the
+  store, for phone testing without local setup.
 
 ## 11. Local development
 
-- `pnpm dev --host` serves on the LAN, but a LAN IP is not a secure context:
-  camera, OPFS sync handles and the service worker refuse to run.
-- **Recommended:** Tailscale Serve. The Mac Studio is already on a tailnet;
-  `tailscale serve 5173` publishes `https://<mac>.<tailnet>.ts.net` with a
-  valid certificate to every device on the tailnet
-  (https://tailscale.com/kb/1312/serve; HTTPS certificates must be enabled on
-  the tailnet). Both phones need the Tailscale app signed in. WebRTC still
-  connects over the LAN (host candidates) regardless of how the page was
-  loaded.
-- **Alternative:** `mkcert` with its root certificate installed and trusted on
-  both phones, plus Vite's `server.https`. More fiddly on iOS (profile install,
-  then "Certificate Trust Settings").
-- Two-phone protocol work without two phones: desktop Chrome can take the
-  scoreboard role against one phone, and two Chrome tabs can pair with each
-  other for engine/protocol debugging.
-- Phase 0 uses a throwaway HTML page served the same way.
+- `vercel dev` runs the Vite dev server and the function together; with
+  `SIGNAL_STORE=memory` the helper needs no Redis (§4.2). `vercel env pull`
+  fetches the Marketplace variables when the real store is wanted.
+- A LAN IP is not a secure context: camera, OPFS sync handles and the service
+  worker refuse to run. **Recommended:** Tailscale Serve. The Mac Studio is
+  already on a tailnet; `tailscale serve 3000` publishes
+  `https://<mac>.<tailnet>.ts.net` with a valid certificate to every device on
+  the tailnet (https://tailscale.com/kb/1312/serve; HTTPS certificates must be
+  enabled on the tailnet). Both phones need the Tailscale app signed in. The
+  WebRTC connection still runs over the LAN. **Alternative:** `mkcert` with its
+  root certificate trusted on both phones.
+- Two Chrome tabs on the Mac can pair with each other through the local helper
+  for engine and protocol debugging; one phone plus desktop Chrome covers most
+  of the rest. Phase 0 uses throwaway pages served the same way.
 
 ## 12. Testing strategy
 
-- **Engine (Vitest):** table-driven rule tests (deuce, cap, interval trigger,
-  side changes incl. deciding game at 11, server after game, game/match point
-  flags) for 11/15/21-point formats; property tests: replay determinism,
-  undo/redo identity, no state outside invariants after random event streams.
-- **Protocol:** guards accept every example in §4.4 and reject malformed
-  input; SDP compaction round-trips captured SDPs; clock-offset maths with
-  synthetic jitter; `sync` chunk reassembly.
+- **Engine (Vitest):** table-driven rule tests for 11/15/21 points and the
+  three formats: deuce, cap, interval trigger, side changes (deciding game and
+  fixed-1 at 11, none in fixed 2), the fixed-2 draw and its absent match
+  point, server after a game, the R-SCORE-3 doubles sequence, server/receiver
+  choice at a game start, `courts.swap`, `correct` in doubles; property tests:
+  replay determinism, undo/redo identity, invariants after random event
+  streams. The mockup's engine is the first-cut reference.
+- **Protocol and helper:** guards accept every example in §4.4 and reject
+  malformed input; clock-offset maths with synthetic jitter; `sync` chunk
+  reassembly; the helper against the in-memory store: room one-shot, TTLs,
+  secret check, generation ordering, rate limit.
 - **Recording worker:** unit test with a fake handle (append order, flush,
   quota error path).
-- **Device checklist:** the A1 to A12 list in §9, then per phase the
-  acceptance criteria in requirements.md, run on the real phones. A 60-minute
-  soak (recording + pings) is part of phase 2's definition of done.
-- **Playwright (later):** two Chromium contexts pairing through a test-only
-  copy/paste signaling path, exercising sync and reconnect.
+- **Device checklist:** A1 to A14 in §9, then per phase the acceptance
+  criteria in requirements.md, on the real phones. The 60-minute soak is part
+  of phase 0 and again of phase 2's definition of done.
+- **Playwright (later):** two Chromium contexts pairing through the local
+  helper, exercising sync and reconnect.
 
 ## 13. Risks and mitigations
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| LAN WebRTC fails (mDNS blocked, hotspot quirks, iOS local-network prompt) | medium | pairing impossible on some courts | Phase 0 test A1/A2 first; keep D13 (STUN) as the switch; the scoreboard still works alone |
-| Safari MP4 chunks not remuxable on the actual iOS version | low | export unusable | A3 in phase 0; fallback is a single `dataavailable` at stop (loses crash safety) |
+| Canvas compositing drops frames or overheats the phone over an hour | medium | unusable recordings | Phase 0 runs the full pipeline first; 720p default if needed; power bank; D9 revisited only on a double fail |
+| `canvas.captureStream` instability on the actual iOS (history of WebKit bugs) | low-medium | black or frozen video | A14 in phase 0; segment restart on detected stalls (frame counter watchdog) |
+| Audio/video drift between canvas and mic tracks | medium | lip-sync off at the end | A13 measured; if present, record at 720p or restart segments hourly |
+| LAN WebRTC fails (mDNS blocked, hotspot quirks, iOS local-network prompt, host candidates withheld on reconnect) | medium | no live overlay | A1/A2 first; keep the viewfinder track alive through pairing; D13 (STUN) as the switch; each phone still works alone |
+| No internet on the court | medium | no pairing, clean video without overlay | Stated in the UI; scoreboard exports its log; two-QR fallback under Later |
+| Wrong tap burned into the video | high | visible mistake | One-tap undo, 800 ms refractory, overlay delay setting (R-REC-4) |
 | Camera stops in installed iOS app (bug 273938) | low-medium | no recording | Run the camera role in a Safari tab on that iOS version; A11 |
 | Storage evicted before export | low (persisted, installed) | lost match | `persist()`, install prompt, "export today" nudge, show usage |
-| QR too dense to scan between phones | low | pairing friction | Compaction keeps QR ≤ version 13; QR level L; big on-screen rendering; "start over" |
-| Accidental taps on a wet screen | high | wrong score | Touch guards (R-DISP-6), one-tap Undo, redo |
-| Phone overheats or dies mid-match | medium | lost video | Power bank advice, 720p option, measured in A10 |
+| Room code guessed while live | very low | a stranger pairs | 10-minute one-shot codes, per-IP rate limit, secret in the QR path |
+| Helper down or store misconfigured | low | cannot pair | Clear error with the reason; the phones still work alone |
+| Phone overheats or dies mid-match | medium | lost video | Power bank advice, 720p option, measured in A4 |
 | Audio too quiet in a gym | medium | feature unused | Short phrases; Bluetooth speaker works with no code change |
-| Browser update changes recorder output | low | Mac tool breaks | Mac tool probes with ffprobe and remuxes; record `ua` in the bundle |
 | Service worker serves a stale build on one phone | medium | version mismatch | `hello.app` check, update prompt (R-PAIR-7) |

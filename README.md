@@ -2,24 +2,31 @@
 
 A browser-only app for filming casual badminton matches with a live scoreboard.
 
-Two phones pair peer-to-peer over the local network: one at the back corner of
-the court records video to its own storage (OPFS), the other sits at the net
-post as a large tappable scoreboard that applies badminton scoring rules and
-speaks the score. Every point is logged with its time on the recording so the
-scoreboard can be burned into the video afterwards on a Mac, or live later.
+Two iPhones pair through a tiny helper and then talk directly over the local
+network: one at the back corner of the court records video with the score
+composited into every frame and keeps it in its own storage (OPFS); the other
+sits at the net post as a large tappable scoreboard that applies badminton
+scoring rules, including who serves from where in doubles, and speaks the
+score. Every point is logged with its time on the recording, so the finished
+clip is on the phone when the match ends and the overlay can still be
+re-rendered later if wanted.
 
-Status: design phase. No application code yet; the captain reviews the docs
-before implementation starts. Hosting target: Vercel (static PWA, no backend).
+Status: design phase. No application code yet; the captain has answered the
+design decisions and reviews the docs and the rough UI mockup before
+implementation starts. Hosting target: Vercel (static PWA plus one signaling
+function).
 
 ## Docs
 
-- [docs/requirements.md](docs/requirements.md): decisions needed, goals,
+- [docs/requirements.md](docs/requirements.md): recorded decisions, goals,
   scenario, functional and non-functional requirements with ids, out of scope.
 - [docs/ux-design.md](docs/ux-design.md): screens and wireframes for both
   roles, flows, touch handling, feedback, design rationale.
+- [docs/mockup/index.html](docs/mockup/index.html): rough tappable UI, one
+  self-contained file; open it in Safari in landscape.
 - [docs/technical-design.md](docs/technical-design.md): architecture, stack,
-  pairing and protocol, score engine and event log, recording pipeline,
-  burn-in options, export bundle, browser support matrix with sources,
+  signaling helper and protocol, score engine and event log, compositing and
+  recording pipeline, export bundle, browser support matrix with sources,
   deployment, local development, testing, risks.
 - [docs/roadmap.md](docs/roadmap.md): phased plan with a definition of done
   per phase, and the follow-ups kept out of v1.

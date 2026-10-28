@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0b0d10">
+<title>Badminton scoreboard - UI mockup</title>
+<style>
+/* Rough mockup: dark, big type, team colours. No polish on purpose. */
+:root{--bg:#0b0d10;--fg:#f2f4f7;--mut:#8a94a6;--line:#232a35;--pan:#141922;--amber:#ffb020;--red:#ff4d4d;--ok:#3ddc84}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:-apple-system,system-ui,"Segoe UI",sans-serif;overflow:hidden;user-select:none;-webkit-user-select:none;touch-action:manipulation}
+button{font:inherit;color:inherit;background:#2a3342;border:0;border-radius:10px;padding:10px 14px;min-height:44px}
+button.pri{background:#3b82f6}button.ghost{background:transparent;border:1px solid var(--line)}
+button:active{filter:brightness(1.3)}
+input{font:inherit;color:inherit;background:#0f141b;border:1px solid var(--line);border-radius:8px;padding:8px 10px;width:100%;min-height:44px}
+#nav{position:fixed;top:0;left:0;right:0;height:28px;display:flex;gap:6px;padding:3px 8px;background:#161b22;z-index:60;font-size:11px;align-items:center}
+#nav span{color:var(--mut);margin-right:4px}
+#nav button{background:#232a35;color:var(--mut);border-radius:6px;padding:0 8px;min-height:22px;font-size:11px}
+#nav button.on{background:#3a4556;color:var(--fg)}
+.screen{position:absolute;top:28px;left:0;right:0;bottom:0;display:none;flex-direction:column;padding:8px max(10px,env(safe-area-inset-right)) max(8px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-left))}
+.screen.on{display:flex}
+#s1,#c1{overflow-y:auto;-webkit-overflow-scrolling:touch;touch-action:pan-y}
+h2{margin:0 0 6px;font-size:16px;font-weight:600;color:var(--mut)}
+.row{display:flex;gap:10px;align-items:center;margin:4px 0;flex-wrap:wrap}
+.col{display:flex;flex-direction:column;gap:6px;flex:1;min-width:0}
+.lab{font-size:12px;color:var(--mut);min-width:84px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.seg button{border-radius:0;background:transparent;min-height:40px;padding:6px 12px}
+.seg button.on{background:#3b82f6}
+.sw{width:34px;height:34px;border-radius:50%;border:3px solid transparent;padding:0;min-height:0}
+.sw.on{border-color:#fff}
+.hint{font-size:12px;color:var(--mut)}
+/* S3 scoreboard */
+#s3{padding:0}
+#top{height:56px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;font-size:14px;color:var(--mut);border-bottom:1px solid var(--line)}
+#top b{color:var(--fg)}
+.chip{padding:4px 10px;border-radius:999px;background:#1f2631;font-size:12px}
+.chip.rec b{color:var(--red)}
+#zones{flex:1;display:flex;position:relative}
+.zone{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;position:relative;transition:background .25s;padding:0 24px}
+.zone.flash{transition:none}
+.zone .nm{font-size:22px;font-weight:600;letter-spacing:.5px}
+.zone .sc{font-size:min(38vh,34vw);line-height:.9;font-weight:800;font-variant-numeric:tabular-nums}
+.zone .fl{height:26px;font-size:18px;font-weight:700;letter-spacing:2px;color:var(--amber)}
+.court{display:flex;flex-direction:column;gap:3px;width:150px;margin-top:4px}
+.cell{display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13px;color:var(--mut);min-height:30px}
+.cell small{font-size:10px;opacity:.7;width:12px}
+.cell.srv{border-color:currentColor;color:var(--fg);font-weight:600}
+.cell.rcv{border-style:dashed;color:#cbd2dc}
+#mid{position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--line)}
+#band{height:72px;display:flex;align-items:center;justify-content:center;border-top:1px solid var(--line)}
+#undo{width:160px;height:56px;font-size:18px;border-radius:28px}
+.ov{position:absolute;inset:0;background:rgba(5,7,10,.93);display:none;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;padding:16px;z-index:20}
+.ov.on{display:flex}
+.ov .big{font-size:44px;font-weight:800}
+.ov .med{font-size:22px}
+.ov .mut{color:var(--mut)}
+.sheet{background:var(--pan);border:1px solid var(--line);border-radius:14px;padding:14px 16px;width:min(560px,96vw)}
+.step{display:inline-flex;align-items:center;gap:6px}
+.step b{font-size:28px;width:44px;text-align:center}
+.step button{width:44px;padding:0}
+#menu .sheet button{display:block;width:100%;text-align:left;margin:4px 0;background:#1f2631}
+/* camera */
+.cam{flex:1;position:relative;border-radius:12px;overflow:hidden;background:#182028;border:1px solid var(--line)}
+.courtbg{position:absolute;inset:0;background:linear-gradient(#1d2a33,#15202a)}
+.courtbg i{position:absolute;border:2px solid rgba(255,255,255,.35)}
+.net{position:absolute;left:50%;top:18%;bottom:14%;width:3px;background:rgba(255,255,255,.55)}
+.ovl{position:absolute;left:16px;bottom:16px;display:flex;align-items:stretch;border-radius:8px;overflow:hidden;font-weight:700;box-shadow:0 2px 8px rgba(0,0,0,.5)}
+.ovl div{padding:6px 12px;font-size:22px;display:flex;align-items:center;gap:8px;background:#111;color:#fff}
+.ovl .t{min-width:110px;font-size:18px}
+.ovl .g{font-size:14px;color:#ccc;background:#222}
+.ovl .sv{font-size:14px}
+.camtop{display:flex;justify-content:space-between;align-items:center;height:40px;font-size:14px;color:var(--mut)}
+.recbtn{width:84px;height:84px;border-radius:50%;background:#fff;border:6px solid #444;padding:0;min-height:0}
+.recbtn.on{background:var(--red)}
+.rot{display:none;position:fixed;inset:0;background:var(--bg);z-index:100;align-items:center;justify-content:center;font-size:24px}
+@media (orientation:portrait) and (max-width:700px){.rot{display:flex}}
+</style>
+</head>
+<body>
+<div id="nav"><span>mockup:</span><button data-go="s1">S1 setup</button><button data-go="s3">S3 scoreboard</button><button data-go="c1">C1 camera</button><button data-go="c3">C3 REC</button><span style="margin-left:auto">tap = point · long-press = correct · swipe down = undo</span></div>
+
+<section id="s1" class="screen">
+  <div class="row"><h2 style="flex:1">Match setup</h2><button class="ghost" id="same">Same as last</button><button class="pri" id="start">START MATCH</button></div>
+  <div class="row" style="align-items:flex-start">
+    <div class="col sheet" data-team="A"><div class="hint">LEFT of this screen</div>
+      <div class="row"><span class="lab">Team</span><input data-k="name" value="A" placeholder="Team A"></div>
+      <div class="row"><span class="lab">Colour</span><span data-k="color"></span></div>
+      <div class="row dbl"><span class="lab">Player 1</span><input data-k="p0" value="Nok"></div>
+      <div class="row dbl"><span class="lab">Player 2</span><input data-k="p1" value="Pae"></div>
+      <div class="row dbl"><span class="lab">Starts right court</span><span class="seg" data-k="right"><button data-v="0">Player 1</button><button data-v="1">Player 2</button></span></div>
+    </div>
+    <div class="col sheet" data-team="B"><div class="hint">RIGHT of this screen</div>
+      <div class="row"><span class="lab">Team</span><input data-k="name" value="B" placeholder="Team B"></div>
+      <div class="row"><span class="lab">Colour</span><span data-k="color"></span></div>
+      <div class="row dbl"><span class="lab">Player 1</span><input data-k="p0" value="Bank"></div>
+      <div class="row dbl"><span class="lab">Player 2</span><input data-k="p1" value="Tao"></div>
+      <div class="row dbl"><span class="lab">Starts right court</span><span class="seg" data-k="right"><button data-v="0">Player 1</button><button data-v="1">Player 2</button></span></div>
+    </div>
+  </div>
+  <div class="row">
+    <span class="lab">Players</span><span class="seg" data-k="doubles"><button data-v="0">Singles</button><button data-v="1">Doubles</button></span>
+    <span class="lab">Points</span><span class="seg" data-k="pts"><button data-v="11">11</button><button data-v="15">15</button><button data-v="21">21</button></span>
+    <span class="lab">Format</span><span class="seg" data-k="format"><button data-v="bestOf3">Best of 3</button><button data-v="fixed2">Fixed 2</button><button data-v="fixed1">Fixed 1</button></span>
+  </div>
+  <div class="row">
+    <span class="lab">Interval at 11</span><span class="seg" data-k="interval"><button data-v="1">On</button><button data-v="0">Off</button></span>
+    <span class="lab">First server</span><span class="seg" data-k="server"><button data-v="A">Left team</button><button data-v="B">Right team</button></span>
+    <span class="hint">Doubles: the right-court player of the serving team serves first; the right-court player of the other team receives. Fixed 2 ends after two games, a 1-1 is a draw.</span>
+  </div>
+</section>
+
+<section id="s3" class="screen">
+  <div id="top"><span><button class="ghost" id="menubtn" style="min-height:36px;padding:4px 12px">&#8943;</button> &nbsp;<b id="gameinfo"></b></span><span class="chip rec"><b>&#9679; REC</b> <span id="rect">00:00</span> &middot; link ok</span></span></div>
+  <div id="zones"><div class="zone" id="zl"></div><div id="mid"></div><div class="zone" id="zr"></div>
+    <div class="ov" id="interval"><div class="big">INTERVAL <span id="cd">1:00</span></div><div class="med" id="ivscore"></div><div class="med" id="ivswap" style="color:var(--amber)"></div><button class="pri">Resume</button><div class="mut">any tap resumes, nothing is scored</div></div>
+    <div class="ov" id="gameover"><div class="big" id="gotitle"></div><div class="med" id="gogames"></div><div class="mut" id="gonote"></div><div class="row" id="gopick"></div><div class="row"><button class="ghost" data-act="undo">&#8630; Undo last point</button><button class="pri" id="startgame"></button></div></div>
+    <div class="ov" id="matchover"><div class="big" id="motitle"></div><div class="med" id="moscores"></div><div class="row"><button class="ghost" data-act="undo">&#8630; Undo</button><button class="ghost" data-act="stoprec">&#9632; Stop recording</button><button class="pri" data-act="new">New match</button></div></div>
+    <div class="ov" id="correct"><div class="sheet"><div class="row"><b style="flex:1">Correct score</b><button class="ghost" data-act="closecorrect">Cancel</button></div><div class="row" id="cscore"></div><div class="row" id="cgames"></div><div class="row"><span class="lab">Server</span><span class="seg" id="cserver"></span></div><div class="row" id="cswap"></div><div class="row" style="justify-content:flex-end"><button class="pri" data-act="applycorrect">Apply</button></div></div></div>
+    <div class="ov" id="menu"><div class="sheet"><button data-act="opencorrect">Correct score</button><button data-act="swapsides">Swap sides</button><button data-act="rec">Start / stop recording (camera)</button><button data-act="end">End match</button><button data-act="new">New match</button><button class="ghost" data-act="closemenu">Close</button></div></div>
+  </div>
+  <div id="band"><button id="undo">&#8630; Undo</button></div>
+</section>
+
+<section id="c1" class="screen">
+  <div class="camtop"><span>&lsaquo; Camera</span><span>link: paired &middot; room 48 21 07</span></div>
+  <div class="cam"><div class="courtbg"><i style="left:10%;right:10%;top:18%;bottom:14%"></i><i style="left:10%;right:10%;top:30%;bottom:26%;border-left:0;border-right:0"></i><div class="net"></div></div><div class="ovl" data-ovl></div></div>
+  <div class="row" style="margin-top:8px">
+    <span class="lab">Quality</span><span class="seg"><button class="on">1080p</button><button>720p</button></span>
+    <span class="lab">Audio</span><span class="seg"><button class="on">On</button><button>Off</button></span>
+    <span class="lab">Mirror overlay</span><span class="seg"><button class="on">Off</button><button>On</button></span>
+    <span class="hint">Storage: 38 min left at 1080p &middot; persisted ok</span>
+    <button class="recbtn" style="margin-left:auto" data-go="c3"></button>
+  </div>
+</section>
+
+<section id="c3" class="screen">
+  <div class="camtop"><span class="chip rec"><b>&#9679; REC</b> <span id="rect2">00:00</span> &middot; 26 min left</span><span>link ok &middot; score follows the scoreboard</span></div>
+  <div class="cam"><div class="courtbg"><i style="left:10%;right:10%;top:18%;bottom:14%"></i><i style="left:10%;right:10%;top:30%;bottom:26%;border-left:0;border-right:0"></i><div class="net"></div></div><div class="ovl" data-ovl></div><div class="hint" style="position:absolute;right:12px;top:10px">preview = what gets recorded (overlay burned in live)</div></div>
+  <div class="row" style="margin-top:8px"><button class="ghost">Dim screen</button><span class="hint">Nothing here needs a touch during the match.</span><button class="recbtn on" style="margin-left:auto" title="hold 1 s to stop"></button><span class="hint">hold to STOP</span></div>
+</section>
+<div class="rot">Rotate your phone to landscape</div>
+
+<script id="engine">
+// ---- Score engine (pure, event-sourced). Mirrors docs/technical-design.md section 3. ----
+const Engine = (() => {
+  const other = t => (t === 'A' ? 'B' : 'A');
+  const USER = new Set(['point', 'correct', 'sides.swap', 'server.set', 'courts.swap', 'game.start', 'interval.end']);
+  const totalGames = cfg => (cfg.format === 'fixed1' ? 1 : cfg.format === 'fixed2' ? 2 : 3);
+  const isDeciding = (cfg, game) => cfg.format === 'fixed1' || (cfg.format === 'bestOf3' && game === 3); // Law 8.1.3
+  function init(cfg) {
+    const doubles = cfg.doubles, pos = {};
+    for (const t of ['A', 'B']) pos[t] = doubles ? { right: cfg.startRight[t], left: 1 - cfg.startRight[t] } : { right: 0, left: 0 };
+    return { phase: 'playing', game: 1, score: { A: 0, B: 0 }, games: { A: 0, B: 0 }, completed: [], server: cfg.firstServer,
+      serverIdx: pos[cfg.firstServer].right, pos, leftTeam: cfg.leftTeamAtStart, doubles, intervalDone: false, intervalKind: null,
+      pendingSwap: false, gamePoint: null, matchPoint: null, winner: null, lastGameWinner: null };
+  }
+  const wins = (cfg, me, op) => (me >= cfg.pointsToWin && me - op >= cfg.winBy) || me === cfg.cap; // Laws 7.2, 7.4, 7.5
+  const servingCourt = s => (s.score[s.server] % 2 === 0 ? 'right' : 'left');   // Laws 10.1, 11.1
+  const receiverIdx = s => s.pos[other(s.server)][servingCourt(s)];              // diagonal court
+  function flags(cfg, s) {
+    s.gamePoint = s.matchPoint = null;
+    if (s.phase !== 'playing' && s.phase !== 'interval') return;
+    for (const t of ['A', 'B']) {
+      if (!wins(cfg, s.score[t] + 1, s.score[other(t)])) continue;
+      s.gamePoint = t;
+      const g = s.games[t] + 1, last = s.game >= totalGames(cfg);
+      if ((cfg.format === 'bestOf3' && g === 2) || (last && g > s.games[other(t)])) s.matchPoint = t;
+    }
+  }
+  function endInterval(s) { s.phase = 'playing'; s.intervalKind = null; if (s.pendingSwap) { s.leftTeam = other(s.leftTeam); s.pendingSwap = false; } }
+  function apply(cfg, s, e) {
+    switch (e.type) {
+      case 'point': {
+        if (s.phase !== 'playing' && s.phase !== 'interval') return;
+        if (s.phase === 'interval') endInterval(s);
+        const t = e.team; s.score[t]++;
+        if (!s.doubles) { s.server = t; s.serverIdx = 0; }
+        else if (t === s.server) { const p = s.pos[t]; s.pos[t] = { right: p.left, left: p.right }; } // Law 11.2: same server, other court
+        else { s.server = t; s.serverIdx = s.pos[t][s.score[t] % 2 === 0 ? 'right' : 'left']; } // Law 11.3: nobody moves
+        const me = s.score[t], op = s.score[other(t)];
+        if (wins(cfg, me, op)) {
+          s.games[t]++; s.completed.push({ A: s.score.A, B: s.score.B }); s.lastGameWinner = t;
+          const over = s.game >= totalGames(cfg) || (cfg.format === 'bestOf3' && s.games[t] === 2);
+          s.phase = over ? 'matchOver' : 'gameOver'; s.intervalKind = over ? null : 'betweenGames';
+          if (over) s.winner = s.games.A === s.games.B ? null : (s.games.A > s.games.B ? 'A' : 'B');
+        } else if (cfg.intervalAt && !s.intervalDone && Math.max(me, op) === cfg.intervalAt) { // Law 16.2.1
+          s.intervalDone = true; s.phase = 'interval'; s.intervalKind = 'midGame'; s.pendingSwap = isDeciding(cfg, s.game);
+        }
+        break;
+      }
+      case 'interval.end': if (s.phase === 'interval') endInterval(s); break;
+      case 'game.start': {
+        if (s.phase !== 'gameOver') return;
+        s.game++; s.score = { A: 0, B: 0 }; s.intervalDone = false; s.intervalKind = null; s.phase = 'playing';
+        s.leftTeam = other(s.leftTeam); s.server = s.lastGameWinner; // Laws 7.6, 8.1.1, 8.1.2
+        if (s.doubles) {
+          const sv = e.serverIdx ?? s.pos[s.server].right, rc = e.receiverIdx ?? s.pos[other(s.server)].right;
+          s.pos[s.server] = { right: sv, left: 1 - sv }; s.pos[other(s.server)] = { right: rc, left: 1 - rc }; s.serverIdx = sv;
+        } else s.serverIdx = 0;
+        break;
+      }
+      case 'correct': {
+        if (e.score) s.score = { ...e.score }; if (e.games) s.games = { ...e.games };
+        if (e.server) s.server = e.server; if (e.serverIdx != null) s.serverIdx = e.serverIdx; if (e.leftTeam) s.leftTeam = e.leftTeam;
+        if (s.doubles) { const want = servingCourt(s), p = s.pos[s.server]; if (p[want] !== s.serverIdx) s.pos[s.server] = { right: p.left, left: p.right }; }
+        s.phase = 'playing'; s.intervalKind = null; s.pendingSwap = false; s.winner = null;
+        s.intervalDone = !!cfg.intervalAt && Math.max(s.score.A, s.score.B) >= cfg.intervalAt;
+        break;
+      }
+      case 'sides.swap': s.leftTeam = other(s.leftTeam); break;
+      case 'courts.swap': { const p = s.pos[e.team]; s.pos[e.team] = { right: p.left, left: p.right }; break; }
+      case 'server.set': s.server = e.team; if (e.idx != null) s.serverIdx = e.idx; break;
+      case 'match.end': s.phase = 'matchOver'; s.winner = s.games.A === s.games.B ? null : (s.games.A > s.games.B ? 'A' : 'B'); break;
+    }
+    flags(cfg, s);
+  }
+  function voidSet(events) { // undo voids its target; redo voids the undo
+    const deadUndos = new Set(events.filter(e => e.type === 'redo').map(e => e.target));
+    return new Set(events.filter(e => e.type === 'undo' && !deadUndos.has(e.seq)).map(e => e.target));
+  }
+  function reduce(cfg, events) {
+    const voided = voidSet(events), s = init(cfg);
+    for (const e of events) if (!voided.has(e.seq) && e.type !== 'undo' && e.type !== 'redo') apply(cfg, s, e);
+    return s;
+  }
+  function lastUndoable(events) { const v = voidSet(events); for (let i = events.length - 1; i >= 0; i--) { const e = events[i]; if (USER.has(e.type) && !v.has(e.seq)) return e; } return null; }
+  function lastRedoable(events) { // the newest undo, only if nothing new was done after it
+    const dead = new Set(events.filter(e => e.type === 'redo').map(e => e.target));
+    for (let i = events.length - 1; i >= 0; i--) { const e = events[i]; if (USER.has(e.type)) return null; if (e.type === 'undo' && !dead.has(e.seq)) return e; }
+    return null;
+  }
+  return { init, reduce, servingCourt, receiverIdx, lastUndoable, lastRedoable, totalGames, other };
+})();
+if (typeof module !== 'undefined') module.exports = Engine;
+</script>
+<script id="app">
+// ---- Mockup app: screens, taps, overlays. ----
+const $ = (q, el = document) => el.querySelector(q), $$ = (q, el = document) => [...el.querySelectorAll(q)];
+const PAL = ['#2bd4a6', '#ff7a59', '#5aa9ff', '#ffd166'];
+const other = Engine.other;
+let cfg = null, events = [], seq = 0, state = null, undoNote = 0, recStart = null, cdTimer = null;
+const setup = { doubles: 1, pts: 21, format: 'bestOf3', interval: 1, server: 'A', color: { A: 0, B: 1 }, right: { A: 0, B: 0 } };
+try { Object.assign(setup, JSON.parse(localStorage.getItem('bs-mock-setup') || '{}')); } catch (e) {}
+
+function go(id) { $$('.screen').forEach(s => s.classList.toggle('on', s.id === id)); $$('#nav button').forEach(b => b.classList.toggle('on', b.dataset.go === id)); if (id === 's3' && !cfg) startMatch(); render(); }
+$$('[data-go]').forEach(b => b.addEventListener('click', () => go(b.dataset.go)));
+
+// ---- S1 setup ----
+function paintSetup() {
+  $$('#s1 .seg').forEach(seg => { const k = seg.dataset.k, team = seg.closest('[data-team]')?.dataset.team;
+    const v = team ? setup[k][team] : setup[k]; $$('button', seg).forEach(b => b.classList.toggle('on', String(b.dataset.v) === String(v))); });
+  $$('#s1 [data-team]').forEach(box => { const t = box.dataset.team, c = $('[data-k=color]', box);
+    c.innerHTML = PAL.map((p, i) => `<button class="sw${setup.color[t] === i ? ' on' : ''}" data-i="${i}" style="background:${p};margin-right:6px"></button>`).join('');
+    $$('button', c).forEach(b => b.addEventListener('click', () => { setup.color[t] = +b.dataset.i; paintSetup(); })); });
+  $$('#s1 .dbl').forEach(r => r.style.display = setup.doubles ? '' : 'none');
+}
+$$('#s1 .seg').forEach(seg => $$('button', seg).forEach(b => b.addEventListener('click', () => {
+  const k = seg.dataset.k, team = seg.closest('[data-team]')?.dataset.team, v = isNaN(b.dataset.v) ? b.dataset.v : +b.dataset.v;
+  if (team) setup[k][team] = v; else setup[k] = v; paintSetup(); })));
+function readSetup() {
+  const teams = {};
+  for (const box of $$('#s1 [data-team]')) { const t = box.dataset.team; const g = k => $(`[data-k=${k}]`, box).value.trim() || k;
+    teams[t] = { name: g('name') || t, color: PAL[setup.color[t]], players: setup.doubles ? [g('p0'), g('p1')] : [g('name') || t] }; }
+  return { pointsToWin: setup.pts, winBy: 2, cap: setup.pts === 21 ? 30 : setup.pts + 9, format: setup.format, intervalAt: setup.interval ? 11 : null,
+    doubles: !!setup.doubles, teams, firstServer: setup.server, leftTeamAtStart: 'A', startRight: { ...setup.right } };
+}
+function startMatch() { cfg = readSetup(); events = []; seq = 0; recStart = Date.now(); try { localStorage.setItem('bs-mock-setup', JSON.stringify(setup)); } catch (e) {} go('s3'); }
+$('#start').addEventListener('click', startMatch);
+$('#same').addEventListener('click', startMatch);
+paintSetup();
+
+// ---- events ----
+function emit(e) { e.seq = ++seq; e.at = Date.now(); events.push(e); render(); }
+function undo() { const t = Engine.lastUndoable(events); if (!t) return; emit({ type: 'undo', target: t.seq }); undoNote = Date.now(); }
+function redo() { const t = Engine.lastRedoable(events); if (!t) return; emit({ type: 'redo', target: t.seq }); undoNote = 0; }
+
+// ---- S3 render ----
+const name = (t, i) => cfg.teams[t].players[i] ?? cfg.teams[t].name;
+function zoneHtml(t, s) {
+  const col = cfg.teams[t].color, srvCourt = Engine.servingCourt(s), rcv = Engine.receiverIdx(s);
+  const flag = s.matchPoint === t ? 'MATCH POINT' : s.gamePoint === t ? 'GAME POINT' : '';
+  const left = s.leftTeam === t;
+  const cell = (court) => { const i = s.pos[t][court], isS = s.server === t && s.serverIdx === i, isR = s.server !== t && rcv === i;
+    return `<div class="cell${isS ? ' srv' : isR ? ' rcv' : ''}" style="${isS ? 'color:' + col : ''}"><small>${court[0].toUpperCase()}</small>${name(t, i)}${isS ? ' &#127992;' : isR ? ' <small style="width:auto">receives</small>' : ''}</div>`; };
+  // bottom cell = the service court nearest the scoreboard phone (see ux-design.md S3)
+  const courts = s.doubles ? (left ? ['left', 'right'] : ['right', 'left']) : [srvCourt];
+  const court = s.doubles ? courts.map(cell).join('') : `<div class="cell${s.server === t ? ' srv' : ' rcv'}" style="${s.server === t ? 'color:' + col : ''}">${s.server === t ? `serves from ${srvCourt} &#127992;` : 'receives'}</div>`;
+  return `<div class="nm" style="color:${col}">${cfg.teams[t].name}${s.server === t ? ' &#127992;' : ''}</div><div class="sc" style="color:${col}">${s.score[t]}</div><div class="fl">${flag}</div><div class="court">${court}</div>`;
+}
+function fmtGame(g) { return `${g.A}-${g.B}`; }
+function render() {
+  if (!cfg) return;
+  const s = state = Engine.reduce(cfg, events), L = s.leftTeam, R = other(L);
+  $('#zl').innerHTML = zoneHtml(L, s); $('#zr').innerHTML = zoneHtml(R, s);
+  $('#zl').style.background = cfg.teams[L].color + '14'; $('#zr').style.background = cfg.teams[R].color + '14';
+  $('#gameinfo').textContent = `Game ${s.game} · ${cfg.teams.A.name} ${s.games.A}–${s.games.B} ${cfg.teams.B.name}` + (cfg.format === 'fixed2' ? ' · fixed 2' : cfg.format === 'fixed1' ? ' · one game' : '');
+  const redo = Engine.lastRedoable(events) && Date.now() - undoNote < 5000;
+  $('#undo').textContent = redo ? '↷ Redo' : '↶ Undo';
+  $('#interval').classList.toggle('on', s.phase === 'interval');
+  if (s.phase === 'interval') { $('#ivscore').textContent = `${cfg.teams[L].name} ${s.score[L]} – ${s.score[R]} ${cfg.teams[R].name}`; $('#ivswap').textContent = s.pendingSwap ? 'CHANGE ENDS when play resumes' : ''; startCountdown(60); } else if (s.phase !== 'gameOver') stopCountdown();
+  $('#gameover').classList.toggle('on', s.phase === 'gameOver');
+  if (s.phase === 'gameOver') {
+    const g = s.completed[s.completed.length - 1], w = s.lastGameWinner;
+    $('#gotitle').textContent = `GAME ${s.game} TO ${cfg.teams[w].name}  ${g[w]} – ${g[other(w)]}`;
+    $('#gogames').textContent = `games ${cfg.teams.A.name} ${s.games.A} – ${s.games.B} ${cfg.teams.B.name}`;
+    $('#gonote').textContent = `Change ends · ${cfg.teams[w].name} serves first · interval 2:00`;
+    $('#startgame').textContent = `START GAME ${s.game + 1}`;
+    $('#gopick').innerHTML = s.doubles ? ['Serves', 'Receives'].map((lab, k) => { const t = k ? other(w) : w; return `<span class="lab">${lab} (${cfg.teams[t].name})</span><span class="seg" data-pick="${k}">${[0, 1].map(i => `<button data-v="${i}" class="${i === s.pos[t].right ? 'on' : ''}">${name(t, i)}</button>`).join('')}</span>`; }).join('') : '';
+    $$('#gopick .seg').forEach(seg => $$('button', seg).forEach(b => b.addEventListener('click', () => { $$('button', seg).forEach(x => x.classList.toggle('on', x === b)); })));
+    startCountdown(120);
+  }
+  $('#matchover').classList.toggle('on', s.phase === 'matchOver');
+  if (s.phase === 'matchOver') {
+    $('#motitle').textContent = s.winner ? `${cfg.teams[s.winner].name} WINS ${s.games[s.winner]} – ${s.games[other(s.winner)]}` : `DRAW ${s.games.A} – ${s.games.B}`;
+    const pts = s.completed.reduce((a, g) => ({ A: a.A + g.A, B: a.B + g.B }), { A: 0, B: 0 });
+    $('#moscores').textContent = s.completed.map(fmtGame).join('   ') + (s.winner ? '' : `   · points ${pts.A}–${pts.B}`) + ` · ${Math.round((Date.now() - recStart) / 60000)} min`;
+  }
+  $$('[data-ovl]').forEach(o => o.innerHTML = overlayHtml(s));
+}
+function overlayHtml(s) { // same layout the camera phone burns into the video (mirror toggle would flip it)
+  const L = s.leftTeam, R = other(L), srv = t => (s.server === t ? ' &#127992;' : '');
+  return `<div class="t" style="background:${cfg.teams[L].color};color:#000">${cfg.teams[L].name}${srv(L)}</div><div>${s.score[L]}</div><div>${s.score[R]}</div><div class="t" style="background:${cfg.teams[R].color};color:#000">${srv(R)}${cfg.teams[R].name}</div><div class="g">G${s.game} ${s.games.A}-${s.games.B}${s.matchPoint ? ' · MP' : s.gamePoint ? ' · GP' : ''}</div>`;
+}
+function startCountdown(sec) { if (cdTimer) return; let end = Date.now() + sec * 1000; const tick = () => { const r = Math.max(0, Math.round((end - Date.now()) / 1000)); $('#cd').textContent = `${Math.floor(r / 60)}:${String(r % 60).padStart(2, '0')}`; if (!r) { stopCountdown(); if (state.phase === 'interval') emit({ type: 'interval.end' }); } }; tick(); cdTimer = setInterval(tick, 500); }
+function stopCountdown() { clearInterval(cdTimer); cdTimer = null; }
+setInterval(() => { if (!recStart) return; const t = Math.floor((Date.now() - recStart) / 1000), s = `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`; $('#rect').textContent = s; $('#rect2').textContent = s; if (undoNote && Date.now() - undoNote > 5000) { undoNote = 0; render(); } }, 1000);
+
+// ---- touch handling on the zones (ux-design.md section 3) ----
+let touch = null, pointers = 0, lastPoint = 0, lpTimer = null;
+for (const z of ['#zl', '#zr']) {
+  const el = $(z);
+  el.addEventListener('pointerdown', ev => { pointers++; if (pointers > 1) { touch = null; clearTimeout(lpTimer); return; }
+    touch = { t: Date.now(), x: ev.clientX, y: ev.clientY, el }; el.setPointerCapture(ev.pointerId);
+    lpTimer = setTimeout(() => { if (touch) { touch = null; openCorrect(); } }, 600); });
+  el.addEventListener('pointerup', ev => { pointers = Math.max(0, pointers - 1); clearTimeout(lpTimer); if (!touch) return;
+    const dt = Date.now() - touch.t, dx = ev.clientX - touch.x, dy = ev.clientY - touch.y, dist = Math.hypot(dx, dy); touch = null;
+    if (state.phase === 'interval') { emit({ type: 'interval.end' }); return; }   // the overlay swallows exactly one tap
+    if (dy > 80 && dt < 500) return undo();
+    if (dt < 30 || dt > 400 || dist > 24) return;
+    if (Date.now() - lastPoint < 800) return; lastPoint = Date.now();
+    const team = el.id === 'zl' ? state.leftTeam : other(state.leftTeam);
+    el.classList.add('flash'); el.style.background = cfg.teams[team].color; setTimeout(() => { el.classList.remove('flash'); render(); }, 250);
+    emit({ type: 'point', team }); });
+  el.addEventListener('pointercancel', () => { pointers = Math.max(0, pointers - 1); touch = null; clearTimeout(lpTimer); });
+}
+$('#undo').addEventListener('click', () => (Engine.lastRedoable(events) && Date.now() - undoNote < 5000 ? redo() : undo()));
+$('#interval').addEventListener('click', () => emit({ type: 'interval.end' }));
+$('#startgame').addEventListener('click', () => { const pick = k => +($(`#gopick [data-pick="${k}"] button.on`)?.dataset.v ?? 0);
+  emit(state.doubles ? { type: 'game.start', serverIdx: pick(0), receiverIdx: pick(1) } : { type: 'game.start' }); });
+$('#menubtn').addEventListener('click', () => $('#menu').classList.add('on'));
+
+// ---- S4 correction sheet ----
+let draft = null;
+function openCorrect() { const s = state; draft = { score: { ...s.score }, games: { ...s.games }, server: s.server, serverIdx: s.serverIdx }; paintCorrect(); $('#correct').classList.add('on'); }
+function paintCorrect() {
+  const step = (lab, obj, k) => `<span class="lab">${lab}</span><span class="step"><button data-d="-1" data-o="${obj}" data-k="${k}">−</button><b>${draft[obj][k]}</b><button data-d="1" data-o="${obj}" data-k="${k}">+</button></span>`;
+  $('#cscore').innerHTML = step(cfg.teams.A.name, 'score', 'A') + step(cfg.teams.B.name, 'score', 'B');
+  $('#cgames').innerHTML = step('games ' + cfg.teams.A.name, 'games', 'A') + step('games ' + cfg.teams.B.name, 'games', 'B');
+  $$('#correct .step button').forEach(b => b.addEventListener('click', () => { draft[b.dataset.o][b.dataset.k] = Math.max(0, draft[b.dataset.o][b.dataset.k] + +b.dataset.d); paintCorrect(); }));
+  const opts = state.doubles ? [['A', 0], ['A', 1], ['B', 0], ['B', 1]] : [['A', 0], ['B', 0]];
+  $('#cserver').innerHTML = opts.map(([t, i]) => `<button data-t="${t}" data-i="${i}" class="${draft.server === t && draft.serverIdx === i ? 'on' : ''}">${name(t, i)}</button>`).join('');
+  $$('#cserver button').forEach(b => b.addEventListener('click', () => { draft.server = b.dataset.t; draft.serverIdx = +b.dataset.i; paintCorrect(); }));
+  $('#cswap').innerHTML = `<button class="ghost" data-act="swapsides">Swap sides (ends)</button>` + (state.doubles ? ['A', 'B'].map(t => `<button class="ghost" data-act="courts" data-t="${t}">Swap courts: ${cfg.teams[t].name}</button>`).join('') : '');
+  $$('#cswap button').forEach(b => b.addEventListener('click', () => act(b.dataset.act, b.dataset.t)));
+}
+function act(a, t) {
+  switch (a) {
+    case 'undo': undo(); break; case 'new': cfg = null; stopCountdown(); go('s1'); break;
+    case 'end': emit({ type: 'match.end' }); $('#menu').classList.remove('on'); break;
+    case 'swapsides': emit({ type: 'sides.swap' }); $('#menu').classList.remove('on'); break;
+    case 'courts': emit({ type: 'courts.swap', team: t }); break;
+    case 'opencorrect': $('#menu').classList.remove('on'); openCorrect(); break;
+    case 'closecorrect': $('#correct').classList.remove('on'); break;
+    case 'applycorrect': emit({ type: 'correct', ...draft }); $('#correct').classList.remove('on'); break;
+    case 'closemenu': $('#menu').classList.remove('on'); break;
+    case 'rec': case 'stoprec': $('#menu').classList.remove('on'); alert('Mockup: this would send rec.start / rec.stop to the camera phone.'); break;
+  }
+}
+document.addEventListener('click', ev => { const b = ev.target.closest('[data-act]'); if (b && !b.closest('#cswap')) act(b.dataset.act, b.dataset.t); });
+go('s1');
+</script>
+</body>
+</html>
