@@ -1,6 +1,6 @@
 // Match setup (S1) to MatchConfig, with the fresh-install defaults of R-SETUP-3.
 import { capFor } from './rules';
-import type { Format, MatchConfig, Points, Team } from './types';
+import type { Format, MatchConfig, PointReasons, Points, Team } from './types';
 
 /** Fixed palette with enough contrast on the dark background (R-SETUP-2). */
 export const PALETTE = ['#2bd4a6', '#ff7a59', '#5aa9ff', '#ffd166', '#c792ff', '#ff6fa8'] as const;
@@ -20,6 +20,7 @@ export interface MatchSetup {
   interval: boolean;
   firstServer: Team;
   teams: Record<Team, TeamSetup>;
+  reasons: PointReasons; // D15: ask why each point was won; Off = scoring only
 }
 
 export const DEFAULT_SETUP: MatchSetup = {
@@ -28,6 +29,7 @@ export const DEFAULT_SETUP: MatchSetup = {
   format: 'bestOf3',
   interval: true,
   firstServer: 'A',
+  reasons: 'endOfGame',
   teams: {
     A: { name: 'A', color: 0, players: ['', ''], startRight: 0 },
     B: { name: 'B', color: 1, players: ['', ''], startRight: 0 },
@@ -55,5 +57,6 @@ export function configFromSetup(setup: MatchSetup): MatchConfig {
     firstServer: setup.firstServer,
     startRight: { A: setup.doubles ? setup.teams.A.startRight : 0, B: setup.doubles ? setup.teams.B.startRight : 0 },
     leftTeamAtStart: 'A',
+    reasons: setup.reasons,
   };
 }

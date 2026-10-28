@@ -126,7 +126,11 @@ export class MatchStore {
       const next = this.snap.match!;
       return result === 'applied' ? { prev: state, next: this.snap.state!, event: next.events[next.events.length - 1], config: match.config } : null;
     }
-    const events = append(match.events, body, { at, by: this.device(), id: randomId() });
+    const stamp = { at, by: this.device(), id: randomId() };
+    // A tag follows the camera's rule here too: only for a live point of a match that asks why (D15).
+    if ((body.type === 'tag' || body.type === 'tag.clear') && applyInput(match.config, match.events, { ...stamp, body }, at).result !== 'applied')
+      return null;
+    const events = append(match.events, body, stamp);
     const m: StoredMatch = { ...match, events, updatedAt: at };
     this.set(m);
     void this.persist(m);

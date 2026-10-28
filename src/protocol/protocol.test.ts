@@ -11,10 +11,10 @@ const config = makeConfig();
 describe('message guards', () => {
   it('accept every example and shape from §4.4', () => {
     const examples = [
-      '{"v":2,"t":"input","matchId":"m-1","input":{"id":"k3f9","at":1793100000123,"by":"sb-7c2","body":{"type":"point","team":"A"}}}',
-      '{"v":2,"t":"event","matchId":"m-1","event":{"seq":17,"id":"k3f9","at":1793100000101,"by":"sb-7c2","type":"point","team":"A"}}',
-      '{"v":2,"t":"result","id":"k3f9","result":"duplicate"}',
-      '{"v":2,"t":"rec","state":"recording","segment":1,"startedAt":1793099000456,"elapsedMs":754000,"bytes":565000000,"minutesLeft":26}',
+      '{"v":3,"t":"input","matchId":"m-1","input":{"id":"k3f9","at":1793100000123,"by":"sb-7c2","body":{"type":"point","team":"A"}}}',
+      '{"v":3,"t":"event","matchId":"m-1","event":{"seq":17,"id":"k3f9","at":1793100000101,"by":"sb-7c2","type":"point","team":"A"}}',
+      '{"v":3,"t":"result","id":"k3f9","result":"duplicate"}',
+      '{"v":3,"t":"rec","state":"recording","segment":1,"startedAt":1793099000456,"elapsedMs":754000,"bytes":565000000,"minutesLeft":26}',
       encode({ t: 'input', matchId: 'm', input: { id: 'u', at: 1, by: 'sb', body: { type: 'undo' } } }),
       encode({ t: 'input', matchId: 'm', input: { id: 's', at: 1, by: 'sb', body: { type: 'match.start', config } } }),
       encode({ t: 'state', matchId: null }),
@@ -30,6 +30,8 @@ describe('message guards', () => {
       encode({ t: 'ack', id: 'c1', ok: false, error: 'no camera' }),
       encode({ t: 'bye' }),
       encode({ t: 'bye', reason: 'leaving' }),
+      encode({ t: 'input', matchId: 'm', input: { id: 't', at: 1, by: 'sb', body: { type: 'tag', point: 'p', how: 'winner', hit: { team: 'A', idx: 1 }, assist: { team: 'A', idx: 0 }, shot: 'kill' } } }),
+      encode({ t: 'input', matchId: 'm', input: { id: 'c', at: 1, by: 'sb', body: { type: 'tag.clear', point: 'p' } } }),
     ];
     for (const raw of examples) expect(parse(raw).kind, raw).toBe('msg');
   });
@@ -48,6 +50,9 @@ describe('message guards', () => {
     add({ type: 'interval.end' });
     add({ type: 'game.start', game: 2, serverIdx: 0, receiverIdx: 1 });
     add({ type: 'match.end', reason: 'abandoned' });
+    add({ type: 'tag', point: 'p', how: 'forced', hit: { team: 'B', idx: 0 }, forcedBy: { team: 'A', idx: 1 }, assist: { team: 'A', idx: 0 }, shot: 'smash' });
+    add({ type: 'tag', point: 'p', how: 'winner', hit: { team: 'A', idx: 0 } });
+    add({ type: 'tag.clear', point: 'p' });
     for (const e of events) expect(isMatchEvent(JSON.parse(JSON.stringify(e))), e.type).toBe(true);
   });
 
@@ -55,28 +60,42 @@ describe('message guards', () => {
     const bad = [
       'not json',
       '[1,2]',
-      '{"v":2,"t":"event","matchId":"m","event":{"seq":"1","id":"x","at":1,"by":"s","type":"point","team":"A"}}',
-      '{"v":2,"t":"event","matchId":"m","event":{"seq":1,"id":"x","at":1,"by":"s","type":"point","team":"C"}}',
-      '{"v":2,"t":"event","matchId":"m","event":{"seq":1,"id":"x","at":1,"by":"s","type":"teleport"}}',
-      '{"v":2,"t":"event","event":{"seq":1,"id":"x","at":1,"by":"s","type":"point","team":"A"}}',
-      '{"v":2,"t":"input","matchId":"m","input":{"id":"x","at":1,"by":"s","body":{"type":"undo","target":3}}}',
-      '{"v":2,"t":"input","matchId":"m","input":{"id":"x","at":1,"body":{"type":"point","team":"A"}}}',
-      '{"v":2,"t":"result","id":"x","result":"maybe"}',
-      '{"v":2,"t":"state","matchId":null,"events":[]}',
-      '{"v":2,"t":"peers","count":-1}',
-      '{"v":2,"t":"ping","id":1}',
-      '{"v":2,"t":"rec","state":"dancing"}',
-      '{"v":2,"t":"cmd","id":"c","action":"rec.pause"}',
-      '{"v":2,"t":"sync","matchId":"m","config":{},"events":[]}',
-      '{"v":2,"t":"sync","matchId":"m","config":' + JSON.stringify(config) + ',"events":[],"part":[2,2]}',
-      '{"v":2,"t":"hello","role":"referee","deviceId":"d","app":"a"}',
-      '{"v":2,"t":"newfangled","x":1}',
+      '{"v":3,"t":"event","matchId":"m","event":{"seq":"1","id":"x","at":1,"by":"s","type":"point","team":"A"}}',
+      '{"v":3,"t":"event","matchId":"m","event":{"seq":1,"id":"x","at":1,"by":"s","type":"point","team":"C"}}',
+      '{"v":3,"t":"event","matchId":"m","event":{"seq":1,"id":"x","at":1,"by":"s","type":"tag","point":"p","how":"lucky","hit":{"team":"A","idx":0}}}',
+      '{"v":3,"t":"event","matchId":"m","event":{"seq":1,"id":"x","at":1,"by":"s","type":"tag","point":"p","how":"winner","hit":{"team":"C","idx":0}}}',
+      '{"v":3,"t":"event","matchId":"m","event":{"seq":1,"id":"x","at":1,"by":"s","type":"tag","point":"p","how":"winner","hit":{"team":"A","idx":0},"shot":"lob"}}',
+      '{"v":3,"t":"event","matchId":"m","event":{"seq":1,"id":"x","at":1,"by":"s","type":7}}',
+      '{"v":3,"t":"event","event":{"seq":1,"id":"x","at":1,"by":"s","type":"point","team":"A"}}',
+      '{"v":3,"t":"input","matchId":"m","input":{"id":"x","at":1,"by":"s","body":{"type":"undo","target":3}}}',
+      '{"v":3,"t":"input","matchId":"m","input":{"id":"x","at":1,"body":{"type":"point","team":"A"}}}',
+      '{"v":3,"t":"result","id":"x","result":"maybe"}',
+      '{"v":3,"t":"state","matchId":null,"events":[]}',
+      '{"v":3,"t":"peers","count":-1}',
+      '{"v":3,"t":"ping","id":1}',
+      '{"v":3,"t":"rec","state":"dancing"}',
+      '{"v":3,"t":"cmd","id":"c","action":"rec.pause"}',
+      '{"v":3,"t":"sync","matchId":"m","config":{},"events":[]}',
+      '{"v":3,"t":"sync","matchId":"m","config":' + JSON.stringify(config) + ',"events":[],"part":[2,2]}',
+      '{"v":3,"t":"hello","role":"referee","deviceId":"d","app":"a"}',
+      '{"v":3,"t":"newfangled","x":1}',
     ];
     for (const raw of bad) expect(parse(raw).kind, raw).toBe('ignore');
   });
 
+  it('from v3 an event or input of a type this build does not know is kept, not refused (D15)', () => {
+    const later = { seq: 3, id: 'x', at: 1, by: 's', type: 'replay.marker', label: 'nice rally' };
+    expect(isMatchEvent(later)).toBe(true);
+    const state = encode({ t: 'state', matchId: 'm', config, events: [{ seq: 1, id: 'a', at: 1, by: 's', type: 'match.start', config }, later as unknown as MatchEvent] });
+    expect(parse(state).kind).toBe('msg');
+    const input = '{"v":3,"t":"input","matchId":"m","input":{"id":"x","at":1,"by":"s","body":{"type":"replay.marker"}}}';
+    expect(parse(input).kind).toBe('msg');
+  });
+
   it('another protocol version is reported, not parsed (R-PAIR-7)', () => {
-    expect(parse('{"v":3,"t":"hello","role":"camera","deviceId":"d","app":"next@3"}')).toEqual({ kind: 'version', v: 3, app: 'next@3' });
+    expect(parse('{"v":4,"t":"hello","role":"camera","deviceId":"d","app":"next@4"}')).toEqual({ kind: 'version', v: 4, app: 'next@4' });
+    // A phone still on protocol 2 (before D15) would drop every state carrying a tag: it is told to update.
+    expect(parse('{"v":2,"t":"hello","role":"scoreboard","deviceId":"d","app":"old@2"}')).toEqual({ kind: 'version', v: 2, app: 'old@2' });
     // A phone still on protocol 1 (before D14) is told to update, not half understood.
     expect(parse('{"v":1,"t":"hello","role":"scoreboard","deviceId":"d","app":"old@1"}')).toEqual({ kind: 'version', v: 1, app: 'old@1' });
     expect(parse('{"t":"hello"}')).toMatchObject({ kind: 'version', v: undefined });

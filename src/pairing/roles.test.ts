@@ -4,13 +4,14 @@
 // meanwhile (R-PAIR-4), a late joiner, unpairing, remote REC with acks and retries (R-PAIR-6), rec reports,
 // and the clock.
 import { describe, expect, it } from 'vitest';
-import { DUPLICATE_WINDOW_MS, reduce } from '../engine';
-import { makeConfig } from '../engine/test-utils';
+import { DUPLICATE_WINDOW_MS, matchStats, rallies, reduce } from '../engine';
+import { doublesConfig, makeConfig } from '../engine/test-utils';
 import { MatchHub, type HubStore } from '../link/hub';
 import { Mirror } from '../link/mirror';
 import type { ClockEstimate, LinkState, MatchLog, RecCommand } from '../link/source';
 import { MatchStore } from '../match/store';
 import { encode, parse, type Msg } from '../protocol/messages';
+import { SyncAssembler, stateParts } from '../protocol/sync';
 import type { LinkPort } from './port';
 import { CMD_GIVE_UP_MS, CMD_RETRY_MS, RESYNC_AFTER_MS, ScoreboardLink } from './scoreboard';
 
@@ -307,9 +308,108 @@ describe('one camera, two scoreboards (D14)', () => {
     a.store.start(makeConfig());
     a.connect();
     const ev = { seq: 9, id: 'zz', at: 1, by: 'x', type: 'point' as const, team: 'A' as const };
-    a.sbPort.onMessage({ v: 2, t: 'event', matchId: a.store.getSnapshot().match!.matchId, event: ev });
+    a.sbPort.onMessage({ v: 3, t: 'event', matchId: a.store.getSnapshot().match!.matchId, event: ev });
     expect(a.sbPort.sent.at(-1)?.t).toBe('resync');
     expect(a.shown()).toEqual(p.camera());
+  });
+});
+
+describe('point reasons through the camera (D15)', () => {
+  const reasons = () => ({ ...doublesConfig(), reasons: 'endOfGame' as const });
+  const lastPoint = (s: MatchStore) => [...s.getSnapshot().match!.events].reverse().find((e) => e.type === 'point')!;
+  const tagOf = (s: MatchStore, id: string) => rallies(s.getSnapshot().match!.config, s.getSnapshot().match!.events).find((r) => r.id === id)?.tag ?? null;
+
+  it('a tag from either scoreboard is an input the camera applies and broadcasts; the camera’s order decides', () => {
+    const p = setup();
+    const [a, b] = p.sides;
+    a.store.start(reasons());
+    a.connect();
+    b.connect();
+    a.store.emit({ type: 'point', team: 'A' });
+    const id = lastPoint(a.store).id;
+    expect(lastPoint(b.store).id).toBe(id); // the point id is the same on every phone
+    a.store.emit({ type: 'tag', point: id, how: 'winner', hit: { team: 'A', idx: 1 }, shot: 'smash' });
+    p.advance(1000);
+    b.store.emit({ type: 'tag', point: id, how: 'forced', hit: { team: 'B', idx: 0 }, forcedBy: { team: 'A', idx: 1 } });
+    for (const s of [a, b]) expect(tagOf(s.store, id)).toMatchObject({ how: 'forced', hit: { team: 'B', idx: 0 } });
+    const cam = p.hub.current()!;
+    expect(rallies(cam.config, cam.events)[0].tag).toMatchObject({ how: 'forced' });
+    expect(cam.events.filter((e) => e.type === 'tag').map((e) => e.by)).toEqual(['sb-1', 'sb-2']);
+    // Undo still takes back the point, whoever tagged it; redo brings the tag back with it.
+    b.store.undo();
+    expect(a.shown()!.score).toEqual({ A: 0, B: 0 });
+    expect(tagOf(a.store, id)).toBeNull();
+    a.store.redo();
+    expect(tagOf(b.store, id)).toMatchObject({ how: 'forced' });
+    expect(a.store.pending()).toHaveLength(0);
+    expect(b.store.pending()).toHaveLength(0);
+  });
+
+  it('tag later from the other scoreboard; both show the same game stats', () => {
+    const p = setup();
+    const [a, b] = p.sides;
+    a.store.start({ ...reasons(), pointsToWin: 11, cap: 20 });
+    a.connect();
+    b.connect();
+    for (let i = 0; i < 11; i++) {
+      p.advance(4000);
+      a.store.emit({ type: 'point', team: i === 3 ? 'B' : 'A' });
+      if (a.shown()!.phase === 'interval') a.store.emit({ type: 'interval.end' });
+    }
+    expect(a.shown()!.phase).toBe('playing'); // 10-1
+    a.store.emit({ type: 'point', team: 'A' });
+    expect(b.shown()!.phase).toBe('gameOver');
+    const rs = rallies(b.store.getSnapshot().match!.config, b.store.getSnapshot().match!.events);
+    b.store.emit({ type: 'tag', point: rs[3].id, how: 'unforced', hit: { team: 'A', idx: 0 } }); // B tags an early point later
+    b.store.emit({ type: 'tag', point: rs[11].id, how: 'winner', hit: { team: 'A', idx: 1 }, assist: { team: 'A', idx: 0 }, shot: 'kill' });
+    const st = (s: MatchStore) => matchStats(s.getSnapshot().match!.config, s.getSnapshot().match!.events).games[0];
+    expect(st(a.store)).toEqual(st(b.store));
+    expect(st(a.store).players.A[1].W).toBe(1);
+    expect(st(a.store).players.A[0]).toMatchObject({ A: 1, UE: 1 });
+    expect(st(a.store).teams.A).toMatchObject({ won: 11, winners: 1, untagged: 10 });
+  });
+
+  it('a match full of tags still reaches a late joiner in parts under 16 kB', () => {
+    const p = setup();
+    const [a, b] = p.sides;
+    a.store.start(reasons());
+    a.connect();
+    for (let i = 0; i < 40; i++) {
+      p.advance(4000);
+      a.store.emit({ type: 'point', team: i % 3 ? 'A' : 'B' });
+      if (a.shown()!.phase === 'interval') a.store.emit({ type: 'interval.end' });
+      if (a.shown()!.phase === 'gameOver') a.store.emit({ type: 'game.start', game: a.shown()!.game + 1 });
+      const pt = lastPoint(a.store);
+      for (const shot of ['smash', 'kill', 'drop'] as const) {
+        const team = pt.type === 'point' ? pt.team : 'A';
+        a.store.emit({ type: 'tag', point: pt.id, how: 'winner', hit: { team, idx: 0 }, assist: { team, idx: 1 }, shot });
+      }
+    }
+    const cam = p.hub.current()!;
+    const parts = stateParts(cam, 4000);
+    expect(parts.length).toBeGreaterThan(1);
+    const asm = new SyncAssembler();
+    let whole;
+    for (const raw of parts) {
+      const m = parse(raw);
+      if (m.kind === 'msg' && m.msg.t === 'state') whole = asm.add(m.msg);
+    }
+    expect(whole).toEqual(cam);
+    b.connect();
+    expect(matchStats(b.store.getSnapshot().match!.config, b.store.getSnapshot().match!.events)).toEqual(matchStats(cam.config, cam.events));
+  });
+
+  it('Off: tags sent to the camera are ignored and nothing is recorded', () => {
+    const p = setup();
+    const [a, b] = p.sides;
+    a.store.start({ ...doublesConfig(), reasons: 'off' });
+    a.connect();
+    b.connect();
+    a.store.emit({ type: 'point', team: 'A' });
+    const id = lastPoint(a.store).id;
+    expect(b.store.emit({ type: 'tag', point: id, how: 'winner', hit: { team: 'A', idx: 0 } })).toBeNull();
+    expect(p.hub.current()!.events.some((e) => e.type === 'tag')).toBe(false);
+    expect(b.store.pending()).toHaveLength(0);
   });
 });
 

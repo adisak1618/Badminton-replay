@@ -11,6 +11,9 @@ export interface TeamConfig {
   players: string[]; // 1 name in singles, 2 in doubles
 }
 
+/** D15: whether the scoreboards ask why each point was won. Absent (matches started before D15) means off. */
+export type PointReasons = 'off' | 'endOfGame';
+
 export interface MatchConfig {
   pointsToWin: Points;
   winBy: 2;
@@ -23,6 +26,29 @@ export interface MatchConfig {
   firstServer: Team;
   startRight: Record<Team, 0 | 1>; // doubles: index of the player who starts in the right court
   leftTeamAtStart: Team; // left of the scoreboard screen (S1)
+  reasons?: PointReasons; // D15
+}
+
+/** A player by team and index into teams[team].players. */
+export interface PlayerRef {
+  team: Team;
+  idx: number;
+}
+
+/** How a rally ended (D15, Q1): the last shot landed untouched, or the other side erred under pressure or not. */
+export type How = 'winner' | 'forced' | 'unforced';
+/** The rally's last shot. kill = net kill or interception; net = net shot; drive = drive, push or block; clear = clear or lift. */
+export type Shot = 'smash' | 'kill' | 'drop' | 'net' | 'drive' | 'clear' | 'serve';
+
+/** Why a point was won: who played the last shot and how; the credit fields are optional (technical-design.md §3.3). */
+export interface TagBody {
+  type: 'tag';
+  point: string; // id of the point event: the same on every phone, whoever orders the log
+  how: How;
+  hit: PlayerRef; // scoring side for a winner, losing side for an error
+  forcedBy?: PlayerRef; // forced errors: the scoring-side player whose shot forced it
+  assist?: PlayerRef; // doubles: the finisher's partner who played the side's previous shot
+  shot?: Shot;
 }
 
 export type Phase = 'playing' | 'interval' | 'gameOver' | 'matchOver';
@@ -79,7 +105,9 @@ export type EventBody =
   | { type: 'server.set'; team: Team; idx?: number }
   | { type: 'interval.end' } // user dismissed or countdown ended
   | { type: 'game.start'; game: number; serverIdx?: number; receiverIdx?: number }
-  | { type: 'match.end'; reason: 'won' | 'abandoned' };
+  | { type: 'match.end'; reason: 'won' | 'abandoned' }
+  | TagBody // the newest tag of a live point wins; never undone itself (D15)
+  | { type: 'tag.clear'; point: string };
 
 export type MatchEvent = EventBase & EventBody;
 export type EventType = EventBody['type'];

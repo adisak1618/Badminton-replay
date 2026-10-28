@@ -1,10 +1,12 @@
 // The data-channel protocol between the camera and each scoreboard (technical-design.md §4.4) and hand-written
 // guards for everything that arrives. Unknown `t` is ignored; an unsupported `v` is answered with `bye`
 // (R-PAIR-7). Version 2 (D14): the camera holds the match; scoreboards send inputs and render what it sends.
-import type { Input, InputResult, MatchConfig, MatchEvent } from '../engine';
+// Version 3 (D15): tag events. From 3 on an event or input of a type this build does not know is kept (the
+// reducer passes over it, the camera answers such an input 'ignored'), so a new event type needs no new version.
+import { EVENT_TYPES, SHOTS, type Input, type InputResult, type MatchConfig, type MatchEvent } from '../engine';
 import type { RecReport } from '../link/source';
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 /** Every message stays under this (MDN: large messages block the channel; SDP default is 64 kB). */
 export const MAX_MESSAGE_BYTES = 16_000;
 
@@ -13,27 +15,27 @@ export type Role = 'scoreboard' | 'camera';
 type Part = [index: number, count: number];
 
 export type Msg =
-  | { v: 2; t: 'hello'; role: Role; deviceId: string; app: string; ua?: string; matchId?: string; lastSeq?: number }
-  | { v: 2; t: 'ping'; id: number; t0: number }
-  | { v: 2; t: 'pong'; id: number; t0: number; t1: number; t2: number }
+  | { v: 3; t: 'hello'; role: Role; deviceId: string; app: string; ua?: string; matchId?: string; lastSeq?: number }
+  | { v: 3; t: 'ping'; id: number; t0: number }
+  | { v: 3; t: 'pong'; id: number; t0: number; t1: number; t2: number }
   // scoreboard -> camera: its live match, offered when the camera holds none (the camera adopts it)
-  | { v: 2; t: 'sync'; matchId: string; config: MatchConfig; events: MatchEvent[]; part?: Part }
+  | { v: 3; t: 'sync'; matchId: string; config: MatchConfig; events: MatchEvent[]; part?: Part }
   // camera -> scoreboard: the whole match it holds, or none (matchId null), on every open and on request
-  | { v: 2; t: 'state'; matchId: string | null; config?: MatchConfig; events?: MatchEvent[]; part?: Part }
+  | { v: 3; t: 'state'; matchId: string | null; config?: MatchConfig; events?: MatchEvent[]; part?: Part }
   // camera -> scoreboard: one event the camera applied, in order (its seq is the log's length)
-  | { v: 2; t: 'event'; matchId: string; event: MatchEvent }
+  | { v: 3; t: 'event'; matchId: string; event: MatchEvent }
   // scoreboard -> camera: a tap or a menu action, for the camera to apply
-  | { v: 2; t: 'input'; matchId: string; input: Input }
+  | { v: 3; t: 'input'; matchId: string; input: Input }
   // camera -> the scoreboard that sent the input: what became of it
-  | { v: 2; t: 'result'; id: string; result: InputResult }
+  | { v: 3; t: 'result'; id: string; result: InputResult }
   // scoreboard -> camera: its copy has a gap, send the whole state again
-  | { v: 2; t: 'resync' }
+  | { v: 3; t: 'resync' }
   // camera -> scoreboard: how many scoreboards are linked right now
-  | { v: 2; t: 'peers'; count: number }
-  | ({ v: 2; t: 'rec' } & RecReport)
-  | { v: 2; t: 'cmd'; id: string; action: 'rec.start' | 'rec.stop' }
-  | { v: 2; t: 'ack'; id: string; ok: boolean; error?: string }
-  | { v: 2; t: 'bye'; reason?: 'version' | 'leaving' | 'unpaired' };
+  | { v: 3; t: 'peers'; count: number }
+  | ({ v: 3; t: 'rec' } & RecReport)
+  | { v: 3; t: 'cmd'; id: string; action: 'rec.start' | 'rec.stop' }
+  | { v: 3; t: 'ack'; id: string; ok: boolean; error?: string }
+  | { v: 3; t: 'bye'; reason?: 'version' | 'leaving' | 'unpaired' };
 
 export type MsgOf<T extends Msg['t']> = Extract<Msg, { t: T }>;
 
@@ -43,20 +45,6 @@ export type Parsed =
   | { kind: 'version'; v: unknown; app?: string } // another protocol version: R-PAIR-7
   | { kind: 'ignore' }; // malformed, or a type this version does not know
 
-const EVENT_TYPES = new Set([
-  'match.start',
-  'point',
-  'undo',
-  'redo',
-  'correct',
-  'sides.swap',
-  'courts.swap',
-  'server.set',
-  'interval.end',
-  'game.start',
-  'match.end',
-]);
-
 type Obj = Record<string, unknown>;
 const isObj = (x: unknown): x is Obj => !!x && typeof x === 'object' && !Array.isArray(x);
 const isNum = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x);
@@ -65,6 +53,9 @@ const isTeam = (x: unknown) => x === 'A' || x === 'B';
 const optNum = (x: unknown) => x === undefined || isNum(x);
 const optStr = (x: unknown) => x === undefined || isStr(x);
 const isScore = (x: unknown) => isObj(x) && isNum(x.A) && isNum(x.B);
+const isRef = (x: unknown) => isObj(x) && isTeam(x.team) && Number.isInteger(x.idx);
+const optRef = (x: unknown) => x === undefined || isRef(x);
+const HOWS = new Set(['winner', 'forced', 'unforced']);
 
 export function isMatchConfig(x: unknown): x is MatchConfig {
   if (!isObj(x) || !isObj(x.teams) || !isObj(x.intervalMs) || !isObj(x.startRight)) return false;
@@ -93,7 +84,8 @@ export function isInput(x: unknown): x is Input {
 }
 
 function isBody(x: Obj, targeted: boolean): boolean {
-  if (!EVENT_TYPES.has(x.type as string)) return false;
+  if (!isStr(x.type)) return false;
+  if (!EVENT_TYPES.has(x.type)) return true; // a newer build's type: kept, passed over (see the header)
   switch (x.type) {
     case 'match.start':
       return isMatchConfig(x.config);
@@ -111,6 +103,17 @@ function isBody(x: Obj, targeted: boolean): boolean {
       return isNum(x.game) && optNum(x.serverIdx) && optNum(x.receiverIdx);
     case 'match.end':
       return x.reason === 'won' || x.reason === 'abandoned';
+    case 'tag':
+      return (
+        isStr(x.point) &&
+        HOWS.has(x.how as string) &&
+        isRef(x.hit) &&
+        optRef(x.forcedBy) &&
+        optRef(x.assist) &&
+        (x.shot === undefined || (SHOTS as readonly unknown[]).includes(x.shot))
+      );
+    case 'tag.clear':
+      return isStr(x.point);
     default:
       return true; // sides.swap, interval.end
   }
