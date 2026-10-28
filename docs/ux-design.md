@@ -219,8 +219,13 @@ with scores, games, serving team and player.
 ### S5 Menu (`...`)
 
 Correct score · Swap ends · Start/stop recording (when paired) · Pair camera ·
-Sound and voice · End match · New match. Each item is a full-height row, at
-least 56 px.
+Sound and voice · End match · New match · Pairing diagnostics. Each item is a
+full-height row, at least 56 px.
+
+Pairing diagnostics (here, in the camera's `⋯` menu, and as a chip on S2 and C2)
+shows this phone's pairing log under a one-line summary to read out (role,
+build, network check, ICE state, last error), with Copy and Share. The log
+stays on the phone unless it is copied or shared.
 
 ### C1 Camera setup
 
@@ -305,6 +310,7 @@ phone the same list offers the log alone.
 | Capture interrupted (call, lock, app switch) | C3 | "Recording stopped: camera interrupted. Segment 1 saved (12:34)." Button: "Resume (segment 2)" (R-REC-5) | One tap |
 | Link lost, internet available | S3, C3 | Chip "reconnecting" after 6 s; scoreboard keeps scoring; camera keeps recording with the overlay frozen and marked "stale"; link returns by itself (R-PAIR-8), then the camera catches up (R-PAIR-4) | None needed |
 | Link lost, no internet | S3, C3 | Chip "offline"; same behaviour; reconnects when internet returns | Restore internet |
+| Phones on different networks (no common Wi-Fi, e.g. both on mobile data) | S2, C2 | After 15 s of connecting: "Not connecting: the phones are on different networks (this phone …, the other …)" with the way out | Same Wi-Fi, or one phone's Personal Hotspot |
 | Version mismatch | S2, C2 | "Update the app on the other phone, then pair again" (R-PAIR-7) | Reload the other phone |
 | Speech unavailable or muted | S3 | One-line banner "Turn off silent mode to hear the score" (assumption A9) | Flip the switch |
 

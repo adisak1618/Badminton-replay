@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { LinkState } from '../../link/source';
 import { HOLD_TO_STOP_MS } from '../../recording/config';
+import { DiagSheet } from '../DiagSheet';
 
 const LINK: Record<LinkState, { text: string; cls: string }> = {
   unpaired: { text: 'not paired', cls: 'bg-red/25 text-red' },
@@ -85,6 +86,7 @@ export function CameraMenu({
   onClose: () => void;
 }) {
   const row = 'btn min-h-14 w-full bg-pan2 text-left';
+  const [diag, setDiag] = useState(false);
   return (
     <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/70 p-3" onClick={onClose}>
       <div
@@ -116,6 +118,9 @@ export function CameraMenu({
             Update the app (reloads)
           </button>
         )}
+        <button className={row} onClick={() => setDiag(true)}>
+          Pairing diagnostics
+        </button>
         <button className={`${row} btn-ghost bg-transparent`} onClick={onClose}>
           Close
         </button>
@@ -124,6 +129,7 @@ export function CameraMenu({
           sends REC and Stop the way the paired scoreboard phone does. While it is on, the overlay follows it.
         </p>
       </div>
+      {diag && <DiagSheet role="camera" onClose={() => setDiag(false)} />}
     </div>
   );
 }

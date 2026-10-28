@@ -288,11 +288,17 @@ exposing host candidates in a later gathering (reconnect) after that
 viewfinder track was stopped is assumption A1; the fallback is to reopen a
 camera track for the duration of the reconnect.
 
-Host candidates are published as mDNS names (`<uuid>.local`) and resolved by
-the peer with multicast DNS on the same network (Chrome M73+,
+Without capture permission host candidates are published as mDNS names
+(`<uuid>.local`) and resolved by the peer with multicast DNS on the same
+network (Chrome M73+,
 https://groups.google.com/g/discuss-webrtc/c/4Yggl6ZzqZk/m/nV24XkXXAQAJ;
-WebKit bug 174500). This works on a normal Wi-Fi and on a phone hotspot and
-fails on networks with client isolation (A2).
+WebKit bug 174500). With it, Safari on iPhone publishes one plain host
+candidate, the address of its default route (seen in production on
+2026-10-28). This works on a normal Wi-Fi and on a phone hotspot and fails on
+networks with client isolation (A2), and between phones on mobile data: each
+shows only its carrier address and there is no path between them. The
+pairing screens compare the two descriptions' addresses and say so
+(`pairing/net.ts`).
 
 No trickle ICE: both sides wait for gathering to complete so one descriptor
 carries everything. With no STUN servers configured, gathering on a LAN

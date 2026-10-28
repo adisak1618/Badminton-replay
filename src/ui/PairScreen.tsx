@@ -5,8 +5,9 @@ import { useEffect, useRef, useState } from 'react';
 import { registerCapture } from '../pairing/capture';
 import { codeFromText, grabFrame, qrReader } from '../pairing/qr';
 import { useCameraLink } from './CameraLink';
+import { DiagChip } from './DiagSheet';
 import { useNow } from './useNow';
-import { SLOW_CONNECT_MS, SLOW_CONNECT_TEXT, mismatchText, pairErrorText } from './pairText';
+import { SLOW_CONNECT_MS, mismatchText, pairErrorText, slowConnectText } from './pairText';
 
 type Cam = 'starting' | 'live' | 'denied' | 'off';
 const SCAN_EVERY_MS = 300;
@@ -109,7 +110,7 @@ export function PairScreen({ initialCode, onClose }: { initialCode: string | nul
           ? 'Connecting…'
           : l.state === 'connecting' && joinedAt != null
             ? slow
-              ? SLOW_CONNECT_TEXT
+              ? slowConnectText(l.net)
               : 'Connecting to the camera phone…'
             : l.state === 'reconnecting' || l.state === 'lost' || l.state === 'offline'
               ? 'Paired before: reconnecting to the camera phone by itself.'
@@ -187,6 +188,7 @@ export function PairScreen({ initialCode, onClose }: { initialCode: string | nul
           {(l.error || l.mismatch) && (
             <p className="text-sm text-mut">Scoring works without the camera; you can pair later from the menu.</p>
           )}
+          <DiagChip role="scoreboard" />
         </div>
       </div>
     </div>

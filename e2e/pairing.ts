@@ -9,7 +9,8 @@
 // tap-to-camera latency; remote REC with ack (D11); a 20 s outage of the channel and the helper with points
 // scored meanwhile (R-PAIR-4/8); a dropped connection rebuilt fresh; remote stop; reloads of either phone
 // rejoining with no scan; a typed code; the QR's link opened by the iPhone camera app with the viewfinder still
-// on that QR, claimed once; a version mismatch (R-PAIR-7). Exits non-zero on the first failure.
+// on that QR, claimed once; a version mismatch (R-PAIR-7); two phones on different networks told so, with the
+// pairing diagnostics. Every ICE restart description must carry candidates. Exits non-zero on the first failure.
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -63,7 +64,9 @@ const text = async (p: Page, sel: string) => ((await p.locator(sel).first().text
 const chip = (p: Page) => text(p, '[data-testid=link-chip]');
 
 // Test hooks live here, not in the app: every RTCPeerConnection is kept on window.__pcs; window.__drop swallows
-// every outgoing data-channel message; sessionStorage.__v2 makes this page speak protocol version 2.
+// every outgoing data-channel message; sessionStorage.__v2 makes this page speak protocol version 2;
+// sessionStorage.__ip replaces this page's candidates with one host candidate on that address, the way an iPhone
+// on mobile data offers only its carrier address.
 const HOOKS = `
   (() => {
     const send = RTCDataChannel.prototype.send;
@@ -79,9 +82,20 @@ const HOOKS = `
     window.__pcs = [];
     window.RTCPeerConnection = class extends PC {
       constructor(...a) { super(...a); window.__pcs.push(this); }
+      get localDescription() {
+        const d = super.localDescription;
+        const ip = sessionStorage.getItem('__ip');
+        if (!d || !ip) return d;
+        const lines = d.sdp.split('\\r\\n').filter((l) => !l.startsWith('a=candidate:'));
+        lines.splice(lines.findIndex((l) => l.startsWith('c=')) + 1, 0, 'a=candidate:1 1 udp 2113937151 ' + ip + ' 50000 typ host generation 0 network-cost 999');
+        return { type: d.type, sdp: lines.join('\\r\\n') };
+      }
     };
   })();
 `;
+
+/** Every description a page posted to the helper, with how many candidates it carried. */
+const posted: Array<{ page: string; at: number; kind: string; gen: number; fresh: boolean; candidates: number }> = [];
 
 async function launch(extra: string[] = []): Promise<Browser> {
   return chromium.launch({
@@ -105,6 +119,11 @@ async function newPage(b: Browser, name: string): Promise<{ ctx: BrowserContext;
   page.on('pageerror', (e) => log(`  [${name} pageerror] ${e.message}`));
   page.on('request', (r) => {
     if (!r.url().startsWith(BASE)) log(`  [${name}] request leaving the origin: ${r.url()}`);
+    const m = /\/api\/signal\/sessions\/[0-9a-f]+\/(offer|answer)$/.exec(r.url());
+    if (!m || r.method() !== 'POST') return;
+    const b = JSON.parse(r.postData() ?? '{}');
+    const sdp: string = b.offer ?? b.answer ?? '';
+    posted.push({ page: name, at: Date.now(), kind: m[1], gen: b.gen, fresh: b.fresh === true, candidates: (sdp.match(/^a=candidate:/gm) ?? []).length });
   });
   return { ctx, page };
 }
@@ -166,6 +185,7 @@ async function main() {
   let sb2: Page | null = null;
   let sb3 = null as Page | null;
   let sbPage: Page | null = null;
+  const netPages: Page[] = [];
   try {
     await step('camera role opens with a live preview', async () => {
       await cam.goto(BASE);
@@ -270,6 +290,7 @@ async function main() {
     });
 
     await step('20 s outage of the channel and the helper, 5 points meanwhile; back with every event (R-PAIR-4/8)', async () => {
+      const since = Date.now();
       for (const p of [cam, sb]) await p.evaluate(() => ((window as any).__drop = true));
       await camCtx.route('**/api/**', (r) => r.abort('internetdisconnected'));
       await sbCtx.route('**/api/**', (r) => r.abort('internetdisconnected'));
@@ -289,7 +310,12 @@ async function main() {
       await until('both link ok', async () => (await chip(cam)) === 'link ok' && (await chip(sb)) === 'link ok', 15_000);
       const recovered = Date.now() - back;
       await until('camera caught up', () => cameraShows(cam, sb), 5000);
-      return `chips amber after ${amber}; at 20 s ${during}; link back ${recovered} ms after the network returned; camera shows ${await score(sb)}`;
+      // ICE restarts went out with no candidate in production (2026-10-28): the gathering ended at once.
+      const restarts = posted.filter((p) => p.at >= since && !p.fresh);
+      const empty = restarts.filter((p) => p.candidates === 0);
+      if (empty.length) throw new Error(`ICE restart descriptions without candidates: ${JSON.stringify(empty)}`);
+      const restartNote = restarts.map((p) => `${p.page} ${p.kind} gen ${p.gen}: ${p.candidates} candidates`).join(', ') || 'none posted';
+      return `chips amber after ${amber}; at 20 s ${during}; link back ${recovered} ms after the network returned; camera shows ${await score(sb)}; ICE restarts: ${restartNote}`;
     });
 
     await step('a dropped connection is rebuilt fresh with no user action', async () => {
@@ -420,8 +446,54 @@ async function main() {
       if (camNote !== 'Update the app on the other phone, then pair again.') throw new Error(`camera says "${camNote}"`);
       return `scoreboard chip "update app" / "${title}"; camera "${camNote}"`;
     });
+
+    // What the captain's iPhones did on 2026-10-28: each on mobile data, so each offers only its carrier address.
+    // The helper part works, the link can never open, and both screens must say why instead of "connecting".
+    await step('phones on different networks: both screens say so with the two addresses; the diagnostics show it', async () => {
+      const camNet = (await newPage(camBrowser, 'camera-net')).page;
+      const sbNet = (await newPage(camBrowser, 'scoreboard-net')).page;
+      netPages.push(camNet, sbNet);
+      await camNet.goto(BASE);
+      await camNet.evaluate(() => sessionStorage.setItem('__ip', '10.195.144.160'));
+      await button(camNet, /CAMERA/).click();
+      await until('camera live', async () => (await camNet.locator('[data-testid=rec-button]').isEnabled()) || null, 15_000);
+      await camNet.locator('[data-testid=cam-pair]').click();
+      const c = await until('code', async () => {
+        const t = await text(camNet, '[data-testid=pair-code]');
+        return /^\d{6}$/.test(t) && t;
+      });
+      await sbNet.goto(BASE);
+      await sbNet.evaluate(() => sessionStorage.setItem('__ip', '10.131.171.124'));
+      await button(sbNet, /SCOREBOARD/).click();
+      await sbNet.locator('[data-testid=pair-chip]').click();
+      const start = Date.now();
+      await sbNet.locator('input[data-testid=pair-code]').fill(c);
+      await sbNet.locator('[data-testid=pair-submit]').click();
+      const want = 'different networks (this phone 10.131.171.124, the other 10.195.144.160)';
+      const sbSays = await until('scoreboard names the networks', async () => {
+        const t = await text(sbNet, '[data-testid=pair-status]');
+        return t.includes(want) && t;
+      }, 30_000, 250);
+      const ms = Date.now() - start;
+      const camSays = await until('camera names the networks', async () => {
+        const t = await text(camNet, '[data-testid=pair-status]');
+        return t.includes('different networks (this phone 10.195.144.160, the other 10.131.171.124)') && t;
+      }, 20_000, 250);
+      if ((await sbNet.locator('[data-testid=pair-done]').count()) > 0) throw new Error('paired across networks?');
+      const chipText = await text(sbNet, '[data-testid=diag-chip]');
+      if (!chipText.includes('net different (this phone 10.131.171.124, other 10.195.144.160)')) throw new Error(`diagnostics chip "${chipText}"`);
+      await sbNet.locator('[data-testid=diag-chip]').click();
+      const diagLog = await text(sbNet, '[data-testid=diag-log]');
+      for (const line of [`GET /rooms/${c} → 200`, 'got offer gen 1 new connection: 10.195.144.160', 'sent answer gen 1 new connection: 10.131.171.124'])
+        if (!diagLog.includes(line)) throw new Error(`the diagnostics log lacks "${line}"`);
+      await sbNet.screenshot({ path: path.join(OUT, '09-scoreboard-different-networks-diag.png') });
+      await sbNet.getByRole('dialog', { name: 'Pairing diagnostics' }).getByRole('button', { name: 'Close' }).click();
+      await sbNet.screenshot({ path: path.join(OUT, '10-scoreboard-different-networks.png') });
+      await camNet.screenshot({ path: path.join(OUT, '11-camera-different-networks.png') });
+      return `typed ${c}; after ${ms} ms the scoreboard says "${sbSays}"; camera "${camSays}"; chip "${chipText}"`;
+    });
   } catch (err) {
-    for (const [name, p] of [['camera', cam], ['scoreboard', sbPage], ['scoreboard-3', sb3]] as const) {
+    for (const [name, p] of [['camera', cam], ['scoreboard', sbPage], ['scoreboard-3', sb3], ['camera-net', netPages[0]], ['scoreboard-net', netPages[1]]] as const) {
       if (!p) continue;
       await p.screenshot({ path: path.join(OUT, `fail-${name}.png`) }).catch(() => {});
       const out = await p.evaluate(() => (window as any).__out.slice(-25)).catch(() => []);
@@ -430,6 +502,7 @@ async function main() {
     throw err;
   } finally {
     fs.writeFileSync(path.join(OUT, 'results.json'), JSON.stringify(results, null, 2));
+    fs.writeFileSync(path.join(OUT, 'posted-descriptions.json'), JSON.stringify(posted, null, 2));
     await camBrowser.close().catch(() => {});
     await sbBrowser?.close().catch(() => {});
     await sb3Browser?.close().catch(() => {});

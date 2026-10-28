@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react';
 import type { LinkSnapshot } from '../../pairing/link';
 import { pairUrl, qrSvg } from '../../pairing/qr';
-import { mismatchText, pairErrorText, SLOW_CONNECT_MS, SLOW_CONNECT_TEXT } from '../pairText';
+import { DiagChip } from '../DiagSheet';
+import { mismatchText, pairErrorText, SLOW_CONNECT_MS, slowConnectText } from '../pairText';
 import { useNow } from '../useNow';
 
 export function PairPanel({ l, onNewCode, onClose }: { l: LinkSnapshot; onNewCode: () => void; onClose: () => void }) {
@@ -47,7 +48,7 @@ export function PairPanel({ l, onNewCode, onClose }: { l: LinkSnapshot; onNewCod
           : code
             ? `Waiting for the scoreboard… (code valid ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')})`
             : answeredAt != null && now - answeredAt > SLOW_CONNECT_MS
-              ? SLOW_CONNECT_TEXT
+              ? slowConnectText(l.net)
               : 'Connecting…';
 
   return (
@@ -78,6 +79,7 @@ export function PairPanel({ l, onNewCode, onClose }: { l: LinkSnapshot; onNewCod
             {paired ? 'OK' : 'Close'}
           </button>
         </div>
+        <DiagChip role="camera" />
       </div>
     </div>
   );

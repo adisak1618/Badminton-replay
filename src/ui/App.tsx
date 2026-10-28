@@ -9,7 +9,8 @@ import { keepScreenOn } from '../device/wakeLock';
 import { store } from '../match/live';
 import { clearCurrent, loadCurrent } from '../match/persist';
 import { loadPrefs, loadRole, savePrefs, saveLastSetup, saveRole, type Prefs, type Role } from '../match/prefs';
-import { scoreboardPairing } from '../pairing/live';
+import { setUpdateWaiting } from '../pairing/diag';
+import { pairingDiag, scoreboardPairing } from '../pairing/live';
 import { codeFromLocation } from '../pairing/qr';
 import { announce } from '../speech/announce';
 import { unlockAudio } from '../speech/sound';
@@ -94,6 +95,12 @@ export function App() {
   };
 
   const update = needRefresh ? () => void updateServiceWorker(true) : null;
+
+  // The pairing diagnostics say when this phone still runs the older build next to a waiting update.
+  useEffect(() => {
+    setUpdateWaiting(needRefresh);
+    if (needRefresh) pairingDiag(loadRole() === 'camera' ? 'camera' : 'scoreboard').log('app', 'a newer build is waiting: Update the app');
+  }, [needRefresh]);
 
   const openPair = () => setPair(null);
   const overlay = pair !== false && <PairScreen initialCode={pair} onClose={() => setPair(false)} />;
