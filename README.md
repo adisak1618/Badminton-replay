@@ -11,10 +11,15 @@ score. Every point is logged with its time on the recording, so the finished
 clip is on the phone when the match ends and the overlay can still be
 re-rendered later if wanted.
 
-Status: design phase. No application code yet; the captain has answered the
-design decisions and reviews the docs and the rough UI mockup before
-implementation starts. Hosting target: Vercel (static PWA plus one signaling
-function).
+Status: phase 1 (single-phone scoreboard) implemented; pairing and recording
+are phase 2 (docs/roadmap.md). Hosting target: Vercel (static PWA plus one
+signaling function).
+
+## Development
+
+`pnpm install`, then `pnpm dev` (dev server), `pnpm test` (Vitest: engine,
+touch guards, phrases, persistence), `pnpm build` (static PWA in `dist/`).
+`pnpm icons` regenerates the PNG icons from `public/favicon.svg`.
 
 ## Docs
 
