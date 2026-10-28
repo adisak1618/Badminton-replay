@@ -104,6 +104,7 @@ interface MatchConfig {
   firstServer: Team;
   startRight: Record<Team, 0 | 1>;   // doubles: index of the player who starts in the right court
   leftTeamAtStart: Team;             // left of the scoreboard screen (S1)
+  reasons?: 'off' | 'endOfGame';     // D15 point reasons; absent (before D15) = off
 }
 ```
 
@@ -154,11 +155,37 @@ type MatchEvent = EventBase & (
   | { type: 'interval.end' }              // user dismissed or countdown ended
   | { type: 'game.start'; game: number; serverIdx?: number; receiverIdx?: number }
   | { type: 'match.end'; reason: 'won' | 'abandoned' }
+  // D15: why a point was won. `point` is the point event's id; the newest valid tag of a live point wins.
+  | { type: 'tag'; point: string; how: 'winner' | 'forced' | 'unforced';
+      hit: PlayerRef;          // who played the last shot: the side that won for a winner, else the side that lost
+      forcedBy?: PlayerRef;    // forced error: the winning side's player who forced it
+      assist?: PlayerRef;      // doubles: the partner of the finisher (or of forcedBy) who played the side's previous shot
+      shot?: 'smash' | 'kill' | 'drop' | 'net' | 'drive' | 'clear' | 'serve' }
+  | { type: 'tag.clear'; point: string }
 );
+// PlayerRef = { team: Team; idx: number }  (index into teams[team].players)
 ```
 
 - `seq` is dense and increasing on the scoreboard phone; `id` is random so a
   resent event is deduplicated.
+- **Tags (D15, `engine/tags.ts`).** A tag is an input like any other: the
+  camera applies it, in any phase, when the match asks why (`reasons`), the
+  point is a live counted one and the tag fits it (`validTag`: a winner by the
+  side that won the rally, an error by the side that lost it, forced-by from
+  the winning side, an assist only in doubles and only the partner); else
+  `ignored`. Tags are not undoable: Undo keeps taking back the last scoring
+  action and a newer tag (or `tag.clear`) changes one. A voided point drops
+  its tags, a redo brings them back; the reducer passes over tags, so the
+  score, the overlay and speech never see them. Naming the point by `id` (not
+  `seq`) keeps it the same on every phone whoever orders the log.
+- **Stats.** `matchStats(config, events)` is a pure fold: it replays the
+  reducer once to learn each counted rally's game, server and receiver (a
+  point made in game over is not a rally), takes the newest valid tag of
+  each, and counts per game and for the match: per player W, forced, A, FE,
+  UE; per team points from own winners, the other side's forced and unforced
+  errors, and untagged; winners by shot; longest run, points won on serve
+  and duration (no tag needed). The scoreboards' cards and `match.json`
+  `stats` both come from it.
 - **Undo as events.** `undo` voids its target; `redo` voids an `undo`. The
   reducer first computes the void set, then replays the remaining events in
   order. Undo targets the last non-voided *user* event (`point`, `correct`,
@@ -393,39 +420,44 @@ connect; the diagnostics log the same line.
 One ordered, reliable channel per scoreboard. Every message is a JSON object
 with `v` (protocol version) and `t` (type). Unknown `t` is ignored; an
 unsupported `v` is answered with `bye` and surfaces R-PAIR-7. Version 2 (D14):
-the camera holds the match; a phone on version 1 is told to update.
+the camera holds the match; a phone on version 1 is told to update. Version 3
+(D15): tag events. A version 2 phone would refuse every `state` carrying one,
+so it is told to update too; from 3 on an event or input of a type the build
+does not know is kept rather than refused (the reducer passes over it, the
+camera answers such an input `ignored`), so a new event type needs no new
+version.
 
 ```ts
 type Role = 'scoreboard' | 'camera';
 type Part = [index: number, count: number];
 type Msg =
-  | { v: 2; t: 'hello'; role: Role; deviceId: string; app: string; ua?: string; matchId?: string; lastSeq?: number }
-  | { v: 2; t: 'ping'; id: number; t0: number }
-  | { v: 2; t: 'pong'; id: number; t0: number; t1: number; t2: number }
-  | { v: 2; t: 'state'; matchId: string | null; config?: MatchConfig; events?: MatchEvent[]; part?: Part }
+  | { v: 3; t: 'hello'; role: Role; deviceId: string; app: string; ua?: string; matchId?: string; lastSeq?: number }
+  | { v: 3; t: 'ping'; id: number; t0: number }
+  | { v: 3; t: 'pong'; id: number; t0: number; t1: number; t2: number }
+  | { v: 3; t: 'state'; matchId: string | null; config?: MatchConfig; events?: MatchEvent[]; part?: Part }
                                             // camera -> scoreboard: the whole match, or none, on every open
-  | { v: 2; t: 'event'; matchId: string; event: MatchEvent }   // camera -> scoreboards: one applied event
-  | { v: 2; t: 'input'; matchId: string; input: Input }        // scoreboard -> camera
-  | { v: 2; t: 'result'; id: string; result: 'applied' | 'duplicate' | 'ignored' }  // camera -> its sender
-  | { v: 2; t: 'sync'; matchId: string; config: MatchConfig; events: MatchEvent[]; part?: Part }
+  | { v: 3; t: 'event'; matchId: string; event: MatchEvent }   // camera -> scoreboards: one applied event
+  | { v: 3; t: 'input'; matchId: string; input: Input }        // scoreboard -> camera
+  | { v: 3; t: 'result'; id: string; result: 'applied' | 'duplicate' | 'ignored' }  // camera -> its sender
+  | { v: 3; t: 'sync'; matchId: string; config: MatchConfig; events: MatchEvent[]; part?: Part }
                                             // scoreboard -> camera: its match, when the camera holds none
-  | { v: 2; t: 'resync' }                   // scoreboard -> camera: send the whole state again
-  | { v: 2; t: 'peers'; count: number }     // camera -> scoreboards: how many are linked
-  | { v: 2; t: 'rec'; state: 'idle' | 'recording' | 'stopping' | 'error';   // camera -> scoreboards
+  | { v: 3; t: 'resync' }                   // scoreboard -> camera: send the whole state again
+  | { v: 3; t: 'peers'; count: number }     // camera -> scoreboards: how many are linked
+  | { v: 3; t: 'rec'; state: 'idle' | 'recording' | 'stopping' | 'error';   // camera -> scoreboards
       segment?: number; startedAt?: number; elapsedMs?: number; bytes?: number;
       minutesLeft?: number; error?: string }
-  | { v: 2; t: 'cmd'; id: string; action: 'rec.start' | 'rec.stop' }        // scoreboard -> camera (D11)
-  | { v: 2; t: 'ack'; id: string; ok: boolean; error?: string }             // camera -> the asker
-  | { v: 2; t: 'bye'; reason?: 'version' | 'leaving' | 'unpaired' };
+  | { v: 3; t: 'cmd'; id: string; action: 'rec.start' | 'rec.stop' }        // scoreboard -> camera (D11)
+  | { v: 3; t: 'ack'; id: string; ok: boolean; error?: string }             // camera -> the asker
+  | { v: 3; t: 'bye'; reason?: 'version' | 'leaving' | 'unpaired' };
 ```
 
 Examples:
 
 ```json
-{"v":2,"t":"input","matchId":"m-1793099000000-3f1a","input":{"id":"k3f9","at":1793100000123,"by":"sb-7c2","body":{"type":"point","team":"A"}}}
-{"v":2,"t":"event","matchId":"m-1793099000000-3f1a","event":{"seq":17,"id":"k3f9","at":1793100000101,"by":"sb-7c2","type":"point","team":"A"}}
-{"v":2,"t":"result","id":"k3f9","result":"applied"}
-{"v":2,"t":"rec","state":"recording","segment":1,"startedAt":1793099000456,"elapsedMs":754000,"bytes":565000000,"minutesLeft":26}
+{"v":3,"t":"input","matchId":"m-1793099000000-3f1a","input":{"id":"k3f9","at":1793100000123,"by":"sb-7c2","body":{"type":"point","team":"A"}}}
+{"v":3,"t":"event","matchId":"m-1793099000000-3f1a","event":{"seq":17,"id":"k3f9","at":1793100000101,"by":"sb-7c2","type":"point","team":"A"}}
+{"v":3,"t":"result","id":"k3f9","result":"applied"}
+{"v":3,"t":"rec","state":"recording","segment":1,"startedAt":1793099000456,"elapsedMs":754000,"bytes":565000000,"minutesLeft":26}
 ```
 
 - **Versioning.** `v` is bumped only for incompatible changes; additive fields
@@ -728,6 +760,7 @@ interface MatchBundle {
     leftOnCamera: Team;                             // after.leftTeam, flipped if the segment is mirrored
   }>;
   result: { winner: Team | null; games: Record<Team, number>; completed: Array<Record<Team, number>> };
+  stats?: MatchStats;   // D15, derived from the tags in `events` (§3.3); absent when the match did not ask
 }
 ```
 

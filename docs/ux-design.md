@@ -20,6 +20,8 @@ app, from 6 m away or with one glance at the net post.
 | S3a | scoreboard | Interval overlay | R-SCORE-4, R-SCORE-5 |
 | S3b | scoreboard | Game over / change ends overlay | R-SCORE-2, R-SCORE-3, R-SCORE-5 |
 | S3c | scoreboard | Match over overlay | R-SCORE-2 |
+| S3d | scoreboard | Why was this point won (popup) | R-TAG-2, R-TAG-3 |
+| S3e | scoreboard | Rally list (tag later) | R-TAG-4 |
 | S4 | scoreboard | Correction sheet | R-SCORE-7 |
 | S5 | scoreboard | Menu | R-SCORE-7, R-PAIR-6 |
 | C1 | camera | Camera setup | R-SETUP-4, R-REC-3, R-REC-4 |
@@ -61,6 +63,7 @@ Two buttons, each half the screen. The previous role is highlighted. The
 |   Players (Singles)(Doubles*)   Points (11)(15)(21*)          |
 |   Format (Best of 3*)(Fixed 2)(Fixed 1)   Interval at 11 (on*)|
 |   First server (Left team*)(Right team)      [ START MATCH ]  |
+|   Point reasons (Off)(End of game*)                           |
 +---------------------------------------------------------------+
 ```
 
@@ -215,6 +218,54 @@ point.
 "Stop recording" sends the remote stop to the camera phone (D11, R-PAIR-6).
 "New match" returns to S1 with the same settings.
 
+### S3d Why was this point won (D15)
+
+```
++---------------------------------------------------------------+
+| ...  Game 1 · A 0-0 B           [🏷 1 untagged]  link ok      |
+|                       ( ↶ Undo point )                        |
+| +-----------------------------------------------------------+ |
+| | Who hit the last shot?  point 4 · A 3-1 B        (6) Later| |
+| | A won the point → winner · 1 tap | B lost it → forced/unf.| |
+| | [   Nok       serve ]            | [   Bank    receive ]  | |
+| | [   Pae             ]            | [   Tao             ]  | |
+| |                                  [⚡ Serve fault · Bank]  | |
+| +-----------------------------------------------------------+ |
++---------------------------------------------------------------+
+```
+
+The point is counted, flashed and spoken first; 350 ms later the popup rises
+on the phone whose tap counted (the other scoreboard shows "🏷 Tap to tag
+point 4" for 6 s). Names sit on the side of the screen their team plays on;
+serve and receive mark who served the rally. A name of the side that won the
+point saves "winner" at once; a name of the side that lost asks "Forced
+(under pressure)" or "Unforced (had time · when in doubt)". Then the optional
+extras stay 10 s with a countdown and Skip (Done once something is picked):
+shot (Smash, Net kill, Drop, Net shot, Drive / push, Clear / lift, Serve),
+for a forced error "Forced by", and in doubles "Set up by" (the partner of the
+finisher or of the player who forced it). Every choice is saved at once and
+each chip replaces the tag, so closing never loses one. "‹ Back" returns to
+the names. Untagged, the popup closes after 6 s (4/6/10 s/never in the
+menu); a tap outside closes it and scores nothing; "↶ Undo point" takes the
+point back with its tag. Labels are English like the rest of the scoreboard.
+
+### S3e Rally list (D15)
+
+Every counted rally, grouped by game, newest at the bottom: number, game
+score after it, the side that won it, and its tag or, untagged, the names
+inline (a name opens the popup's second step for that rally). ✎ changes a tag
+(the popup shows "now: ..." and offers "Clear tag"); "Tag one by one ▸" walks
+through the untagged ones. Opened from the top bar's "🏷 N untagged" chip, the
+interval's "Tag N untagged", the game-over and match-over cards, and the menu.
+Nothing in it scores.
+
+**Stats card (S3b, S3c).** With point reasons on, game over and match over
+show a card beside their own content: per player W (winners), Forced (errors
+they forced), A (assists, doubles), FE and UE (errors they made); per team
+"21 = 10 winners + 4 forced + 5 unforced + 2 untagged"; winners by shot; the
+longest run, points won on serve and the time. Match over offers each game
+and the whole match. Both scoreboards show the same card.
+
 ### S4 Correction sheet
 
 ```
@@ -238,8 +289,9 @@ with scores, games, serving team and player.
 Correct score · Swap ends · Start/stop recording (when paired) · Pair camera,
 or Unpair the camera (when linked) / "Leave: forget the camera" (when the link
 is lost: clears the camera's state, the match stays) · Sound and voice · End
-match · New match · Pairing diagnostics. Each item is a full-height row, at
-least 56 px. Paired, New match leaves the camera's match running for the
+match · New match · Export this match (match.json) · Pairing diagnostics; with
+point reasons on also Rally list, "Ask why after each point (this phone)" and
+"Untagged popup hides after". Each item is a full-height row, at least 56 px. Paired, New match leaves the camera's match running for the
 other scoreboard until a new one starts.
 
 The camera's `⋯` menu: Pair with the scoreboard… (none linked), Pair another

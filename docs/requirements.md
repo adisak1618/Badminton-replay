@@ -85,6 +85,23 @@ of the docs assume these.
   cannot stay up with the screen off: the scoreboard keeps its screen on while
   paired and reconnects within seconds when the screen comes back (R-DISP-8,
   R-PAIR-8). Unpairing clears the camera's state on every scoreboard (R-PAIR-11).
+- **D15 Point reasons: why each point was won.** Captain, 2026-10-29: "อีก
+  feature ที่อยากทำคือ เวลากดแต้มให้มี popup มาให้เลือกด้วยว่าแต้มนี้ ได้เพราะ
+  อะไร เช่น ทีมเรา นาย A ตีลูก winner หรือฝ่ายตรงข้ามนาย C ตี error ... คนหน้า
+  แต่งดี ก็ควรได้เครดิต ... และ feature นี้เราควรเลือกได้ว่าจะแสดง real-time หรือ
+  แสดงตอนจบเกมส์เท่านั้น" (a popup after the point tap asking why it was won;
+  the front player who set it up gets credit; real time or end of game). After
+  the research board (data/badminton-point-reason-research): "ทุกอย่างโอเคแล้วนะ
+  ยกเว้นอย่างเดียวคือตอนกดแล้วนับถอบหลัง 3 วิ คือไวเกิน เอาเป็น 10 วิ แล้วให้
+  skip ได้ดีกว่า นอกนั้นโอเคหมดแล้ว อย่าลืมว่า feature นี้สามารถเลือกใน config
+  ได้ว่าจะปิดหรือจะเปิด เพราะบางคนอยากใช้แค่นับแต้ม" (the recommended answers
+  stand: who hit the last shot plus winner / forced / unforced, a mechanical
+  assist, the two-step popup, end of game by default; the extras after a tap
+  stay 10 s with Skip; the feature can be switched off). Consequence: a tag is
+  its own event naming the point by id (technical-design.md §3.3), protocol
+  version 3; first slice: popup, tag later, stats cards at game over and match
+  over, `stats` in `match.json` (R-TAG). Live display and stats in the video
+  are the next slice.
 - The captain also asked to see a rough UI before implementation starts:
   [mockup/index.html](mockup/index.html), described in ux-design.md §6.
 
@@ -367,6 +384,40 @@ the BWF Statutes (https://corporate.bwfbadminton.com/statutes/).
   the point of dropping below that. *Accept:* ffprobe frame count on the
   exported file and a clap at minute 60 inspected in a video editor.
 
+### Point reasons (R-TAG)
+
+D15. Off records nothing and shows nothing: scoring only, as before D15.
+
+- **R-TAG-1 Setting.** Match setup has "Point reasons: Off / End of game",
+  default End of game, kept by "Same as last" and sent to the camera with the
+  match. *Accept:* start with Off: no popup, no chip, no tag in the camera's
+  log or in `match.json`.
+- **R-TAG-2 Popup after a tap.** The point counts, flashes and is spoken at
+  once; then the phone whose tap counted asks "Who hit the last shot?" with
+  the four names (two in singles) grouped by side, serve and receive marked,
+  and a "Serve fault" shortcut when the side that lost served. A name on the
+  winning side saves a winner (1 tap); a name on the losing side asks forced
+  or unforced (2 taps). The optional extras (shot; forced by; assist in
+  doubles) stay 10 s with Skip; untagged, the popup closes after 4, 6 (default)
+  or 10 s or never (per phone). A tap outside closes it and scores nothing;
+  Undo stays on screen and takes back the point with its tag. *Accept:* a
+  winner tagged in one tap, an error in two, within the next serve.
+- **R-TAG-3 Two scoreboards.** The other scoreboard shows "Tap to tag" for 6 s
+  instead of the popup; either may tag or change a point, the camera's order
+  decides; "Ask why after each point" can be turned off per phone. *Accept:*
+  a tag on one scoreboard shows on the other's card.
+- **R-TAG-4 Tag later.** The top bar counts untagged points; the rally list
+  (from that chip, the interval, game over, match over and the menu) tags,
+  changes or clears any point, one by one if wanted. Nothing in it scores.
+- **R-TAG-5 End of game.** Game over and match over show, per player, winners,
+  errors they forced, assists, forced and unforced errors; per team, points
+  from own winners, the other side's forced and unforced errors and untagged
+  (adding up to the score); winners by shot; longest run, points won on serve
+  and time. *Accept:* both scoreboards show the same card.
+- **R-TAG-6 Export.** `match.json` carries the tags in `events` and a derived
+  `stats` block, from the camera's bundle and from the scoreboard's own
+  export (menu).
+
 ### Export (R-EXP)
 
 - **R-EXP-1 Bundle.** An export is the composited video segment(s) plus one
@@ -436,6 +487,6 @@ the BWF Statutes (https://corporate.bwfbadminton.com/statutes/).
 - Offline pairing without internet (two-QR handshake).
 - Service faults, lets, challenges, timeouts beyond the standard intervals.
 - A third phone as a remote, or a live camera preview on the scoreboard phone.
-- Multi-match tournaments, player profiles, statistics, history sync between
-  phones, cloud backup.
+- Multi-match tournaments, player profiles, statistics beyond point reasons
+  (D15), history sync between phones, cloud backup.
 - Android support.
