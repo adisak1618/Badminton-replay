@@ -2,6 +2,7 @@
 // while typing too: on iPhone the camera permission is what lets the browser offer local-network candidates
 // (technical-design.md §4.3).
 import { useEffect, useRef, useState } from 'react';
+import { keepScreenOn } from '../device/wakeLock';
 import { registerCapture } from '../pairing/capture';
 import { codeFromText, grabFrame, qrReader } from '../pairing/qr';
 import { useCameraLink } from './CameraLink';
@@ -27,6 +28,12 @@ export function PairScreen({ initialCode, onClose }: { initialCode: string | nul
   const tried = useRef<string | null>(null);
   const paired = l.state === 'paired';
   const now = useNow(1000, joinedAt != null && !paired);
+
+  // The screen stays on while pairing (and while paired, live.ts): a locked screen suspends the link.
+  useEffect(() => {
+    keepScreenOn(true, 'pairing');
+    return () => keepScreenOn(false, 'pairing');
+  }, []);
 
   const join = (c: string) => {
     if (l.busy) return;
@@ -178,6 +185,7 @@ export function PairScreen({ initialCode, onClose }: { initialCode: string | nul
               <p className="text-xl font-semibold text-ok">Paired, camera ready</p>
               <p className="text-mut">
                 link: paired · REC: {b.rec?.state ?? 'idle'}
+                {b.others > 0 && ` · ${b.others} other scoreboard linked`}
                 {l.otherBuild && ` · the camera runs another build (${l.otherBuild}); update both when convenient`}
               </p>
               <button className="btn btn-pri self-start px-8" onClick={onClose}>
