@@ -1,7 +1,12 @@
-// S3 scoreboard: two tap zones, top bar, Undo band, and the S3a-S3c overlays, S4 correction and S5 menu.
-import { useEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent } from 'react';
+// S3 scoreboard: two tap zones, top bar, Undo band, and the S3a-S3c overlays, S4 correction and S5 menu. With
+// point reasons on (D15): the why-was-this-point-won popup after a tap that counted on this phone (S3d), the
+// rally list to tag later (S3e), and the stats card at game over and match over.
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent } from 'react';
 import {
+  matchStats,
   other,
+  rallies,
+  reasonsOn,
   receiverIdx,
   servingCourt,
   type Court,
@@ -9,12 +14,13 @@ import {
   type MatchConfig,
   type MatchEvent,
   type MatchState,
+  type PlayerRef,
   type Team,
 } from '../engine';
 import { keepScreenOn, subscribeWake, wakeHint, wakeStatus } from '../device/wakeLock';
 import { DUPLICATE_WINDOW_MS } from '../engine';
-import type { Prefs } from '../match/prefs';
-import type { MatchStore } from '../match/store';
+import { deviceId, type Prefs } from '../match/prefs';
+import type { Change, MatchStore } from '../match/store';
 import { announce } from '../speech/announce';
 import { scoreCall } from '../speech/phrases';
 import { audioUnlocked, unlockAudio } from '../speech/sound';
@@ -26,8 +32,16 @@ import { CameraStatus, useCameraLink } from './CameraLink';
 import { Menu } from './Menu';
 import { GameOverOverlay, IntervalOverlay, MatchOverOverlay } from './overlays';
 import { useNow } from './useNow';
+import { exportLog } from './exportLog';
+import { RallyList } from './reasons/RallyList';
+import { StatsCard } from './reasons/StatsCard';
+import { TagSheet } from './reasons/TagSheet';
 
 const REDO_WINDOW_MS = 5000;
+/** After a tap that counted, the popup rises once the flash and the new score have shown (D15). */
+const TAG_OPEN_DELAY_MS = 350;
+/** How long another scoreboard's point offers "Tap to tag" here (the popup opens on the phone that tapped). */
+const TAG_CHIP_MS = 6000;
 /** How long "already counted" stays up after a duplicate tap (D14). */
 const DUPLICATE_CUE_MS = DUPLICATE_WINDOW_MS;
 const SHUTTLE = '\u{1F3F8}';
@@ -56,6 +70,44 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
   const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
   const now = useNow(500);
 
+  // ---- point reasons (D15) ----
+  const reasons = reasonsOn(config);
+  const rs = useMemo(() => (reasons ? rallies(config, events) : []), [reasons, config, events]);
+  const over = s.phase === 'gameOver' || s.phase === 'matchOver';
+  const stats = useMemo(() => (reasons && over ? matchStats(config, events) : null), [reasons, over, config, events]);
+  const [tagging, setTagging] = useState<{ id: string; live: boolean; hit?: PlayerRef; step?: boolean } | null>(null);
+  const [listOpen, setListOpen] = useState(false);
+  const [offer, setOffer] = useState<{ id: string; until: number } | null>(null);
+  const openTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const me = useMemo(deviceId, []);
+  const newest = rs[rs.length - 1];
+  const seen = useRef(newest?.id ?? null);
+  const tagRally = tagging ? (rs.find((r) => r.id === tagging.id) ?? null) : null;
+  const untaggedCount = rs.filter((r) => !r.tag).length;
+  // A point undone, or counted on the other scoreboard after all: its popup goes with it.
+  useEffect(() => {
+    if (tagging && !tagRally) setTagging(null);
+  }, [tagging, tagRally]);
+  // A point that counted on another scoreboard: the popup opened there; here it can be tagged too.
+  useEffect(() => {
+    if (!newest || newest.id === seen.current) return;
+    seen.current = newest.id;
+    // Only a point just made: joining mid-match or a resync does not offer an old one.
+    if (newest.by !== me && !newest.tag && prefs.askReasons && Date.now() - newest.at < TAG_CHIP_MS)
+      setOffer({ id: newest.id, until: Date.now() + TAG_CHIP_MS });
+  }, [newest, me, prefs.askReasons]);
+  const offered = offer && now < offer.until && !tagging ? rs.find((r) => r.id === offer.id && !r.tag) : undefined;
+  const nextUntagged = (after: number) => rs.find((r) => !r.tag && r.n > after) ?? rs.find((r) => !r.tag && r.n !== after);
+  const closeTag = (reason: 'done' | 'later' | 'timeout' | 'outside') => {
+    const t = tagging;
+    setTagging(null);
+    // Walking through the list: a tagged one moves on to the next untagged.
+    if (t?.step && reason === 'done' && tagRally) {
+      const n = nextUntagged(tagRally.n);
+      if (n) setTagging({ id: n.id, live: false, step: true });
+    }
+  };
+
   const L = s.leftTeam;
   const R = other(L);
   const teamOf = (z: Zone): Team => (z === 'left' ? L : R);
@@ -63,7 +115,11 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
   const live = s.phase === 'playing' || s.phase === 'interval';
   const redoVisible = undoAt > 0 && now - undoAt < REDO_WINDOW_MS && store.canRedo();
 
-  const emit = (body: EventBody) => announce(store.emit(body), prefs);
+  const emit = (body: EventBody): Change | null => {
+    const c = store.emit(body);
+    announce(c, prefs);
+    return c;
+  };
 
   // Any touch on the board unlocks audio and the wake lock after a resume (both need a gesture on iOS).
   const wake = () => {
@@ -88,6 +144,7 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
   }, [s.phase, s.phaseSince, config.intervalMs.midGame, store, prefs]);
 
   const undo = () => {
+    clearTimeout(openTimer.current);
     const c = store.undo();
     if (c) setUndoAt(Date.now());
     announce(c, prefs);
@@ -129,7 +186,13 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
     if (g.kind === 'point' && s.phase === 'playing') {
       setFlash({ zone: g.zone, key: Date.now() });
       setUndoAt(0);
-      emit({ type: 'point', team: teamOf(g.zone) });
+      const c = emit({ type: 'point', team: teamOf(g.zone) });
+      // The popup opens on the phone whose tap counted (a duplicate returns no change).
+      if (c?.event.type === 'point' && reasons && prefs.askReasons) {
+        const id = c.event.id;
+        clearTimeout(openTimer.current);
+        openTimer.current = setTimeout(() => setTagging({ id, live: true }), TAG_OPEN_DELAY_MS);
+      }
     }
   };
   const onCancel = (e: ReactPointerEvent) => {
@@ -189,6 +252,11 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
           {speechWarning && <span className="text-amber">no {prefs.lang === 'th' ? 'Thai' : 'English'} voice</span>}
           {!prefs.voice && <span title="voice off">voice off</span>}
           {!prefs.sound && <span title="sound off">sound off</span>}
+          {reasons && untaggedCount > 0 && (
+            <button className="btn min-h-9 rounded-full border border-amber/50 bg-amber/10 px-3 py-1 text-sm text-amber" onClick={() => setListOpen(true)} data-testid="untagged-chip">
+              🏷 {untaggedCount} untagged
+            </button>
+          )}
           <CameraStatus onPair={onPair} />
           <span className="rounded-full bg-pan2 px-3 py-1 tabular-nums">{elapsed(now - matchStart)}</span>
         </span>
@@ -223,7 +291,16 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
             </button>
           </div>
         )}
-        {s.phase === 'interval' && <IntervalOverlay config={config} s={s} now={now} onDismiss={dismissInterval} onUndo={undo} />}
+        {s.phase === 'interval' && (
+          <IntervalOverlay
+            config={config}
+            s={s}
+            now={now}
+            onDismiss={dismissInterval}
+            onUndo={undo}
+            tagPoints={reasons ? { untagged: untaggedCount, onOpen: () => setListOpen(true) } : null}
+          />
+        )}
         {s.phase === 'gameOver' && (
           <GameOverOverlay
             config={config}
@@ -234,6 +311,7 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
               wake();
               emit({ type: 'game.start', game: s.game + 1, serverIdx, receiverIdx });
             }}
+            card={stats && <StatsCard config={config} stats={stats} game={s.game} onList={() => setListOpen(true)} />}
           />
         )}
         {s.phase === 'matchOver' && (
@@ -247,6 +325,7 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
             onStopRec={
               camera.b.rec?.state === 'recording' && camera.l.state === 'paired' ? () => camera.board.command('rec.stop') : null
             }
+            card={stats && <StatsCard config={config} stats={stats} game={0} onList={() => setListOpen(true)} />}
           />
         )}
         {resumed && (
@@ -260,6 +339,64 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
           >
             Already counted on the other scoreboard
           </div>
+        )}
+        {offered && (
+          <button
+            className="btn absolute top-3 left-1/2 z-20 -translate-x-1/2 rounded-full border border-amber/60 bg-pan2 px-4 font-semibold text-amber shadow-[0_2px_12px_rgb(0_0_0/0.6)]"
+            onClick={() => {
+              setOffer(null);
+              setTagging({ id: offered.id, live: true });
+            }}
+            data-testid="tag-offer"
+          >
+            🏷 Tap to tag point {offered.n}
+          </button>
+        )}
+        {listOpen && (
+          <RallyList
+            config={config}
+            rallies={rs}
+            leftTeam={L}
+            onOpen={(r, hit) => setTagging({ id: r.id, live: false, hit })}
+            onStep={() => {
+              const n = nextUntagged(0);
+              if (n) setTagging({ id: n.id, live: false, step: true });
+            }}
+            onClose={() => setListOpen(false)}
+          />
+        )}
+        {tagging && tagRally && (
+          <TagSheet
+            key={tagging.id}
+            config={config}
+            rally={tagRally}
+            leftTeam={L}
+            live={tagging.live}
+            closeAfterMs={prefs.tagCloseS * 1000}
+            initialHit={tagging.hit}
+            onTag={(t) => store.emit(t)}
+            onClear={() => {
+              store.emit({ type: 'tag.clear', point: tagRally.id });
+              setTagging(null);
+            }}
+            onClose={closeTag}
+            onUndo={
+              tagging.live
+                ? () => {
+                    setTagging(null);
+                    undo();
+                  }
+                : undefined
+            }
+            next={
+              tagging.step
+                ? (() => {
+                    const n = nextUntagged(tagRally.n);
+                    return n ? () => setTagging({ id: n.id, live: false, step: true }) : null;
+                  })()
+                : null
+            }
+          />
         )}
         {wakeLine && (
           <div className="pointer-events-none absolute bottom-1 left-1/2 z-20 w-max max-w-[90%] -translate-x-1/2 text-center text-xs text-amber" data-testid="wake-hint">
@@ -289,6 +426,15 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
           onPair={() => {
             setSheet('none');
             onPair();
+          }}
+          reasons={reasons}
+          onRallyList={() => {
+            setSheet('none');
+            setListOpen(true);
+          }}
+          onExport={() => {
+            const m = store.getSnapshot().match;
+            if (m) void exportLog(m);
           }}
         />
       )}

@@ -12,7 +12,14 @@ export interface Prefs {
   sound: boolean;
   voice: boolean;
   lang: Lang; // D5: English by default
+  /** D15: open the why-was-this-point-won popup on this phone (the net-post phone the players tap may say no). */
+  askReasons: boolean;
+  /** Seconds before an untagged popup closes by itself; 0 = never. */
+  tagCloseS: TagCloseS;
 }
+
+export const TAG_CLOSE_OPTIONS = [4, 6, 10, 0] as const;
+export type TagCloseS = (typeof TAG_CLOSE_OPTIONS)[number];
 
 const KEYS = { role: 'bs.role', setup: 'bs.setup', prefs: 'bs.prefs', device: 'bs.device' } as const;
 
@@ -52,8 +59,12 @@ export function loadLastSetup(): MatchSetup | null {
 }
 export const saveLastSetup = (s: MatchSetup) => write(KEYS.setup, s);
 
-export const DEFAULT_PREFS: Prefs = { sound: true, voice: true, lang: 'en' };
-export const loadPrefs = (): Prefs => ({ ...DEFAULT_PREFS, ...read<Partial<Prefs>>(KEYS.prefs) });
+export const DEFAULT_PREFS: Prefs = { sound: true, voice: true, lang: 'en', askReasons: true, tagCloseS: 6 };
+export function loadPrefs(): Prefs {
+  const p = { ...DEFAULT_PREFS, ...read<Partial<Prefs>>(KEYS.prefs) };
+  if (!(TAG_CLOSE_OPTIONS as readonly unknown[]).includes(p.tagCloseS)) p.tagCloseS = DEFAULT_PREFS.tagCloseS;
+  return p;
+}
 export const savePrefs = (p: Prefs) => write(KEYS.prefs, p);
 
 export function deviceId(): string {

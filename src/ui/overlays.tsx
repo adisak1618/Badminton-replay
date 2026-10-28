@@ -1,8 +1,26 @@
 // S3a interval, S3b game over / change ends, S3c match over. They cover the tap zones only; the Undo band
-// below stays usable.
-import { useState, type PointerEvent as ReactPointerEvent } from 'react';
+// below stays usable. With point reasons on (D15) the interval offers the untagged points and game over and
+// match over show the stats card beside their own content.
+import { useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { other, totalPoints, type MatchConfig, type MatchState, type Team } from '../engine';
 import { clock, playerName } from './format';
+
+/** Untagged points and the way to the rally list (D15): a button whose touches never resume or score. */
+export interface TagPoints {
+  untagged: number;
+  onOpen: () => void;
+}
+
+/** Game over and match over with the stats card: their own content on the left, the card on the right. */
+function WithCard({ card, children }: { card: ReactNode; children: ReactNode }) {
+  if (!card) return <>{children}</>;
+  return (
+    <div className="flex max-h-full w-full max-w-[1100px] items-center gap-4 overflow-y-auto">
+      <div className="flex min-w-0 flex-1 flex-col items-center gap-[10px]">{children}</div>
+      {card}
+    </div>
+  );
+}
 
 export function IntervalOverlay({
   config,
@@ -10,12 +28,14 @@ export function IntervalOverlay({
   now,
   onDismiss,
   onUndo,
+  tagPoints,
 }: {
   config: MatchConfig;
   s: MatchState;
   now: number;
   onDismiss: () => void;
   onUndo: () => void;
+  tagPoints?: TagPoints | null;
 }) {
   const [downId, setDownId] = useState<number | null>(null);
   const L = s.leftTeam;
@@ -54,6 +74,17 @@ export function IntervalOverlay({
       >
         ↶ Undo last point
       </button>
+      {tagPoints && tagPoints.untagged > 0 && (
+        <button
+          className="btn btn-ghost absolute right-3 bottom-3"
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+          onClick={tagPoints.onOpen}
+          data-testid="interval-tag-points"
+        >
+          🏷 Tag {tagPoints.untagged} untagged
+        </button>
+      )}
     </div>
   );
 }
@@ -64,12 +95,15 @@ export function GameOverOverlay({
   now,
   onUndo,
   onStart,
+  card,
 }: {
   config: MatchConfig;
   s: MatchState;
   now: number;
   onUndo: () => void;
   onStart: (serverIdx?: number, receiverIdx?: number) => void;
+  /** The stats card (D15), or nothing. */
+  card?: ReactNode;
 }) {
   const w = s.lastGameWinner as Team;
   const l = other(w);
@@ -93,32 +127,34 @@ export function GameOverOverlay({
   );
   return (
     <div className="overlay" role="dialog" aria-label="Game over">
-      <div className="text-[40px] leading-tight font-extrabold">
-        GAME {s.game} TO {config.teams[w].name} &nbsp;{g[w]} – {g[l]}
-      </div>
-      <div className="text-[22px]">
-        games {config.teams.A.name} {s.games.A} – {s.games.B} {config.teams.B.name}
-      </div>
-      <div className="text-mut">
-        Change ends · {config.teams[w].name} serves first · interval <span className="tabular-nums">{clock(left)}</span>
-      </div>
-      {s.doubles && (
-        <div className="flex flex-wrap justify-center gap-x-6 gap-y-2">
-          {choose('serve', w)}
-          {choose('receive', l)}
+      <WithCard card={card}>
+        <div className={`${card ? 'text-[30px]' : 'text-[40px]'} leading-tight font-extrabold`}>
+          GAME {s.game} TO {config.teams[w].name} &nbsp;{g[w]} – {g[l]}
         </div>
-      )}
-      <div className="flex gap-3">
-        <button className="btn btn-ghost" onClick={onUndo}>
-          ↶ Undo last point
-        </button>
-        <button
-          className="btn btn-pri px-6"
-          onClick={() => (s.doubles ? onStart(pick.serve, pick.receive) : onStart())}
-        >
-          START GAME {s.game + 1}
-        </button>
-      </div>
+        <div className="text-[22px]">
+          games {config.teams.A.name} {s.games.A} – {s.games.B} {config.teams.B.name}
+        </div>
+        <div className="text-mut">
+          Change ends · {config.teams[w].name} serves first · interval <span className="tabular-nums">{clock(left)}</span>
+        </div>
+        {s.doubles && (
+          <div className="flex flex-wrap justify-center gap-x-6 gap-y-2">
+            {choose('serve', w)}
+            {choose('receive', l)}
+          </div>
+        )}
+        <div className="flex gap-3">
+          <button className="btn btn-ghost" onClick={onUndo}>
+            ↶ Undo last point
+          </button>
+          <button
+            className="btn btn-pri px-6"
+            onClick={() => (s.doubles ? onStart(pick.serve, pick.receive) : onStart())}
+          >
+            START GAME {s.game + 1}
+          </button>
+        </div>
+      </WithCard>
     </div>
   );
 }
@@ -131,6 +167,7 @@ export function MatchOverOverlay({
   onUndo,
   onNewMatch,
   onStopRec,
+  card,
 }: {
   config: MatchConfig;
   s: MatchState;
@@ -140,6 +177,8 @@ export function MatchOverOverlay({
   onNewMatch: () => void;
   /** The camera is recording: stop it from here (S3c, D11). */
   onStopRec: (() => void) | null;
+  /** The stats card (D15), or nothing. */
+  card?: ReactNode;
 }) {
   const pts = totalPoints(s.completed);
   const minutes = Math.max(1, Math.round((end - start) / 60_000));
@@ -151,30 +190,32 @@ export function MatchOverOverlay({
     s.completed.length < s.game && s.score.A + s.score.B > 0 ? `  ·  unfinished ${s.score.A}–${s.score.B}` : '';
   return (
     <div className="overlay" role="dialog" aria-label="Match over">
-      <div className="text-[44px] font-extrabold" data-testid="match-result">
-        {title}
-      </div>
-      <div className="text-[22px] tabular-nums">
-        {s.completed.map((g) => `${g.A}-${g.B}`).join('   ')}
-        {unfinished}
-        {!s.winner && s.completed.length > 0 && `  ·  points ${pts.A}–${pts.B}`}
-      </div>
-      <div className="text-mut">
-        {config.teams.A.name} vs {config.teams.B.name} · {minutes} min
-      </div>
-      <div className="flex gap-3">
-        <button className="btn btn-ghost" onClick={onUndo}>
-          ↶ Undo
-        </button>
-        {onStopRec && (
-          <button className="btn bg-red/80 px-6 font-bold" onClick={onStopRec} data-testid="stop-rec">
-            ■ Stop recording
+      <WithCard card={card}>
+        <div className={`${card ? 'text-[32px]' : 'text-[44px]'} font-extrabold`} data-testid="match-result">
+          {title}
+        </div>
+        <div className="text-[22px] tabular-nums">
+          {s.completed.map((g) => `${g.A}-${g.B}`).join('   ')}
+          {unfinished}
+          {!s.winner && s.completed.length > 0 && `  ·  points ${pts.A}–${pts.B}`}
+        </div>
+        <div className="text-mut">
+          {config.teams.A.name} vs {config.teams.B.name} · {minutes} min
+        </div>
+        <div className="flex gap-3">
+          <button className="btn btn-ghost" onClick={onUndo}>
+            ↶ Undo
           </button>
-        )}
-        <button className="btn btn-pri px-6" onClick={onNewMatch}>
-          New match
-        </button>
-      </div>
+          {onStopRec && (
+            <button className="btn bg-red/80 px-6 font-bold" onClick={onStopRec} data-testid="stop-rec">
+              ■ Stop recording
+            </button>
+          )}
+          <button className="btn btn-pri px-6" onClick={onNewMatch}>
+            New match
+          </button>
+        </div>
+      </WithCard>
     </div>
   );
 }

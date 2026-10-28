@@ -1,8 +1,9 @@
 // S5 menu: full-height rows of at least 56 px. Ending or replacing a live match asks once more. The camera
-// rows pair, unpair, and start or stop the camera phone's recording (D11).
+// rows pair, unpair, and start or stop the camera phone's recording (D11). With point reasons on (D15): the
+// rally list, whether this phone asks, and how soon an untagged popup closes. The match's own match.json.
 import { useState } from 'react';
 import type { MatchConfig, MatchState } from '../engine';
-import type { Prefs } from '../match/prefs';
+import { TAG_CLOSE_OPTIONS, type Prefs } from '../match/prefs';
 import { CameraMenuRows } from './CameraLink';
 import { DiagSheet } from './DiagSheet';
 
@@ -17,6 +18,9 @@ export function Menu({
   onNewMatch,
   onUpdate,
   onPair,
+  reasons,
+  onRallyList,
+  onExport,
 }: {
   config: MatchConfig;
   s: MatchState;
@@ -29,6 +33,10 @@ export function Menu({
   onNewMatch: () => void;
   onUpdate: (() => void) | null;
   onPair: () => void;
+  /** The match asks why points were won. */
+  reasons: boolean;
+  onRallyList: () => void;
+  onExport: () => void;
 }) {
   const [confirm, setConfirm] = useState<'end' | 'new' | null>(null);
   const [diag, setDiag] = useState(false);
@@ -57,6 +65,33 @@ export function Menu({
         </button>
         <button className={row} onClick={() => setPrefs({ ...prefs, lang: prefs.lang === 'en' ? 'th' : 'en' })}>
           Voice language: <b>{prefs.lang === 'en' ? 'English' : 'ไทย (Thai)'}</b>
+        </button>
+        {reasons && (
+          <>
+            <button className={row} onClick={onRallyList} data-testid="menu-rally-list">
+              🏷 Rally list · tag points
+            </button>
+            <button
+              className={row}
+              aria-pressed={prefs.askReasons}
+              onClick={() => setPrefs({ ...prefs, askReasons: !prefs.askReasons })}
+              data-testid="menu-ask-reasons"
+            >
+              Ask why after each point (this phone): <b>{prefs.askReasons ? 'on' : 'off'}</b>
+            </button>
+            <button
+              className={row}
+              onClick={() => {
+                const i = TAG_CLOSE_OPTIONS.indexOf(prefs.tagCloseS);
+                setPrefs({ ...prefs, tagCloseS: TAG_CLOSE_OPTIONS[(i + 1) % TAG_CLOSE_OPTIONS.length] });
+              }}
+            >
+              Untagged popup hides after: <b>{prefs.tagCloseS ? `${prefs.tagCloseS} s` : 'never'}</b>
+            </button>
+          </>
+        )}
+        <button className={row} onClick={onExport} data-testid="menu-export">
+          Export this match (match.json)
         </button>
         {!over && (
           <button
