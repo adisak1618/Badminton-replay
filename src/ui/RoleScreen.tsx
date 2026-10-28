@@ -38,19 +38,20 @@ export function RoleScreen({
   ];
   const highlight = lastRole ?? 'scoreboard';
   return (
-    <main className="pad-safe-x flex h-full flex-col gap-3 overflow-y-auto py-3">
+    <main className="pad-safe-x flex h-full flex-col gap-3 overflow-y-auto pt-[max(12px,env(safe-area-inset-top))] pb-[max(12px,env(safe-area-inset-bottom))]">
       <h1 className="text-center text-lg font-semibold text-mut">Badminton scoreboard</h1>
       <UpdateBanner onUpdate={onUpdate} />
-      <div className="flex min-h-40 flex-1 gap-4">
+      {/* Portrait: cards stacked full width, about a third of the screen each. Landscape: side by side. */}
+      <div className="flex min-h-40 flex-1 gap-4 portrait:flex-col portrait:justify-center">
         {roles.map((r) => (
           <button
             key={r.role}
             onClick={() => onPick(r.role)}
-            className={`flex flex-1 flex-col items-center justify-center gap-1 rounded-2xl border-2 ${
+            className={`flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-2xl border-2 px-4 py-3 text-center portrait:max-h-[32dvh] portrait:min-h-28 ${
               highlight === r.role ? 'border-pri bg-pri/15' : 'border-line bg-pan'
             }`}
           >
-            <span className="text-3xl font-extrabold tracking-wide">{r.title}</span>
+            <span className="text-[min(1.875rem,8vw)] leading-tight font-extrabold tracking-wide">{r.title}</span>
             <span className="text-mut">{r.sub}</span>
           </button>
         ))}
