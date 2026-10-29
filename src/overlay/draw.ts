@@ -58,7 +58,7 @@ function roundRectPath(ctx: Ctx, b: Box, r: number): void {
 }
 
 /** Set a bold font no larger than `px` that makes `text` fit `maxW`, ellipsising below `minPx`. */
-function fit(ctx: Ctx, text: string, maxW: number, px: number, minPx: number, font: string, weight = 700): string {
+export function fit(ctx: Ctx, text: string, maxW: number, px: number, minPx: number, font: string, weight = 700): string {
   let size = px;
   ctx.font = `${weight} ${size}px ${font}`;
   while (size > minPx && ctx.measureText(text).width > maxW) {

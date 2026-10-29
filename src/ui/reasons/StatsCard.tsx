@@ -6,7 +6,27 @@ import { TEAMS, type MatchConfig, type MatchStats, type Shot, type Stats } from 
 import { elapsed, playerName } from '../format';
 import { SHOT_LABEL } from './labels';
 
-export function StatsCard({ config, stats, game, onList }: { config: MatchConfig; stats: MatchStats; game: number; onList: (() => void) | null }) {
+/** The end-of-game summary burned into the video (R-TAG-7): waits for the last point, stays until closed from here. */
+export interface SummaryControl {
+  /** The last point is still waiting for its tag (or for "No tag"). */
+  waiting: boolean;
+  closed: boolean;
+  onClose: () => void;
+}
+
+export function StatsCard({
+  config,
+  stats,
+  game,
+  onList,
+  summary = null,
+}: {
+  config: MatchConfig;
+  stats: MatchStats;
+  game: number;
+  onList: (() => void) | null;
+  summary?: SummaryControl | null;
+}) {
   // 0 = the whole match; match over offers it next to each game.
   const [pick, setPick] = useState(game);
   const st: Stats | undefined = pick === 0 ? stats.match : stats.games.find((g) => g.game === pick);
@@ -82,6 +102,20 @@ export function StatsCard({ config, stats, game, onList }: { config: MatchConfig
         <button className="btn btn-ghost min-h-10 text-sm" onClick={onList} data-testid="stats-tag-points">
           🏷 {untagged ? `Tag ${untagged} untagged point${untagged === 1 ? '' : 's'}` : 'Rally list'}
         </button>
+      )}
+      {summary && (
+        <div className="flex flex-col gap-1" data-testid="summary-control">
+          <button className="btn btn-pri min-h-12 text-[17px] font-bold" onClick={summary.onClose} disabled={summary.closed} data-testid="summary-close">
+            {summary.closed ? 'ปิดสรุปแล้ว' : 'ปิดสรุป'}
+          </button>
+          <span className="text-[12px] text-mut" data-testid="summary-note">
+            {summary.closed
+              ? 'สรุปในวิดีโอปิดแล้ว'
+              : summary.waiting
+                ? 'สรุปในวิดีโอรอแท็กแต้มสุดท้าย (หรือกด "No tag")'
+                : 'สรุปแสดงอยู่ในวิดีโอ จนกว่าจะกดปิด หรือเริ่มแต้มแรกของเกมถัดไป'}
+          </span>
+        </div>
       )}
     </section>
   );

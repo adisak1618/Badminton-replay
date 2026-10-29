@@ -3,13 +3,90 @@
 import { describe, expect, it } from 'vitest';
 import { applyInput } from './input';
 import { lastUndoable } from './reducer';
-import { matchStats, rallies, untagged, validTag } from './tags';
+import { gameStats, matchStats, rallies, summaryStatus, untagged, validTag } from './tags';
 import { Match, doublesConfig, makeConfig } from './test-utils';
 import type { MatchConfig, PlayerRef, TagBody } from './types';
 
 const on = (cfg: MatchConfig): MatchConfig => ({ ...cfg, reasons: 'endOfGame' });
 const P = (team: 'A' | 'B', idx: number): PlayerRef => ({ team, idx });
 const tag = (point: string, how: TagBody['how'], hit: PlayerRef, more: Partial<TagBody> = {}): TagBody => ({ type: 'tag', point, how, hit, ...more });
+
+describe('rallies with a cutoff (the video clock)', () => {
+  it('counts only events up to the cutoff; a tag counts from when it was saved; undos still come from the whole log', () => {
+    const m = new Match(on(doublesConfig())).rallies('AB');
+    m.push(tag('e2', 'winner', P('A', 0)));
+    const [p1, p2, tagAt] = [m.events[1].at, m.events[2].at, m.events[3].at];
+    const at = (c: number) => rallies(m.cfg, m.events, c);
+    expect(at(p1 - 1)).toHaveLength(0);
+    expect(at(p1)).toHaveLength(1);
+    expect(at(p2)).toHaveLength(2);
+    expect(at(tagAt - 1)[0].tag).toBeNull();
+    expect(at(tagAt)[0].tag).toMatchObject({ how: 'winner' });
+    expect(rallies(m.cfg, m.events)).toEqual(at(Infinity));
+    m.undo(); // the undo of the last point is later than the cutoff, but the point never counts
+    expect(at(tagAt)).toHaveLength(1);
+    expect(matchStats(m.cfg, m.events, tagAt).match.rallies).toBe(1);
+  });
+
+  it('gameStats is all zero for a game without a rally', () => {
+    const m = new Match(on(doublesConfig())).rallies('A');
+    const g = gameStats(matchStats(m.cfg, m.events), m.cfg, 2);
+    expect(g).toMatchObject({ game: 2, rallies: 0, tagged: 0 });
+    expect(g.players.A.map((p) => p.W)).toEqual([0, 0]);
+    expect(gameStats(matchStats(m.cfg, m.events), m.cfg, 1).rallies).toBe(1);
+  });
+});
+
+describe('the end-of-game summary in the video (summaryStatus)', () => {
+  const input = (m: Match, body: Parameters<typeof applyInput>[2]['body']) =>
+    applyInput(m.cfg, m.events, { id: `i${m.events.length}`, at: 9_999_999, by: 'sb', body }, 9_999_999);
+
+  it('a point is resolved by a tag or by a tag.clear ("No tag"); until then it is tag later', () => {
+    const m = new Match(on(doublesConfig())).rallies('AB');
+    expect(rallies(m.cfg, m.events).map((r) => r.resolved)).toEqual([false, false]);
+    m.push(tag('e2', 'winner', P('A', 0)));
+    m.push({ type: 'tag.clear', point: 'e3' });
+    expect(rallies(m.cfg, m.events).map((r) => [r.resolved, r.tag !== null])).toEqual([[true, true], [true, false]]);
+    expect(rallies(m.cfg, m.events, m.events[1].at).map((r) => r.resolved)).toEqual([false]); // the cutoff applies
+  });
+
+  it('is due from the last point of a game to the next game\'s first rally, waits for the last point, and ends when closed', () => {
+    const m = new Match(on(doublesConfig())).scoreTo(21, 5);
+    const at = (cutoff = Infinity) => summaryStatus(m.cfg, m.events, m.state, cutoff);
+    expect(at()).toMatchObject({ kind: 'game', game: 1, resolved: false, closed: false });
+    const last = [...m.events].reverse().find((e) => e.type === 'point')!;
+    expect(at()!.seq).toBe(last.seq);
+    m.push({ type: 'tag.clear', point: last.id });
+    expect(at()).toMatchObject({ resolved: true, closed: false });
+    m.push({ type: 'summary.close' });
+    expect(at()).toMatchObject({ resolved: true, closed: true });
+    expect(at(m.events[m.events.length - 2].at)).toMatchObject({ closed: false });
+    m.startGame();
+    expect(at()).toMatchObject({ kind: 'game', game: 1, closed: true });
+    m.point('A');
+    expect(at()).toBeNull();
+  });
+
+  it('is nothing in the middle of a game, and an undone last point is no game over', () => {
+    const m = new Match(on(doublesConfig())).scoreTo(10, 3);
+    expect(summaryStatus(m.cfg, m.events, m.state)).toBeNull();
+    m.scoreTo(21, 3);
+    expect(summaryStatus(m.cfg, m.events, m.state)).not.toBeNull();
+    m.undo();
+    expect(summaryStatus(m.cfg, m.events, m.state)).toBeNull();
+  });
+
+  it('the camera takes summary.close only when a game or the match is over and the match asks why', () => {
+    const m = new Match(on(doublesConfig())).scoreTo(5, 5);
+    expect(input(m, { type: 'summary.close' }).result).toBe('ignored');
+    m.scoreTo(21, 5);
+    const ok = input(m, { type: 'summary.close' });
+    expect(ok.result).toBe('applied');
+    expect(ok.events[ok.events.length - 1]).toMatchObject({ type: 'summary.close', by: 'sb' });
+    const off = new Match({ ...doublesConfig(), reasons: 'off' }).scoreTo(21, 5);
+    expect(input(off, { type: 'summary.close' }).result).toBe('ignored');
+  });
+});
 
 describe('rallies and tags', () => {
   it('each counted point is a rally with who served and received; the newest valid tag wins; clear removes it', () => {

@@ -86,6 +86,11 @@ export function applyInput(config: MatchConfig, events: readonly MatchEvent[], i
       body = b;
       break;
     }
+    case 'summary.close':
+      // R-TAG-7: only while a game or the match is over, for a match that asks why.
+      if (!reasonsOn(config) || (s.phase !== 'gameOver' && s.phase !== 'matchOver')) return same('ignored');
+      body = b;
+      break;
     case 'correct':
     case 'sides.swap':
     case 'courts.swap':

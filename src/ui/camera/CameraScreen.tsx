@@ -1,11 +1,11 @@
 // C1 camera setup and C3 recording (ux-design.md), plus their E1 states. Both show the composited canvas
 // itself as the preview, so what the user sees is what is recorded (R-REC-4).
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { other, reduce } from '../../engine';
+import { other, reasonsOn, reduce, type Team } from '../../engine';
 import type { LocalSource } from '../../link/local';
 import type { SlotsSnapshot } from '../../pairing/slots';
 import { saveLogo } from '../../match/persist';
-import type { Corner, LogoSize } from '../../overlay';
+import type { Corner, LogoSize, TablePlace } from '../../overlay';
 import { DIM_AFTER_MS, LOW_MINUTES, OVERLAY_DELAYS_MS, QUALITIES, type Quality } from '../../recording/config';
 import type { CameraController } from '../../recording/controller';
 import { LOGO_TYPES, prepareLogo } from '../../recording/logo';
@@ -52,18 +52,20 @@ function Seg<T extends string | number | boolean>({
   value,
   options,
   onChange,
+  disabled = false,
 }: {
   label: string;
   value: T;
   options: Array<[T, string]>;
   onChange: (v: T) => void;
+  disabled?: boolean;
 }) {
   return (
     <>
       <span className="lab self-center">{label}</span>
       <span className="seg w-full [&>button]:min-h-9 [&>button]:px-1">
         {options.map(([v, text]) => (
-          <button key={String(v)} className="flex-1" aria-pressed={value === v} onClick={() => onChange(v)}>
+          <button key={String(v)} className="flex-1" aria-pressed={value === v} disabled={disabled} onClick={() => onChange(v)}>
             {text}
           </button>
         ))}
@@ -135,6 +137,8 @@ export function CameraScreen({ ctrl, demo, slots, onToggleDemo, onPair, onUnpair
       {linked}/{slots.slots.length}
     </span>
   );
+  const reasons = !!mirror.config && reasonsOn(mirror.config);
+  const teamName = (t: Team): string => mirror.config?.teams[t].name || `Team ${t}`;
   const live = useMemo(() => (mirror.config ? reduce(mirror.config, mirror.events) : null), [mirror.config, mirror.events]);
   const lastScore =
     live && mirror.config
@@ -300,6 +304,38 @@ export function CameraScreen({ ctrl, demo, slots, onToggleDemo, onPair, onUnpair
                   </>
                 )}
               </div>
+              <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1.5" data-testid="stats-rows">
+                <Seg
+                  label="Player stats"
+                  value={reasons ? settings.statsTeam : 'off'}
+                  options={[['off', 'Off'], ['A', teamName('A')], ['B', teamName('B')]]}
+                  onChange={(statsTeam) => ctrl.setSettings({ statsTeam })}
+                  disabled={!reasons}
+                />
+                {reasons && settings.statsTeam !== 'off' && (
+                  <>
+                    <Seg
+                      label="Stats at"
+                      value={settings.statsPlace}
+                      options={[['auto', 'Auto'], ...CORNER_OPTIONS] as Array<[TablePlace, string]>}
+                      onChange={(statsPlace) => ctrl.setSettings({ statsPlace })}
+                    />
+                    <Seg label="Opponent line" value={settings.statsOpp} options={[[false, 'Off'], [true, 'On']]} onChange={(statsOpp) => ctrl.setSettings({ statsOpp })} />
+                  </>
+                )}
+                <Seg
+                  label="End summary"
+                  value={reasons ? settings.endCard : false}
+                  options={[[false, 'Off'], [true, 'On']]}
+                  onChange={(endCard) => ctrl.setSettings({ endCard })}
+                  disabled={!reasons}
+                />
+              </div>
+              {!reasons && (
+                <div className="text-xs text-mut" data-testid="stats-hint">
+                  Point reasons are off on the scoreboard (match setup), so there is nothing to show.
+                </div>
+              )}
               <input ref={fileRef} type="file" accept={LOGO_TYPES} className="hidden" onChange={(e) => void addLogo(e.currentTarget)} data-testid="logo-file" />
               {logoError && <div className="text-xs text-amber">{logoError}</div>}
               <div className="text-xs leading-snug">{storageLine(settings.quality)}</div>

@@ -114,6 +114,14 @@ export function TagSheet({
           {column(left)}
           {column(other(left))}
         </div>
+        {!tag && (
+          // Saved as a tag.clear: the point counts as dealt with, so the summary in the video need not wait for it.
+          <div className="flex justify-end">
+            <button className="btn btn-ghost min-h-10 px-3 text-sm" onClick={onClear} data-testid="tag-none">
+              No tag for this point
+            </button>
+          </div>
+        )}
         {serveFault && (
           <div className="flex justify-end">
             <button

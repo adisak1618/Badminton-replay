@@ -6,6 +6,12 @@ import {
   other,
   servingCourt,
   voidSet,
+  gameStats,
+  matchStats,
+  reasonsOn,
+  summaryStatus,
+  type MatchStats,
+  type Stats,
   type Court,
   type MatchConfig,
   type MatchEvent,
@@ -13,6 +19,7 @@ import {
   type Phase,
   type Team,
 } from '../engine';
+import type { CardTeam, EndCard, StatsRow, StatsTable } from './table';
 
 export interface OverlaySide {
   team: Team;
@@ -48,12 +55,23 @@ export interface OverlayModel {
   mirrored: boolean;
   /** The link is down: the score shown may be behind the scoreboard (ux-design.md E1). */
   stale: boolean;
+  /** The player stats table for the chosen team, when the camera asks for it and the match records reasons. */
+  table: StatsTable | null;
+  /** The end-of-game summary card: after the last point is resolved, until the operator closes it or play resumes. */
+  card: EndCard | null;
 }
 
 export interface OverlayOptions {
   mirrored: boolean;
   stale: boolean;
 }
+
+/** What the camera asks the video to show about the point reasons (C1 "Player stats" and "End-of-game summary"). */
+export interface StatsOptions {
+  table: { team: Team; opp: boolean } | null;
+  card: boolean;
+}
+export const NO_STATS: StatsOptions = { table: null, card: false };
 
 /** The players' names for the panel, upper case (doubles 'NAME1 / NAME2'). */
 export function playersLabel(cfg: MatchConfig, team: Team): string {
@@ -100,7 +118,74 @@ export function overlayModel(cfg: MatchConfig, s: MatchState, opts: OverlayOptio
     winner: s.winner,
     mirrored: opts.mirrored,
     stale: opts.stale,
+    table: null,
+    card: null,
   };
+}
+
+const playerNames = (cfg: MatchConfig, team: Team): string[] => {
+  const t = cfg.teams[team];
+  const names = cfg.doubles ? t.players : t.players.slice(0, 1);
+  return names.map((p) => (p.trim() || t.name).toUpperCase());
+};
+const rowsOf = (cfg: MatchConfig, st: Stats, team: Team): StatsRow[] => playerNames(cfg, team).map((name, i) => {
+    const p = st.players[team][i];
+    return { name, W: p.W, A: p.A, F: p.forced, FE: p.FE, UE: p.UE };
+  });
+
+/**
+ * The table and the card for the match state `s` at scoreboard time `cutoff`. The table shows the current game, so
+ * its counts start from zero with each game; tags count from the moment they were saved, which is how a tag added
+ * later from the rally list simply updates the numbers. Nothing is shown unless the match records reasons.
+ */
+export function statsOverlay(
+  cfg: MatchConfig,
+  events: readonly MatchEvent[],
+  s: MatchState,
+  cutoff: number,
+  o: StatsOptions,
+  ms: MatchStats | null = null,
+): Pick<OverlayModel, 'table' | 'card'> {
+  if (!reasonsOn(cfg) || (!o.table && !o.card)) return { table: null, card: null };
+  const stats = ms ?? matchStats(cfg, events, cutoff);
+  let table: StatsTable | null = null;
+  if (o.table) {
+    const t = o.table.team;
+    const g = gameStats(stats, cfg, s.game);
+    table = {
+      team: t,
+      color: cfg.teams[t].color,
+      doubles: cfg.doubles,
+      rows: rowsOf(cfg, g, t),
+      opp: o.table.opp ? g.teams[t].oppForced + g.teams[t].oppUnforced : null,
+    };
+  }
+  let card: EndCard | null = null;
+  const sum = o.card ? summaryStatus(cfg, events, s, cutoff) : null;
+  // The summary waits for the last point to be resolved (tagged, or the operator chose not to), then stays until the
+  // operator closes it; it also ends with the next game's first rally (summaryStatus) and with the recording (camera).
+  if (sum && sum.resolved && !sum.closed) {
+    const st = sum.kind === 'match' ? stats.match : gameStats(stats, cfg, sum.game);
+    const left = s.leftTeam; // the same order as the panel
+    const teams: CardTeam[] = [left, other(left)].map((t) => {
+      const p = st.teams[t];
+      return {
+        team: t,
+        color: cfg.teams[t].color,
+        label: playersLabel(cfg, t),
+        rows: rowsOf(cfg, st, t),
+        points: p.won,
+        winners: p.winners,
+        oppForced: p.oppForced,
+        oppUnforced: p.oppUnforced,
+        untagged: p.untagged,
+        longestRun: st.longestRun[t],
+        wonOnServe: st.wonOnServe[t],
+      };
+    });
+    card = { kind: sum.kind, game: sum.game, seq: sum.seq, tagged: st.tagged, rallies: st.rallies, doubles: cfg.doubles, teams };
+  }
+  return { table, card };
 }
 
 /**
@@ -132,18 +217,21 @@ export class OverlayClock {
     cfg: MatchConfig | null,
     events: readonly MatchEvent[],
     now: number,
-    o: { delayMs: number; offsetMs: number; mirrored: boolean; stale: boolean },
+    o: { delayMs: number; offsetMs: number; mirrored: boolean; stale: boolean; stats?: StatsOptions },
   ): OverlayModel | null {
     if (!cfg) return null;
     const cutoff = now - o.delayMs - o.offsetMs;
     let visible = 0;
     for (const e of events) if (e.at <= cutoff) visible++;
     const last = events[events.length - 1];
-    const key = `${events.length}:${last?.id ?? ''}:${visible}:${o.mirrored}:${o.stale}`;
+    const st = o.stats ?? NO_STATS;
+    const stKey = st.table ? `${st.table.team}${st.table.opp ? 1 : 0}` : '-';
+    const key = `${events.length}:${last?.id ?? ''}:${visible}:${o.mirrored}:${o.stale}:${stKey}:${st.card ? 1 : 0}`;
     if (key !== this.key || !this.model || cfg !== this.cfg) {
       this.key = key;
       this.cfg = cfg;
-      this.model = overlayModel(cfg, stateAt(cfg, events, cutoff), o);
+      const s = stateAt(cfg, events, cutoff);
+      this.model = { ...overlayModel(cfg, s, o), ...statsOverlay(cfg, events, s, cutoff, st) };
     }
     return this.model;
   }

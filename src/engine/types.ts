@@ -107,7 +107,8 @@ export type EventBody =
   | { type: 'game.start'; game: number; serverIdx?: number; receiverIdx?: number }
   | { type: 'match.end'; reason: 'won' | 'abandoned' }
   | TagBody // the newest tag of a live point wins; never undone itself (D15)
-  | { type: 'tag.clear'; point: string };
+  | { type: 'tag.clear'; point: string }
+  | { type: 'summary.close' }; // the operator closed the end-of-game summary burned into the video (R-TAG-7)
 
 export type MatchEvent = EventBase & EventBody;
 export type EventType = EventBody['type'];

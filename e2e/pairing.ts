@@ -671,6 +671,97 @@ async function main() {
       return `A's card "${tagged}" -> "${now}"`;
     });
 
+    // The share of near-white pixels (the table's text; the fake camera's picture is green and its clock is at the
+    // top) in the bottom-left corner of the camera's composited canvas, where the table goes by default.
+    const whiteInCorner = () =>
+      cam.evaluate(() => {
+        const c = document.querySelector('canvas.preview-canvas') as HTMLCanvasElement;
+        const f = c.height / 1080;
+        const x = Math.round(60 * f);
+        const w = Math.round(380 * f);
+        const h = Math.round(80 * f);
+        const y = c.height - Math.round(43 * f) - h - Math.round(4 * f);
+        const d = c.getContext('2d')!.getImageData(x, y, w, h).data;
+        let white = 0;
+        for (let i = 0; i < d.length; i += 4) if (Math.min(d[i], d[i + 1], d[i + 2]) > 200) white++;
+        return white / (d.length / 4);
+      });
+
+    await step('player stats in the video: Off by default, the table is burned into the camera frame when switched on (R-TAG-7)', async () => {
+      const rows = cam.locator('[data-testid=stats-rows]');
+      await until('the stats rows', async () => (await rows.count()) > 0, 5000);
+      if ((await rows.locator('button[disabled]').count()) > 0) throw new Error('the rows are disabled with point reasons on');
+      const off = await whiteInCorner();
+      await rows.getByRole('button').nth(1).click(); // Player stats: Off, A, B
+      await cam.waitForTimeout(800);
+      const on = await whiteInCorner();
+      if (!(on > 0.01 && off < 0.002)) throw new Error(`the table did not show in the bottom-left corner: white ${off.toFixed(4)} -> ${on.toFixed(4)}`);
+      await cam.screenshot({ path: path.join(OUT, '05g-camera-player-stats-on.png') });
+      await rows.getByRole('button').nth(0).click(); // back to Off
+      await cam.waitForTimeout(800);
+      const back = await whiteInCorner();
+      if (back > 0.002) throw new Error(`switching the table off left its text in the frame: white ${back.toFixed(4)}`);
+      return `bottom-left white-text share ${off.toFixed(4)} (Off) -> ${on.toFixed(4)} (table on) -> ${back.toFixed(4)} (Off again)`;
+    });
+
+    // Grey text (the tagged count is #9aa4ae) in the right 200 px of the summary card in the camera's composited
+    // canvas, and just outside its right edge: the card is 720 px wide at 1080p, centred.
+    const cardInCamera = () =>
+      cam.evaluate(() => {
+        const c = document.querySelector('canvas.preview-canvas') as HTMLCanvasElement;
+        const f = c.height / 1080;
+        const right = Math.round((c.width + 720 * f) / 2);
+        const ctx = c.getContext('2d')!;
+        const y0 = Math.round(c.height * 0.3);
+        const band = Math.round(c.height * 0.4);
+        const grey = (x: number, w: number) => {
+          const d = ctx.getImageData(x, y0, w, band).data;
+          let n = 0;
+          for (let i = 0; i < d.length; i += 4) {
+            const mx = Math.max(d[i], d[i + 1], d[i + 2]);
+            const mn = Math.min(d[i], d[i + 1], d[i + 2]);
+            if (mn > 110 && mx - mn < 30) n++;
+          }
+          return n;
+        };
+        return { inside: grey(right - Math.round(200 * f), Math.round(190 * f)), outside: grey(right + Math.round(4 * f), Math.round(200 * f)), right };
+      });
+
+    await step('end-of-game summary in the video: waits for the last point, stays until the scoreboard closes it (R-TAG-7)', async () => {
+      const b = sbB!;
+      const rows = cam.locator('[data-testid=stats-rows]');
+      await rows.getByRole('button').nth(4).click(); // End summary: Off, On (with the table Off the rows are Off A B Off On)
+      await cam.waitForTimeout(800);
+      const waiting = await cardInCamera();
+      if (waiting.inside >= 20) throw new Error(`the summary is in the video while the last point is untagged: ${JSON.stringify(waiting)}`);
+      const note = await text(sb, '[data-testid=summary-note]');
+      if (!/รอแท็ก/.test(note)) throw new Error(`the scoreboard does not say the summary waits: "${note}"`);
+      // Tag the last point of the game from the rally list on B (a winner in one tap on the side that won it).
+      await b.locator('[data-testid=stats-tag-points]').click();
+      await until('the rally list', async () => (await b.locator('[data-testid=rally-list]').count()) > 0, 3000);
+      const n = await b.evaluate(() =>
+        Math.max(...[...document.querySelectorAll('[data-testid]')].map((e) => /^rally-(\d+)$/.exec(e.getAttribute('data-testid') ?? '')?.[1]).filter(Boolean).map(Number)),
+      );
+      const row = await text(b, `[data-testid=rally-${n}]`);
+      const [, a] = /(\d+)–(\d+)/.exec(row) ?? [];
+      const winner = Number(a) >= 21 ? 'A' : 'B';
+      await b.locator(`[data-testid=rally-${n}-${winner}0]`).click();
+      await b.locator('[data-testid=tag-skip]').click();
+      await b.locator('[data-testid=rally-list]').getByRole('button', { name: 'Close' }).click();
+      await until('the summary in the video', async () => (await cardInCamera()).inside >= 20, 5000);
+      await cam.screenshot({ path: path.join(OUT, '05h-camera-end-summary.png') });
+      const shown = await cardInCamera();
+      if (shown.outside > 0) throw new Error(`grey text outside the card's right edge: ${JSON.stringify(shown)}`);
+      await cam.waitForTimeout(22_000); // longer than the old 20 s timer: it stays
+      const still = await cardInCamera();
+      if (still.inside < 20) throw new Error(`the summary went by itself: ${JSON.stringify(still)}`);
+      await sb.locator('[data-testid=summary-close]').click();
+      await until('the summary closed', async () => (await cardInCamera()).inside < 20, 5000);
+      if (!(await sb.locator('[data-testid=summary-close]').isDisabled())) throw new Error('the close button is still enabled after closing');
+      await rows.getByRole('button').nth(3).click(); // back to Off
+      return `hidden while the last point was untagged (${waiting.inside} px); after its tag ${shown.inside} px, none past the edge; still there 22 s later (${still.inside} px); closed from the scoreboard`;
+    });
+
     await step('point reasons off: a new match records no tag and opens no popup (D15)', async () => {
       const b = sbB!;
       await sb.getByRole('button', { name: 'Menu' }).click();
@@ -688,7 +779,9 @@ async function main() {
       }
       const tags = (await cameraLog(cam)).filter((e) => e.type === 'tag').length;
       if (tags) throw new Error(`${tags} tag events in the new match`);
-      return `score ${await score(sb)} on both, no popup, no chip, no tag at the camera`;
+      const hint = await until('the camera says why the stats rows are off', async () => (await cam.locator('[data-testid=stats-hint]').count()) > 0, 5000);
+      if (!hint || (await cam.locator('[data-testid=stats-rows] button:not([disabled])').count()) > 0) throw new Error('the camera offers the stats rows with point reasons off');
+      return `score ${await score(sb)} on both, no popup, no chip, no tag at the camera, the camera's stats rows disabled with a hint`;
     });
 
     await step('scoreboard B screen off for 20 s while A scores; B back in seconds with the camera’s state', async () => {

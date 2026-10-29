@@ -316,6 +316,8 @@ stays on the phone unless it is copied or shared.
 |  +---------------------------------------------------------+  |
 |  Quality (1080p*)(720p)  Audio (on*)  Mirror overlay (off*)   |
 |  Overlay delay (0 s*)(2 s)(3 s)                               |
+|  Player stats (Off*)(NOK / PAE)(BANK / TAO)  Stats at (Auto*)(4)|
+|  Opponent line (Off)(On*)   End summary (Off*)(On)            |
 |  Storage: 38 min left at 1080p - persisted ok                 |
 |          [ Pair with scoreboard ]              ((  REC  ))    |
 +---------------------------------------------------------------+
@@ -329,6 +331,20 @@ stays on the phone unless it is copied or shared.
 - "Overlay delay" (R-REC-4): with 0 s a wrong tap shows in the video until the
   undo; with 2 or 3 s the score changes that much later in the video but a
   quick undo never reaches it. Default 0 s; phase 3 decides from real matches.
+- "Player stats" (R-TAG-7) burns a small Thai table for one team's players
+  (วินเนอร์, ทำเกม, บีบได้, โดนบีบ, เสียเอง; the current game's counts) into
+  the video. "Stats at" is Auto (the corner nobody owns: bottom-left with the
+  default panel and logo) or one of the four corners, where it stacks after the
+  panel and the logo; it never covers either. "Opponent line" adds
+  "ฝั่งตรงข้ามตีพลาด N", one number for the other side. "End summary" shows a
+  Thai card for both teams after each game and the match: it waits until the
+  game's last point is tagged (or "No tag" was chosen in the popup), stays until
+  the scoreboard's "ปิดสรุป" button (on the game and match over cards, while a
+  camera is paired) is pressed, and goes by itself with the next game's first
+  rally or, for the match, when the recording stops. Both
+  rows are Off by default; when the scoreboard's "Point reasons" is Off they are
+  dimmed and Off, with "Point reasons are off on the scoreboard". Frames:
+  docs/video-stats/.
 - "Storage: N min left" comes from the storage estimate at the chosen
   quality; below 10 min it turns amber (R-REC-3). "persisted" shows whether
   the browser granted persistent storage (N-STORE-1).

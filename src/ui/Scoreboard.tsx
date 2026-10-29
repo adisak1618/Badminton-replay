@@ -9,6 +9,7 @@ import {
   reasonsOn,
   receiverIdx,
   servingCourt,
+  summaryStatus,
   type Court,
   type EventBody,
   type MatchConfig,
@@ -34,7 +35,7 @@ import { GameOverOverlay, IntervalOverlay, MatchOverOverlay } from './overlays';
 import { useNow } from './useNow';
 import { exportLog } from './exportLog';
 import { RallyList } from './reasons/RallyList';
-import { StatsCard } from './reasons/StatsCard';
+import { StatsCard, type SummaryControl } from './reasons/StatsCard';
 import { TagSheet } from './reasons/TagSheet';
 
 const REDO_WINDOW_MS = 5000;
@@ -75,6 +76,10 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
   const rs = useMemo(() => (reasons ? rallies(config, events) : []), [reasons, config, events]);
   const over = s.phase === 'gameOver' || s.phase === 'matchOver';
   const stats = useMemo(() => (reasons && over ? matchStats(config, events) : null), [reasons, over, config, events]);
+  // The summary burned into the video (R-TAG-7): its close button shows while a camera is paired.
+  const sum = useMemo(() => (reasons && over ? summaryStatus(config, events, s) : null), [reasons, over, config, events, s]);
+  const summary: SummaryControl | null =
+    sum && camera.l.state === 'paired' ? { waiting: !sum.resolved, closed: sum.closed, onClose: () => store.emit({ type: 'summary.close' }) } : null;
   const [tagging, setTagging] = useState<{ id: string; live: boolean; hit?: PlayerRef; step?: boolean } | null>(null);
   const [listOpen, setListOpen] = useState(false);
   const [offer, setOffer] = useState<{ id: string; until: number } | null>(null);
@@ -311,7 +316,7 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
               wake();
               emit({ type: 'game.start', game: s.game + 1, serverIdx, receiverIdx });
             }}
-            card={stats && <StatsCard config={config} stats={stats} game={s.game} onList={() => setListOpen(true)} />}
+            card={stats && <StatsCard config={config} stats={stats} game={s.game} onList={() => setListOpen(true)} summary={summary} />}
           />
         )}
         {s.phase === 'matchOver' && (
@@ -325,7 +330,7 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
             onStopRec={
               camera.b.rec?.state === 'recording' && camera.l.state === 'paired' ? () => camera.board.command('rec.stop') : null
             }
-            card={stats && <StatsCard config={config} stats={stats} game={0} onList={() => setListOpen(true)} />}
+            card={stats && <StatsCard config={config} stats={stats} game={0} onList={() => setListOpen(true)} summary={summary} />}
           />
         )}
         {resumed && (

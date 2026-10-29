@@ -161,7 +161,7 @@ describe('overlay layout: corners, inset, logo', () => {
     overlayLayout(W, H, { scoreCorner: 'tl', score: panel, scoreMaxH: 186, logo: null, ...o });
 
   it('puts the score panel top-left by default, inset by the same fraction at 1080p and 720p', () => {
-    expect(lay(1920, 1080)).toEqual({ score: { x: 43, y: 43, w: 500, h: 132 }, logo: null });
+    expect(lay(1920, 1080)).toEqual({ score: { x: 43, y: 43, w: 500, h: 132 }, logo: null, table: null });
     expect(lay(1280, 720).score).toMatchObject({ x: 29, y: 29 });
     for (const [, H] of sizes) expect(inset(H) / H).toBeCloseTo(0.04, 2);
   });
@@ -202,7 +202,7 @@ describe('overlay layout: corners, inset, logo', () => {
   });
 
   it('logo alone when there is no score to show; no logo box without a usable image', () => {
-    expect(lay(1920, 1080, { score: null, logo: { corner: 'tl', size: 'small', aspect: 1 } })).toEqual({ score: null, logo: { x: 43, y: 43, w: 86, h: 86 } });
+    expect(lay(1920, 1080, { score: null, logo: { corner: 'tl', size: 'small', aspect: 1 } })).toEqual({ score: null, logo: { x: 43, y: 43, w: 86, h: 86 }, table: null });
     expect(lay(1920, 1080, { logo: { corner: 'tr', size: 'small', aspect: 0 } }).logo).toBeNull();
   });
 });

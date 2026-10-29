@@ -101,7 +101,8 @@ of the docs assume these.
   its own event naming the point by id (technical-design.md §3.3), protocol
   version 3; first slice: popup, tag later, stats cards at game over and match
   over, `stats` in `match.json` (R-TAG). Live display and stats in the video
-  are the next slice.
+  are the next slice: a small Thai table that stays on screen (R-TAG-7),
+  chosen on the round-2 design board (data/badminton-reasons-video-design-r2).
 - The captain also asked to see a rough UI before implementation starts:
   [mockup/index.html](mockup/index.html), described in ux-design.md §6.
 
@@ -417,6 +418,35 @@ D15. Off records nothing and shows nothing: scoring only, as before D15.
 - **R-TAG-6 Export.** `match.json` carries the tags in `events` and a derived
   `stats` block, from the camera's bundle and from the scoreboard's own
   export (menu).
+
+- **R-TAG-7 Stats in the video.** The camera's C1 has two independent rows,
+  both Off by default (the video is then exactly as before) and both disabled
+  when the scoreboard's "Point reasons" is Off. "Player stats: Off / team A /
+  team B" burns a small Thai table for that team's players into every frame:
+  winners (วินเนอร์), assists (ทำเกม), opponents' errors they forced (บีบได้),
+  forced errors (โดนบีบ), unforced errors (เสียเอง); singles has no assist
+  column. The counts are those of the current game and start from zero with each
+  game. Under it, a switch (default on) adds one line "ฝั่งตรงข้ามตีพลาด N":
+  the other side's forced and unforced errors in one number, never per player.
+  The table sits in a corner nobody owns (the score panel's vertical mirror,
+  bottom-left by default) or in the corner the user picks; each corner stacks
+  score panel, logo, table, so none covers another. "End-of-game summary: Off /
+  On" shows a Thai card for both teams in the middle of the frame (the match
+  totals after the match). It waits for the operator to deal with the last point
+  of the game or match (its tag saved, or "No tag" in the popup, which is saved
+  as a `tag.clear`; a point left for tag later keeps it hidden), then stays in
+  the video until the operator presses "ปิดสรุป" on the scoreboard's game or
+  match over screen (a `summary.close` event, so a reconnect replays it). A game
+  summary also ends by itself when the next game's first rally starts, a match
+  summary when the recording stops, and undoing the last point hides it. Counts follow the overlay
+  clock, so a tag counts from the moment it was saved and a point undone inside
+  the overlay delay never counts. *Accept:* with both rows Off a recording is
+  byte-for-byte what it was; with the summary on, it is not in the video while
+  the game's last point is untagged, appears after its tag and is still there
+  a minute later, and is gone after "ปิดสรุป"; with the table on, tag a winner and the winners
+  count of that player goes up by one within a second of the tag, and the game
+  after starts at zero; no combination of panel corner, logo corner and size
+  overlaps the table.
 
 ### Export (R-EXP)
 
