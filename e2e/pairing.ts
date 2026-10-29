@@ -704,6 +704,37 @@ async function main() {
       return `bottom-left white-text share ${off.toFixed(4)} (Off) -> ${on.toFixed(4)} (table on) -> ${back.toFixed(4)} (Off again)`;
     });
 
+    await step('end-of-game summary in the video: the card is in the camera frame and its tagged count stays inside it (R-TAG-7)', async () => {
+      const rows = cam.locator('[data-testid=stats-rows]');
+      await rows.getByRole('button').nth(4).click(); // End summary: Off, On (with the table Off the rows are Off A B Off On)
+      await cam.waitForTimeout(800);
+      const r = await cam.evaluate(() => {
+        const c = document.querySelector('canvas.preview-canvas') as HTMLCanvasElement;
+        const f = c.height / 1080;
+        const right = Math.round((c.width + 720 * f) / 2); // the card is 720 px wide at 1080p, centred
+        const ctx = c.getContext('2d')!;
+        const y0 = Math.round(c.height * 0.3);
+        const band = Math.round(c.height * 0.4);
+        // Grey text (the tagged count is #9aa4ae) inside the card's right 200 px and outside its right edge.
+        const grey = (x: number, w: number) => {
+          const d = ctx.getImageData(x, y0, w, band).data;
+          let n = 0;
+          for (let i = 0; i < d.length; i += 4) {
+            const mx = Math.max(d[i], d[i + 1], d[i + 2]);
+            const mn = Math.min(d[i], d[i + 1], d[i + 2]);
+            if (mn > 110 && mx - mn < 30) n++;
+          }
+          return n;
+        };
+        return { inside: grey(right - Math.round(200 * f), Math.round(190 * f)), outside: grey(right + Math.round(4 * f), Math.round(200 * f)), right, w: c.width };
+      });
+      await cam.screenshot({ path: path.join(OUT, '05h-camera-end-summary.png') });
+      await rows.getByRole('button').nth(3).click(); // back to Off
+      if (r.inside < 20) throw new Error(`no card text found in the right of the card: ${JSON.stringify(r)}`);
+      if (r.outside > 0) throw new Error(`grey text outside the card's right edge: ${JSON.stringify(r)}`);
+      return `grey text pixels in the card's right 200 px: ${r.inside}; past its right edge (x ${r.right}): ${r.outside}`;
+    });
+
     await step('point reasons off: a new match records no tag and opens no popup (D15)', async () => {
       const b = sbB!;
       await sb.getByRole('button', { name: 'Menu' }).click();

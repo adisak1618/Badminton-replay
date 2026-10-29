@@ -16,7 +16,7 @@ const A_TABLE = { table: { team: 'A' as const, opp: true }, card: false };
 
 /** A recording stand-in for CanvasRenderingContext2D: text is 0.6 em per character. */
 function fakeCtx() {
-  const calls: Array<{ op: string; args: unknown[]; fill: string; font: string }> = [];
+  const calls: Array<{ op: string; args: unknown[]; fill: string; font: string; align: string }> = [];
   const ctx = {
     fillStyle: '',
     globalAlpha: 1,
@@ -29,7 +29,7 @@ function fakeCtx() {
     },
   } as Record<string, unknown> & { fillStyle: string; font: string };
   for (const op of ['save', 'restore', 'beginPath', 'moveTo', 'lineTo', 'arc', 'arcTo', 'closePath', 'fill', 'clip', 'fillRect', 'fillText', 'drawImage'])
-    ctx[op] = (...args: unknown[]) => calls.push({ op, args, fill: ctx.fillStyle, font: ctx.font });
+    ctx[op] = (...args: unknown[]) => calls.push({ op, args, fill: ctx.fillStyle, font: ctx.font, align: String(ctx.textAlign) });
   return { ctx: ctx as unknown as CanvasRenderingContext2D, calls };
 }
 
@@ -177,6 +177,44 @@ describe('the end-of-game card', () => {
     for (const k of statColumns(true)) expect(words).toContain(STAT_WORDS[k].long);
     expect(words).toContain('ติดแท็ก ' + c.tagged + '/' + c.rallies + ' แต้ม');
     expect(box.y + box.h).toBeLessThan(1080);
+  });
+
+  it('keeps every word inside the card, the tagged count ends inside the right padding, whatever its width or the scale', () => {
+    const m = fullGame();
+    const base = statsOverlay(m.cfg, m.events, m.state, m.state.phaseSince!, { table: null, card: true }).card!;
+    const wide = { ...base, tagged: 123_456, rallies: 123_456, game: 12 };
+    const widthOf = (font: string, t: string) => t.length * Number(/(\d+(?:\.\d+)?)px/.exec(font)![1]) * 0.6;
+    for (const c of [base, wide])
+      for (const u of [0.5, 2 / 3, 1, 1.25]) {
+        const r = fakeCtx();
+        const box = drawEndCard(r.ctx, c, 1920 * u, 1080 * u, u);
+        const pad = 22 * u;
+        const texts = r.calls.filter((x) => x.op === 'fillText');
+        for (const t of texts) {
+          const [s, x] = t.args as [string, number];
+          const w = widthOf(t.font, s);
+          const [from, to] = t.align === 'center' ? [x - w / 2, x + w / 2] : t.align === 'right' ? [x - w, x] : [x, x + w];
+          expect(from).toBeGreaterThanOrEqual(box.x);
+          expect(to).toBeLessThanOrEqual(box.x + box.w - pad + 0.01);
+        }
+        const label = texts.find((t) => String(t.args[0]).startsWith('ติดแท็ก'))!;
+        expect(r.calls.filter((x) => x.op === 'fillText').every((x) => x.font.includes('px'))).toBe(true);
+        expect((label.args[1] as number) + widthOf(label.font, String(label.args[0]))).toBeLessThanOrEqual(box.x + box.w - pad + 0.01);
+      }
+  });
+
+  it('never relies on textAlign right or center for the tagged count: it is drawn left-aligned from a measured start', () => {
+    const m = fullGame();
+    const c = statsOverlay(m.cfg, m.events, m.state, m.state.phaseSince!, { table: null, card: true }).card!;
+    const aligns: string[] = [];
+    const r = fakeCtx();
+    const orig = (r.ctx as unknown as { fillText: (...a: unknown[]) => void }).fillText;
+    (r.ctx as unknown as { fillText: (...a: unknown[]) => void }).fillText = (...a: unknown[]) => {
+      if (String(a[0]).startsWith('ติดแท็ก')) aligns.push(r.ctx.textAlign);
+      orig(...a);
+    };
+    drawEndCard(r.ctx, c, 1920, 1080, 1);
+    expect(aligns).toEqual(['left']);
   });
 });
 

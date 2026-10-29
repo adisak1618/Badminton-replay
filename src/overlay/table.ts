@@ -224,8 +224,16 @@ export function drawEndCard(ctx: Ctx, c: EndCard, W: number, H: number, u: numbe
   ctx.fillStyle = CARD_BG;
   ctx.fill();
   let y = box.y + pad;
-  text(ctx, cardTitle(c), box.x + pad, y + (CARD.title * u) / 2, `800 ${30 * u}px ${theme.font}`, '#ffffff');
-  text(ctx, `ติดแท็ก ${c.tagged}/${c.rallies} แต้ม`, box.x + box.w - pad, y + (CARD.title * u) / 2, `500 ${20 * u}px ${theme.font}`, '#9aa4ae', 'right');
+  // The tagged count sits at the right. It is placed from its measured width with left alignment instead of
+  // textAlign 'right' (the only right-aligned text in the overlay): on the captain's phone it ran past the card's
+  // edge as if drawn from its right end. A measured start does not depend on the browser's alignment handling, and
+  // fit() keeps a wide label inside the card either way.
+  const tagged = fit(ctx, `ติดแท็ก ${c.tagged}/${c.rallies} แต้ม`, (box.w - 2 * pad) * 0.4, 20 * u, 12 * u, theme.font, 500);
+  const taggedFont = ctx.font;
+  const taggedW = ctx.measureText(tagged).width;
+  const title = fit(ctx, cardTitle(c), box.w - 2 * pad - taggedW - 16 * u, 30 * u, 18 * u, theme.font, 800);
+  text(ctx, title, box.x + pad, y + (CARD.title * u) / 2, ctx.font, '#ffffff');
+  text(ctx, tagged, box.x + box.w - pad - taggedW, y + (CARD.title * u) / 2, taggedFont, '#9aa4ae');
   y += CARD.title * u;
   cols.forEach((k, i) =>
     text(ctx, STAT_WORDS[k].long, box.x + pad + nameCol + colW * i + colW / 2, y + (CARD.head * u) / 2, `600 ${18 * u}px ${theme.font}`, STAT_WORDS[k].tint, 'center'),
