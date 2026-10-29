@@ -147,22 +147,33 @@ export function statsTableSize(ctx: Ctx, t: StatsTable, u: number, theme: Overla
   return { w: Math.round(g.w), h: Math.round(g.h) };
 }
 
+/**
+ * Draws into `box`, which the layout reserved from a measurement made earlier (and maybe with another font): the
+ * columns are fitted to the box and every word to its column, and nothing is drawn outside the box, so an unknown
+ * or wider Thai system font can make the words smaller but never cross the edge.
+ */
 export function drawStatsTable(ctx: Ctx, t: StatsTable, box: Box, u: number, theme: OverlayTheme = DEFAULT_THEME): void {
   const g = tableGeo(ctx, t, u, theme);
   const { x, y } = box;
   const pad = TABLE.pad * u;
+  const avail = box.w / u - 2 * TABLE.pad - g.nameCol;
+  const sum = g.colW.reduce((a, b) => a + b, 0);
+  const k = sum > avail ? Math.max(0.4, avail / sum) : 1;
+  const colW = g.colW.map((w) => w * k);
   ctx.save();
   rr(ctx, box, TABLE.radius * u);
   ctx.fillStyle = BG;
   ctx.fill();
+  ctx.clip(); // the path is still the box: whatever a font does, nothing shows outside it
   rr(ctx, { x: x + pad, y: y + pad, w: TABLE.tick * u, h: box.h - 2 * pad }, 2 * u); // the team marker, in the team's colour
   ctx.fillStyle = t.color;
   ctx.fill();
   const x0 = x + (TABLE.pad + g.nameCol) * u;
   let cx = x0;
-  g.cols.forEach((k, i) => {
-    const cw = g.colW[i] * u;
-    text(ctx, STAT_WORDS[k].short, cx + cw / 2, y + (TABLE.pad + TABLE.head / 2) * u, g.heads, STAT_WORDS[k].tint, 'center');
+  g.cols.forEach((key, i) => {
+    const cw = colW[i] * u;
+    const head = fit(ctx, STAT_WORDS[key].short, cw - 4 * u, TABLE.headFont * u, 9 * u, theme.font, 600);
+    text(ctx, head, cx + cw / 2, y + (TABLE.pad + TABLE.head / 2) * u, ctx.font, STAT_WORDS[key].tint, 'center');
     cx += cw;
   });
   const ruleX = x + (TABLE.pad + TABLE.tick + 6) * u;
@@ -176,9 +187,10 @@ export function drawStatsTable(ctx: Ctx, t: StatsTable, box: Box, u: number, the
     const name = fit(ctx, r.name, g.nameW * u, TABLE.nameFont * u, 14 * u, theme.font);
     text(ctx, name, x + (TABLE.pad + TABLE.tick + 10) * u, cy, ctx.font, '#ffffff');
     let vx = x0;
-    g.cols.forEach((k, c) => {
-      const cw = g.colW[c] * u;
-      text(ctx, String(r[k]), vx + cw / 2, cy, g.vals, r[k] === 0 ? ZERO : '#ffffff', 'center');
+    g.cols.forEach((key, c) => {
+      const cw = colW[c] * u;
+      const val = fit(ctx, String(r[key]), cw - 2 * u, TABLE.valFont * u, 9 * u, theme.font, 800);
+      text(ctx, val, vx + cw / 2, cy, ctx.font, r[key] === 0 ? ZERO : '#ffffff', 'center');
       vx += cw;
     });
     if (i < t.rows.length - 1) {
@@ -192,9 +204,15 @@ export function drawStatsTable(ctx: Ctx, t: StatsTable, box: Box, u: number, the
     ctx.fillStyle = RULE;
     ctx.fillRect(ruleX, oy - (TABLE.gap / 2 + 0.5) * u, ruleW, rule);
     const lx = x + (TABLE.pad + TABLE.tick + 10) * u;
-    const lf = `600 ${TABLE.oppFont * u}px ${theme.font}`;
-    text(ctx, OPP_LINE, lx, cy, lf, '#cfd6dd');
-    text(ctx, String(t.opp), lx + width(ctx, lf, OPP_LINE) + 10 * u, cy, `800 ${(TABLE.oppFont + 4) * u}px ${theme.font}`, '#ffffff');
+    const num = String(t.opp);
+    const room = box.w - (TABLE.pad + TABLE.tick + 10 + TABLE.pad) * u;
+    const nf = `800 ${(TABLE.oppFont + 4) * u}px ${theme.font}`;
+    const numW = width(ctx, nf, num);
+    const label = fit(ctx, OPP_LINE, Math.max(10 * u, room - numW - 10 * u), TABLE.oppFont * u, 9 * u, theme.font, 600);
+    const labelFont = ctx.font;
+    const labelW = ctx.measureText(label).width;
+    text(ctx, label, lx, cy, labelFont, '#cfd6dd');
+    text(ctx, num, lx + labelW + 10 * u, cy, nf, '#ffffff');
   }
   ctx.restore();
 }

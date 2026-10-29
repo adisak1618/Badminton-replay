@@ -14,8 +14,8 @@ const tag = (point: string, how: TagBody['how'], hit: PlayerRef, more: Partial<T
 const plain = { mirrored: false, stale: false };
 const A_TABLE = { table: { team: 'A' as const, opp: true }, card: false };
 
-/** A recording stand-in for CanvasRenderingContext2D: text is 0.6 em per character. */
-function fakeCtx() {
+/** A recording stand-in for CanvasRenderingContext2D: text is `em` (0.6) em per character. */
+function fakeCtx(em = 0.6) {
   const calls: Array<{ op: string; args: unknown[]; fill: string; font: string; align: string }> = [];
   const ctx = {
     fillStyle: '',
@@ -25,7 +25,7 @@ function fakeCtx() {
     textBaseline: 'alphabetic',
     measureText(t: string) {
       const px = Number(/(\d+(?:\.\d+)?)px/.exec(this.font)?.[1] ?? 10);
-      return { width: t.length * px * 0.6 };
+      return { width: t.length * px * em };
     },
   } as Record<string, unknown> & { fillStyle: string; font: string };
   for (const op of ['save', 'restore', 'beginPath', 'moveTo', 'lineTo', 'arc', 'arcTo', 'closePath', 'fill', 'clip', 'fillRect', 'fillText', 'drawImage'])
@@ -365,6 +365,29 @@ describe('drawStatsTable', () => {
     expect(statsTableSize(fakeCtx().ctx, b, 1)).toEqual(statsTableSize(fakeCtx().ctx, a, 1));
     expect(28 / 22).toBeGreaterThanOrEqual(1.25);
     expect(22 / 18).toBeGreaterThanOrEqual(1.2);
+  });
+
+  it('never lets a word cross the box when a wider font draws it than the one that sized it, and clips to the box', () => {
+    for (const doubles of [true, false]) {
+      const t = table(doubles);
+      const sized = statsTableSize(fakeCtx(0.6).ctx, t, 1); // measured once, with a narrow font (the cached size)
+      for (const em of [0.6, 0.75, 0.9, 1.2]) {
+        const r = fakeCtx(em);
+        const box = { x: 43, y: 900, ...sized };
+        drawStatsTable(r.ctx, t, box, 1);
+        expect(r.calls.some((c) => c.op === 'clip')).toBe(true);
+        const widthOf = (font: string, text: string) => text.length * Number(/(\d+(?:\.\d+)?)px/.exec(font)![1]) * em;
+        for (const c of r.calls.filter((x) => x.op === 'fillText')) {
+          const [text, x] = c.args as [string, number];
+          const w = widthOf(c.font, text);
+          const [from, to] = c.align === 'center' ? [x - w / 2, x + w / 2] : [x, x + w];
+          expect(from, `${text} @${em}`).toBeGreaterThanOrEqual(box.x);
+          expect(to, `${text} @${em}`).toBeLessThanOrEqual(box.x + box.w + 0.01);
+        }
+        const heads = r.calls.filter((x) => x.op === 'fillText' && x.fill === STAT_WORDS.UE.tint);
+        expect(heads).toHaveLength(1); // the red "เสียเอง" header is drawn once, inside the box
+      }
+    }
   });
 
   it('scales with the panel size and 720p', () => {

@@ -48,6 +48,11 @@ export class Compositor {
     this.ctx = this.canvas.getContext('2d', { alpha: false })!;
   }
 
+  /** The context the overlays are drawn with: anything sized to be drawn here is measured with this font setup. */
+  get drawContext(): CanvasRenderingContext2D {
+    return this.ctx;
+  }
+
   setSize(w: number, h: number): void {
     if (this.canvas.width === w && this.canvas.height === h) return;
     this.canvas.width = w;

@@ -103,7 +103,9 @@ export class CameraController {
   private sized: { model: OverlayModel; u: number; size: { w: number; h: number } } | null = null;
   /** The match summary that was on screen while recording: it ends with the recording (R-TAG-7). */
   private matchCardRecorded: number | null = null;
-  private tableSized: { table: StatsTable; u: number; size: { w: number; h: number } } | null = null;
+  private tableSized: { table: StatsTable; u: number; fonts: number; size: { w: number; h: number } } | null = null;
+  /** Bumped when the browser's fonts change, so the table is measured again with what will draw it. */
+  private fontsEpoch = 0;
 
   constructor(
     settings: CameraSettings,
@@ -159,6 +161,7 @@ export class CameraController {
     this.detachSource = this.mirror.attach(this.source);
     this.mirror.subscribe(() => this.onMirror());
     document.addEventListener('visibilitychange', this.onVisibility);
+    document.fonts?.addEventListener?.('loadingdone', () => this.fontsEpoch++);
     setInterval(() => this.tick(), 1000);
     void this.checkOpfs();
     void this.refreshStorage();
@@ -213,11 +216,14 @@ export class CameraController {
     return { table: s.statsTeam === 'off' ? null : { team: s.statsTeam, opp: s.statsOpp }, card: s.endCard };
   }
 
-  /** The table's size follows its names only, so it is measured once per change of the table. */
+  /**
+   * The table's size follows its names and the Thai words in its font, so it is measured with the compositor's own
+   * context (the one that draws it) and again when the scale, the table or the browser's fonts change.
+   */
   private tableSizeFor(table: StatsTable): { w: number; h: number } {
     const u = this.panelU();
-    if (this.tableSized?.table !== table || this.tableSized.u !== u)
-      this.tableSized = { table, u, size: statsTableSize(this.measure, table, u) };
+    if (this.tableSized?.table !== table || this.tableSized.u !== u || this.tableSized.fonts !== this.fontsEpoch)
+      this.tableSized = { table, u, fonts: this.fontsEpoch, size: statsTableSize(this.compositor.drawContext, table, u) };
     return this.tableSized.size;
   }
 
