@@ -423,16 +423,20 @@ D15. Off records nothing and shows nothing: scoring only, as before D15.
   both Off by default (the video is then exactly as before) and both disabled
   when the scoreboard's "Point reasons" is Off. "Player stats: Off / team A /
   team B" burns a small Thai table for that team's players into every frame:
-  winners (วินเนอร์), assists (ทำเกม), opponents' errors they forced (บีบได้),
-  forced errors (โดนบีบ), unforced errors (เสียเอง); singles has no assist
-  column. The counts are those of the current game and start from zero with each
-  game. Under it, a switch (default on) adds one line "ฝั่งตรงข้ามตีพลาด N":
+  winners (วินเนอร์), assists (สร้างโอกาส), opponents' errors they forced
+  (บีบให้เสีย), forced errors (ถูกบีบเสีย), unforced errors (เสียเอง); singles
+  has no assist column. The counts are those of the current game ("GAME n" in
+  its header) and start from zero with each game; a count that just went up
+  flashes. Under it, a switch (default on) adds one line "คะแนนจากคู่แข่งเสีย N":
   the other side's forced and unforced errors in one number, never per player.
   The table sits in a corner nobody owns (the score panel's vertical mirror,
   bottom-left by default) or in the corner the user picks; each corner stacks
   score panel, logo, table, so none covers another. "End-of-game summary: Off /
   On" shows a Thai card for both teams in the middle of the frame (the match
-  totals after the match). It waits for the operator to deal with the last point
+  totals after the match): "สรุปเกมที่ n" or "สรุปผลการแข่งขัน", the score, where
+  each side's points came from head to head, every player's five counts, the
+  longest run, points won on serve, the playing time and "บันทึกเหตุผล n จาก m
+  คะแนน". The live table is hidden while the card shows. It waits for the operator to deal with the last point
   of the game or match (its tag saved, or "No tag" in the popup, which is saved
   as a `tag.clear`; a point left for tag later keeps it hidden), then stays in
   the video until the operator presses "ปิดสรุป" on the scoreboard's game or

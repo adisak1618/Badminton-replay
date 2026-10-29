@@ -179,7 +179,8 @@ Two buttons, each half the screen. The previous role is highlighted. The
 ```
 
 Shown when the leading score first reaches 11 (R-SCORE-4). Any tap dismisses
-it and nothing else; the next tap scores. In the third game of a best of 3 or
+it and nothing else; the next tap scores. The video's badge says INTERVAL with
+the same countdown (INTERVAL · CHANGE ENDS in the deciding game). In the third game of a best of 3 or
 in a fixed-1 game the overlay also says "change ends" and the halves swap when
 it closes (R-SCORE-5). It auto-dismisses when the countdown ends.
 
@@ -196,6 +197,7 @@ it closes (R-SCORE-5). It auto-dismisses when the countdown ends.
 +---------------------------------------------------------------+
 ```
 
+The video's badge says END OF GAME 1 with the break's countdown (BREAK 1:52).
 In doubles the winning team may pick who serves and the other team who
 receives; both start in their right courts (Law 11, R-SCORE-3). Defaults are
 the players currently in the right courts, so "Start game 2" alone is always
@@ -216,6 +218,8 @@ point.
 ```
 
 "Stop recording" sends the remote stop to the camera phone (D11, R-PAIR-6).
+The video's badge says END OF MATCH (DRAW 1–1 for a fixed-2 draw) and the
+winner's row shows WIN.
 "New match" returns to S1 with the same settings.
 
 ### S3d Why was this point won (D15)
@@ -315,7 +319,7 @@ stays on the phone unless it is copied or shared.
 |  |     live preview = exactly what gets recorded           |  |
 |  +---------------------------------------------------------+  |
 |  Quality (1080p*)(720p)  Audio (on*)  Mirror overlay (off*)   |
-|  Overlay delay (0 s*)(2 s)(3 s)                               |
+|  Overlay delay (0 s*)(2 s)(3 s)   Motion (Full*)(Light)(None)  |
 |  Player stats (Off*)(NOK / PAE)(BANK / TAO)  Stats at (Auto*)(4)|
 |  Opponent line (Off)(On*)   End summary (Off*)(On)            |
 |  Storage: 38 min left at 1080p - persisted ok                 |
@@ -331,13 +335,30 @@ stays on the phone unless it is copied or shared.
 - "Overlay delay" (R-REC-4): with 0 s a wrong tap shows in the video until the
   undo; with 2 or 3 s the score changes that much later in the video but a
   quick undo never reaches it. Default 0 s; phase 3 decides from real matches.
+- The overlay looks like BWF's world feed (the captain's choice on the
+  2026-10-30 design board, look A "Championship"): white rows with the team
+  colour, finished games in white, the live game in a red column, a red shuttle
+  for the server, and a red badge that stays while its state lasts: GAME POINT,
+  MATCH POINT, DEUCE 20–20, INTERVAL with its countdown (INTERVAL · CHANGE ENDS
+  in the deciding game), END OF GAME n with BREAK m:ss, END OF MATCH with WIN on
+  the winner's row, DRAW; LINK LOST is grey. In a bottom corner the badge sits
+  above the rows. No BWF logo or name is drawn; the logo slot is the user's.
+  "Motion" (Full*, Light, None) animates it: the point rolls in, the badge wipes
+  in with one light sweep, match point pulses gently, a new game's cell lights
+  up, a table count that just went up flashes, the summary card rises in and
+  fades out. Light keeps only the flashes and the wipe; the set is fixed per
+  recording segment.
 - "Player stats" (R-TAG-7) burns a small Thai table for one team's players
-  (วินเนอร์, ทำเกม, บีบได้, โดนบีบ, เสียเอง; the current game's counts) into
-  the video. "Stats at" is Auto (the corner nobody owns: bottom-left with the
-  default panel and logo) or one of the four corners, where it stacks after the
-  panel and the logo; it never covers either. "Opponent line" adds
-  "ฝั่งตรงข้ามตีพลาด N", one number for the other side. "End summary" shows a
-  Thai card for both teams after each game and the match: it waits until the
+  (วินเนอร์, สร้างโอกาส, บีบให้เสีย, ถูกบีบเสีย, เสียเอง under a red header
+  "GAME n"; the current game's counts) into the video. "Stats at" is Auto (the
+  corner nobody owns: bottom-left with the default panel and logo) or one of the
+  four corners, where it stacks after the panel and the logo; it never covers
+  either. "Opponent line" adds "คะแนนจากคู่แข่งเสีย N", one number for the
+  other side. "End summary" shows a Thai card for both teams after each game and
+  the match ("สรุปเกมที่ n" / "สรุปผลการแข่งขัน": the score, where each side's
+  points came from, every player, the longest run, points on serve, the playing
+  time, "บันทึกเหตุผล n จาก m คะแนน"; the live table steps aside while it
+  shows): it waits until the
   game's last point is tagged (or "No tag" was chosen in the popup), stays until
   the scoreboard's "ปิดสรุป" button (on the game and match over cards, while a
   camera is paired) is pressed, and goes by itself with the next game's first
@@ -357,8 +378,8 @@ stays on the phone unless it is copied or shared.
 +---------------------------------------------------------------+
 | (*) REC 12:34 - 26 min left            link ok - A 18 - 16 B  |
 |  +---------------------------------------------------------+  |
-|  | [ NOK / PAE  |21|18]  (white: finished, grey: live)  |  |
-|  | [ BANK / TAO |17|16]  [ Game Point ] band     [logo] |  |
+|  | [ NOK / PAE  |21|18]  (white: finished, red: live)   |  |
+|  | [ BANK / TAO |17|16]  [ GAME POINT ] red badge [logo] |  |
 |  |      composited preview (dims after 30 s, tap to wake)  |  |
 |  +---------------------------------------------------------+  |
 |  [ Dim screen ]                           ( hold to STOP )    |
