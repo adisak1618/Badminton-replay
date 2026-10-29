@@ -624,7 +624,14 @@ canvas (the visible preview, CSS-scaled) --captureStream(30)--> composited video
   played, a status band for game point, interval and the like), sized S/M/L
   and only as wide as its content, in the corner chosen in C1 (top-left by
   default; mirroring swaps the rows), plus an optional logo in its own corner
-  (top-right by default), stacked when both share one. It
+  (top-right by default), stacked when both share one.
+  The optional player stats table (R-TAG-7, `src/overlay/table.ts`) is the
+  third tenant: each corner stacks panel, logo, table from the frame edge, the
+  table takes the first corner nobody owns or the one picked in C1, and a box
+  that would still touch another steps past it; the end-of-game card is drawn in
+  the middle. Their numbers are `matchStats(cfg, events, cutoff)` for the
+  current game, computed in `OverlayClock` only when the visible slice of the
+  log changes. It
   cannot be HTML: a canvas cannot rasterise DOM, and SVG `foreignObject`
   taints canvases on WebKit. The same function can run in node-canvas for a
   later Mac re-render (R-BURN-2).

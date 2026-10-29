@@ -2,7 +2,7 @@
 // camera settings (R-SETUP-4).
 import { DEFAULT_SETUP, PALETTE, type MatchSetup } from '../engine';
 import { randomId } from '../engine';
-import { CORNERS, LOGO_SIZES, type Corner, type LogoSize } from '../overlay/layout';
+import { CORNERS, LOGO_SIZES, TABLE_PLACES, type Corner, type LogoSize, type TablePlace } from '../overlay/layout';
 import { DEFAULT_CAMERA_SETTINGS, OVERLAY_DELAYS_MS, QUALITIES, type CameraSettings } from '../recording/config';
 import type { Lang } from '../speech/phrases';
 
@@ -93,6 +93,10 @@ export function loadCameraSettings(): CameraSettings {
     logoCorner: corner(s.logoCorner, DEFAULT_CAMERA_SETTINGS.logoCorner),
     logoSize: (LOGO_SIZES as readonly unknown[]).includes(s.logoSize) ? (s.logoSize as LogoSize) : DEFAULT_CAMERA_SETTINGS.logoSize,
     scoreSize: (LOGO_SIZES as readonly unknown[]).includes(s.scoreSize) ? (s.scoreSize as LogoSize) : DEFAULT_CAMERA_SETTINGS.scoreSize,
+    statsTeam: s.statsTeam === 'A' || s.statsTeam === 'B' ? s.statsTeam : 'off',
+    statsPlace: (TABLE_PLACES as readonly unknown[]).includes(s.statsPlace) ? (s.statsPlace as TablePlace) : DEFAULT_CAMERA_SETTINGS.statsPlace,
+    statsOpp: typeof s.statsOpp === 'boolean' ? s.statsOpp : DEFAULT_CAMERA_SETTINGS.statsOpp,
+    endCard: s.endCard === true,
   };
 }
 export const saveCameraSettings = (s: CameraSettings) => write(CAMERA_KEY, s);

@@ -3,13 +3,39 @@
 import { describe, expect, it } from 'vitest';
 import { applyInput } from './input';
 import { lastUndoable } from './reducer';
-import { matchStats, rallies, untagged, validTag } from './tags';
+import { gameStats, matchStats, rallies, untagged, validTag } from './tags';
 import { Match, doublesConfig, makeConfig } from './test-utils';
 import type { MatchConfig, PlayerRef, TagBody } from './types';
 
 const on = (cfg: MatchConfig): MatchConfig => ({ ...cfg, reasons: 'endOfGame' });
 const P = (team: 'A' | 'B', idx: number): PlayerRef => ({ team, idx });
 const tag = (point: string, how: TagBody['how'], hit: PlayerRef, more: Partial<TagBody> = {}): TagBody => ({ type: 'tag', point, how, hit, ...more });
+
+describe('rallies with a cutoff (the video clock)', () => {
+  it('counts only events up to the cutoff; a tag counts from when it was saved; undos still come from the whole log', () => {
+    const m = new Match(on(doublesConfig())).rallies('AB');
+    m.push(tag('e2', 'winner', P('A', 0)));
+    const [p1, p2, tagAt] = [m.events[1].at, m.events[2].at, m.events[3].at];
+    const at = (c: number) => rallies(m.cfg, m.events, c);
+    expect(at(p1 - 1)).toHaveLength(0);
+    expect(at(p1)).toHaveLength(1);
+    expect(at(p2)).toHaveLength(2);
+    expect(at(tagAt - 1)[0].tag).toBeNull();
+    expect(at(tagAt)[0].tag).toMatchObject({ how: 'winner' });
+    expect(rallies(m.cfg, m.events)).toEqual(at(Infinity));
+    m.undo(); // the undo of the last point is later than the cutoff, but the point never counts
+    expect(at(tagAt)).toHaveLength(1);
+    expect(matchStats(m.cfg, m.events, tagAt).match.rallies).toBe(1);
+  });
+
+  it('gameStats is all zero for a game without a rally', () => {
+    const m = new Match(on(doublesConfig())).rallies('A');
+    const g = gameStats(matchStats(m.cfg, m.events), m.cfg, 2);
+    expect(g).toMatchObject({ game: 2, rallies: 0, tagged: 0 });
+    expect(g.players.A.map((p) => p.W)).toEqual([0, 0]);
+    expect(gameStats(matchStats(m.cfg, m.events), m.cfg, 1).rallies).toBe(1);
+  });
+});
 
 describe('rallies and tags', () => {
   it('each counted point is a rally with who served and received; the newest valid tag wins; clear removes it', () => {

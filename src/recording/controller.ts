@@ -6,7 +6,19 @@ import { keepScreenOn } from '../device/wakeLock';
 import { Mirror } from '../link/mirror';
 import { NoSource } from '../link/none';
 import type { PeerInfo, RecCommand, RecReport, ScoreSource } from '../link/source';
-import { DEFAULT_THEME, OverlayClock, overlayLayout, panelMaxHeight, panelScale, panelSize, type Layout, type OverlayModel } from '../overlay';
+import {
+  DEFAULT_THEME,
+  OverlayClock,
+  overlayLayout,
+  panelMaxHeight,
+  panelScale,
+  panelSize,
+  statsTableSize,
+  type Layout,
+  type OverlayModel,
+  type StatsOptions,
+  type StatsTable,
+} from '../overlay';
 import { Compositor } from './compositor';
 import type { Logo } from './logo';
 import {
@@ -89,6 +101,7 @@ export class CameraController {
   private logo: Logo | null = null;
   private measure = document.createElement('canvas').getContext('2d')!;
   private sized: { model: OverlayModel; u: number; size: { w: number; h: number } } | null = null;
+  private tableSized: { table: StatsTable; u: number; size: { w: number; h: number } } | null = null;
 
   constructor(
     settings: CameraSettings,
@@ -119,6 +132,7 @@ export class CameraController {
         offsetMs: this.source.clock()?.offsetMs ?? 0,
         mirrored,
         stale: m.link !== 'paired',
+        stats: this.statsOptions(),
       });
       const layout = this.layout(model);
       if (layout.score && this.snap.session.phase === 'recording') {
@@ -129,6 +143,8 @@ export class CameraController {
       return {
         score: model && layout.score && { model, box: layout.score, u: this.panelU() },
         logo: this.logo && layout.logo ? { image: this.logo.image, box: layout.logo } : null,
+        table: model?.table && layout.table ? { model: model.table, box: layout.table, u: this.panelU() } : null,
+        card: model?.card ? { model: model.card, u: this.panelU() } : null,
       };
     });
     this.compositor.setSize(QUALITIES[settings.quality].width, QUALITIES[settings.quality].height);
@@ -184,7 +200,21 @@ export class CameraController {
     return this.sized.size;
   }
 
-  /** Where the score panel and the logo go in the current frame (corners and sizes are C1 settings). */
+  /** What the camera asks the video to show about the point reasons: C1 "Player stats" and "End-of-game summary". */
+  private statsOptions(): StatsOptions {
+    const s = this.snap.settings;
+    return { table: s.statsTeam === 'off' ? null : { team: s.statsTeam, opp: s.statsOpp }, card: s.endCard };
+  }
+
+  /** The table's size follows its names only, so it is measured once per change of the table. */
+  private tableSizeFor(table: StatsTable): { w: number; h: number } {
+    const u = this.panelU();
+    if (this.tableSized?.table !== table || this.tableSized.u !== u)
+      this.tableSized = { table, u, size: statsTableSize(this.measure, table, u) };
+    return this.tableSized.size;
+  }
+
+  /** Where the score panel, the logo and the stats table go in the current frame (corners and sizes are C1 settings). */
   layout(model: OverlayModel | null = this.lastModel()): Layout {
     const { width, height } = this.compositor.canvas;
     const s = this.snap.settings;
@@ -194,6 +224,7 @@ export class CameraController {
       score: model && this.panelSizeFor(model),
       scoreMaxH: panelMaxHeight(this.panelU()),
       logo,
+      table: model?.table ? { place: s.statsPlace, ...this.tableSizeFor(model.table) } : null,
     });
   }
 
@@ -205,6 +236,7 @@ export class CameraController {
       offsetMs: this.source.clock()?.offsetMs ?? 0,
       mirrored: s.mirrored,
       stale: m.link !== 'paired',
+      stats: this.statsOptions(),
     });
   }
 
@@ -420,6 +452,16 @@ export class CameraController {
           mirrored: settings.mirrored,
           theme: DEFAULT_THEME.id,
           logo: layout.logo && { box: layout.logo, corner: settings.logoCorner, size: settings.logoSize },
+          stats:
+            settings.statsTeam === 'off' && !settings.endCard
+              ? null
+              : {
+                  team: settings.statsTeam,
+                  place: settings.statsPlace,
+                  opp: settings.statsOpp,
+                  box: layout.table,
+                  card: settings.endCard,
+                },
         },
       },
     });

@@ -671,6 +671,39 @@ async function main() {
       return `A's card "${tagged}" -> "${now}"`;
     });
 
+    // The share of near-white pixels (the table's text; the fake camera's picture is green and its clock is at the
+    // top) in the bottom-left corner of the camera's composited canvas, where the table goes by default.
+    const whiteInCorner = () =>
+      cam.evaluate(() => {
+        const c = document.querySelector('canvas.preview-canvas') as HTMLCanvasElement;
+        const f = c.height / 1080;
+        const x = Math.round(60 * f);
+        const w = Math.round(380 * f);
+        const h = Math.round(80 * f);
+        const y = c.height - Math.round(43 * f) - h - Math.round(4 * f);
+        const d = c.getContext('2d')!.getImageData(x, y, w, h).data;
+        let white = 0;
+        for (let i = 0; i < d.length; i += 4) if (Math.min(d[i], d[i + 1], d[i + 2]) > 200) white++;
+        return white / (d.length / 4);
+      });
+
+    await step('player stats in the video: Off by default, the table is burned into the camera frame when switched on (R-TAG-7)', async () => {
+      const rows = cam.locator('[data-testid=stats-rows]');
+      await until('the stats rows', async () => (await rows.count()) > 0, 5000);
+      if ((await rows.locator('button[disabled]').count()) > 0) throw new Error('the rows are disabled with point reasons on');
+      const off = await whiteInCorner();
+      await rows.getByRole('button').nth(1).click(); // Player stats: Off, A, B
+      await cam.waitForTimeout(800);
+      const on = await whiteInCorner();
+      if (!(on > 0.01 && off < 0.002)) throw new Error(`the table did not show in the bottom-left corner: white ${off.toFixed(4)} -> ${on.toFixed(4)}`);
+      await cam.screenshot({ path: path.join(OUT, '05g-camera-player-stats-on.png') });
+      await rows.getByRole('button').nth(0).click(); // back to Off
+      await cam.waitForTimeout(800);
+      const back = await whiteInCorner();
+      if (back > 0.002) throw new Error(`switching the table off left its text in the frame: white ${back.toFixed(4)}`);
+      return `bottom-left white-text share ${off.toFixed(4)} (Off) -> ${on.toFixed(4)} (table on) -> ${back.toFixed(4)} (Off again)`;
+    });
+
     await step('point reasons off: a new match records no tag and opens no popup (D15)', async () => {
       const b = sbB!;
       await sb.getByRole('button', { name: 'Menu' }).click();
@@ -688,7 +721,9 @@ async function main() {
       }
       const tags = (await cameraLog(cam)).filter((e) => e.type === 'tag').length;
       if (tags) throw new Error(`${tags} tag events in the new match`);
-      return `score ${await score(sb)} on both, no popup, no chip, no tag at the camera`;
+      const hint = await until('the camera says why the stats rows are off', async () => (await cam.locator('[data-testid=stats-hint]').count()) > 0, 5000);
+      if (!hint || (await cam.locator('[data-testid=stats-rows] button:not([disabled])').count()) > 0) throw new Error('the camera offers the stats rows with point reasons off');
+      return `score ${await score(sb)} on both, no popup, no chip, no tag at the camera, the camera's stats rows disabled with a hint`;
     });
 
     await step('scoreboard B screen off for 20 s while A scores; B back in seconds with the camera’s state', async () => {

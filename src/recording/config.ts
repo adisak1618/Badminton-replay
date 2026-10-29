@@ -1,4 +1,5 @@
-import { DEFAULT_LOGO_CORNER, DEFAULT_SCORE_CORNER, type Corner, type LogoSize, type PanelSize } from '../overlay/layout';
+import type { Team } from '../engine';
+import { DEFAULT_LOGO_CORNER, DEFAULT_SCORE_CORNER, type Corner, type LogoSize, type PanelSize, type TablePlace } from '../overlay/layout';
 
 // Recording constants in one place (technical-design.md §6). The default quality is one line: if the
 // captain's 60-minute soak says 1080p30 is too hot or drops frames, set DEFAULT_QUALITY to '720p'.
@@ -43,6 +44,13 @@ export interface CameraSettings {
   scoreSize: PanelSize;
   logoCorner: Corner;
   logoSize: LogoSize;
+  /** C1 "Player stats" (D15 in the video): the table for one team, or off. It is sized with the score panel. */
+  statsTeam: 'off' | Team;
+  statsPlace: TablePlace;
+  /** The "ฝั่งตรงข้ามตีพลาด N" line under the table. */
+  statsOpp: boolean;
+  /** C1 "End-of-game summary": the card for both teams after a game and after the match. */
+  endCard: boolean;
 }
 
 export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
@@ -54,6 +62,10 @@ export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
   scoreSize: 'medium',
   logoCorner: DEFAULT_LOGO_CORNER,
   logoSize: 'medium',
+  statsTeam: 'off',
+  statsPlace: 'auto',
+  statsOpp: true,
+  endCard: false,
 };
 
 export function bytesPerMinute(q: Quality, audio: boolean): number {

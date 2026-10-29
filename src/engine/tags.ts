@@ -55,14 +55,18 @@ export function validTag(cfg: MatchConfig, rally: Pick<Rally, 'team'>, t: TagBod
   }
 }
 
-/** Every counted rally in order, each with its newest valid tag. Points made in game over or match over do not count. */
-export function rallies(cfg: MatchConfig, events: readonly MatchEvent[]): Rally[] {
+/**
+ * Every counted rally in order, each with its newest valid tag. Points made in game over or match over do not count.
+ * With `cutoff` only events with `at <= cutoff` count, but undos are still taken from the whole log, the same rule as
+ * `stateAt` in the overlay: a quick undo never reaches the video, and a tag counts from the moment it was saved.
+ */
+export function rallies(cfg: MatchConfig, events: readonly MatchEvent[], cutoff: number = Infinity): Rally[] {
   const voided = voidSet(events);
   const s = initialState(cfg);
   const out: Rally[] = [];
   const byId = new Map<string, Rally>();
   for (const e of events) {
-    if (voided.has(e.seq)) continue;
+    if (voided.has(e.seq) || e.at > cutoff) continue;
     if (e.type === 'point') {
       const counted = s.phase === 'playing' || s.phase === 'interval';
       const served = { team: s.server, idx: s.serverIdx };
@@ -175,13 +179,18 @@ function fold(cfg: MatchConfig, game: number, rs: readonly Rally[]): Stats {
 }
 
 /** Stats per game and for the whole match (Q4 "End of game" cards, match.json `stats`). */
-export function matchStats(cfg: MatchConfig, events: readonly MatchEvent[]): MatchStats {
-  const rs = rallies(cfg, events);
+export function matchStats(cfg: MatchConfig, events: readonly MatchEvent[], cutoff: number = Infinity): MatchStats {
+  const rs = rallies(cfg, events, cutoff);
   const games: Stats[] = [];
   for (const g of new Set(rs.map((r) => r.game))) games.push(fold(cfg, g, rs.filter((r) => r.game === g)));
   const match = fold(cfg, 0, rs);
   match.durationMs = games.reduce((a, g) => a + g.durationMs, 0);
   return { match, games };
+}
+
+/** The stats of one game as the video shows them: all zero while the game has no rally yet. */
+export function gameStats(ms: MatchStats, cfg: MatchConfig, game: number): Stats {
+  return ms.games.find((g) => g.game === game) ?? fold(cfg, game, []);
 }
 
 /** Untagged counted rallies, oldest first (the tag-later list). */
