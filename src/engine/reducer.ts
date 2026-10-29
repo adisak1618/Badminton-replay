@@ -12,7 +12,30 @@ import {
 } from './rules';
 import type { EventType, MatchConfig, MatchEvent, MatchState, Positions, Team } from './types';
 
-/** Events a user action creates and Undo can take back. `match.end` is included so "End match" can be undone. */
+/**
+ * Every event type this build knows. A log may carry types from a newer build: the guards keep them and the
+ * reducer passes over them, so an older phone still shows the score (technical-design.md §4.4).
+ */
+export const EVENT_TYPES: ReadonlySet<string> = new Set<EventType>([
+  'match.start',
+  'point',
+  'undo',
+  'redo',
+  'correct',
+  'sides.swap',
+  'courts.swap',
+  'server.set',
+  'interval.end',
+  'game.start',
+  'match.end',
+  'tag',
+  'tag.clear',
+]);
+
+/**
+ * Events a user action creates and Undo can take back. `match.end` is included so "End match" can be undone.
+ * Tags are not: Undo always takes back the last scoring action, and a tag is changed by a newer tag (D15).
+ */
 export const UNDOABLE: ReadonlySet<EventType> = new Set<EventType>([
   'point',
   'correct',
@@ -198,6 +221,8 @@ export function apply(cfg: MatchConfig, s: MatchState, e: MatchEvent): void {
     case 'match.start':
     case 'undo':
     case 'redo':
+    case 'tag': // why a point was won does not change the score (engine/tags.ts)
+    case 'tag.clear':
       break;
   }
   setFlags(cfg, s);

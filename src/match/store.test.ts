@@ -48,3 +48,23 @@ describe('persistence and resume (R-SCORE-9)', () => {
     expect(c.next.score).toEqual({ A: 1, B: 0 });
   });
 });
+
+describe('point reasons on a scoreboard alone (D15)', () => {
+  it('a tag is kept for a live point of a match that asks why; with Off nothing is recorded', () => {
+    const on = new MatchStore(async () => {}, () => 'dev-1');
+    on.start({ ...makeConfig({ doubles: true }), reasons: 'endOfGame' });
+    on.emit({ type: 'point', team: 'A' });
+    const point = on.getSnapshot().match!.events[1].id;
+    expect(on.emit({ type: 'tag', point, how: 'winner', hit: { team: 'A', idx: 1 } })).not.toBeNull();
+    expect(on.emit({ type: 'tag', point: 'nope', how: 'winner', hit: { team: 'A', idx: 1 } })).toBeNull();
+    expect(on.emit({ type: 'tag', point, how: 'winner', hit: { team: 'B', idx: 0 } })).toBeNull(); // B lost it
+    expect(on.getSnapshot().match!.events.filter((e) => e.type === 'tag')).toHaveLength(1);
+
+    const off = new MatchStore(async () => {}, () => 'dev-1');
+    off.start({ ...makeConfig({ doubles: true }), reasons: 'off' });
+    off.emit({ type: 'point', team: 'A' });
+    const p = off.getSnapshot().match!.events[1].id;
+    expect(off.emit({ type: 'tag', point: p, how: 'winner', hit: { team: 'A', idx: 0 } })).toBeNull();
+    expect(off.getSnapshot().match!.events.some((e) => e.type === 'tag')).toBe(false);
+  });
+});

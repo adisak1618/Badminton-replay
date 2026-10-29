@@ -101,5 +101,9 @@ export function feedbackFor(cfg: MatchConfig, prev: MatchState, next: MatchState
         speech: next.phase === 'playing' || next.phase === 'interval' ? scoreCall(next, lang) : null,
         chime: null,
       };
+    case 'tag': // why a point was won is silent: the score call already went out (D15)
+    case 'tag.clear':
+    default: // an event type from a newer build
+      return { speech: null, chime: null };
   }
 }

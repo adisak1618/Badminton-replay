@@ -178,6 +178,15 @@
   animation: pop 150ms ease-out;
 }
 
+@keyframes slide-up {
+  from {
+    transform: translateY(30%);
+    opacity: 0;
+  }
+}
+.slide-up {
+  animation: slide-up 220ms ease-out;
+}
 @keyframes swap-in {
   from {
     opacity: 0;
@@ -192,6 +201,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .pop,
+  .slide-up,
   .swap-in {
     animation: none;
   }

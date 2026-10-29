@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { reduce } from '../engine';
+import { matchStats, reduce } from '../engine';
 import { doublesConfig, makeConfig, Match } from '../engine/test-utils';
-import { buildBundle, bundleName, exportFileName, segmentAt, tRecFor } from './bundle';
+import { buildBundle, buildLogBundle, bundleName, exportFileName, segmentAt, tRecFor } from './bundle';
 import { newMeta, repairMeta, type MirrorLog, type RecordingMeta } from './meta';
 import type { Segment } from './session';
 
@@ -151,5 +151,37 @@ describe('repairMeta after a crash (R-REC-2)', () => {
     const r = repairMeta(null, 'cam-5', [{ name: 'video-1.mp4', size: 9, lastModified: 50 }], camera);
     expect(r).toMatchObject({ id: 'cam-5', matchId: null, createdAt: 50 });
     expect(r.segments).toHaveLength(1);
+  });
+});
+
+describe('point reasons in match.json (D15)', () => {
+  it('stats derived from the tags travel next to the events, which keep the tags unchanged', () => {
+    const m = new Match({ ...doublesConfig(), reasons: 'endOfGame' }).rallies('AB');
+    m.push({ type: 'tag', point: 'e2', how: 'winner', hit: { team: 'A', idx: 1 }, assist: { team: 'A', idx: 0 }, shot: 'smash' });
+    const { meta, log } = recorded(m, [seg(1, 1_000_000, null)]);
+    const b = buildBundle({ meta, log, app: 'test', now: 5 });
+    expect(b.stats).toEqual(matchStats(m.cfg, m.events));
+    expect(b.stats!.match.players.A[1]).toMatchObject({ W: 1 });
+    expect(b.events.find((e) => e.type === 'tag')).toMatchObject({ point: 'e2', shot: 'smash', tRec: { segment: 1 } });
+    expect(JSON.parse(JSON.stringify(b)).stats.games[0].teams.A.winners).toBe(1);
+  });
+
+  it('a match that did not ask has no stats block (Off is exactly as before)', () => {
+    const m = new Match({ ...makeConfig(), reasons: 'off' }).rallies('AB');
+    const { meta, log } = recorded(m, [seg(1, 1_000_000, null)]);
+    expect('stats' in buildBundle({ meta, log, app: 'test', now: 5 })).toBe(false);
+  });
+
+  it('the scoreboard’s own export: no recording, replays to the final score, stats included', () => {
+    const m = new Match({ ...doublesConfig(), reasons: 'endOfGame' }).rallies('AABA');
+    m.push({ type: 'tag', point: 'e4', how: 'unforced', hit: { team: 'A', idx: 0 } });
+    const b = buildLogBundle({ matchId: 'm9', config: m.cfg, events: m.events, scoreboard: { id: 'sb-1', ua: 'ua' }, app: 'test', now: 7 });
+    expect(b).toMatchObject({ format: 'badminton-scoreboard/match', version: 1, matchId: 'm9', devices: { scoreboard: { id: 'sb-1' } } });
+    expect(b.recording).toBeUndefined();
+    expect(b.clock).toBeUndefined();
+    expect(b.events.every((e) => e.tRec === null)).toBe(true);
+    expect(b.events[b.events.length - 1].after).toEqual(reduce(m.cfg, m.events));
+    expect(b.result.games).toEqual(reduce(m.cfg, m.events).games);
+    expect(b.stats!.match.teams.B).toMatchObject({ won: 1, oppUnforced: 1 });
   });
 });

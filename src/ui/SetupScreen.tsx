@@ -1,6 +1,6 @@
 // S1 match setup (R-SETUP-2, R-SETUP-3). "Left" and "right" are literal: the sides of this screen on the post.
 import { useState, type ReactNode } from 'react';
-import { DEFAULT_SETUP, PALETTE, type Format, type MatchSetup, type Points, type Team, type TeamSetup } from '../engine';
+import { DEFAULT_SETUP, PALETTE, type Format, type MatchSetup, type PointReasons, type Points, type Team, type TeamSetup } from '../engine';
 import { loadLastSetup } from '../match/prefs';
 import { CameraStatus } from './CameraLink';
 import { UpdateBanner } from './RoleScreen';
@@ -180,11 +180,25 @@ export function SetupScreen({
             onChange={(v) => set('firstServer', v)}
           />
         </Row>
+        <Row label="Point reasons">
+          <Seg<PointReasons>
+            label="point reasons"
+            value={setup.reasons}
+            options={[
+              ['off', 'Off'],
+              ['endOfGame', 'End of game'],
+            ]}
+            onChange={(v) => set('reasons', v)}
+          />
+        </Row>
       </div>
       <p className="text-xs leading-relaxed text-mut">
         {setup.format === 'fixed2' && 'Fixed 2: two games always, 1-1 is a draw. '}
         {setup.doubles &&
           'Doubles: the right-court player of the serving team serves first; the right-court player of the other team receives. '}
+        {setup.reasons === 'off'
+          ? 'Point reasons off: scoring only. '
+          : 'Point reasons: after each point, tap who hit the last shot (optional); the stats show at the end of each game. '}
         Tap your half to score, swipe down or tap Undo to take it back, long-press a half to correct. Tip: iOS Guided
         Access (Settings, Accessibility) locks the phone to this app for a match.
       </p>

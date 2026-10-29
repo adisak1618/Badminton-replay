@@ -1,6 +1,7 @@
 // match.json, the export bundle's log (technical-design.md §8; R-EXP-1, R-BURN-1): config, every event with
-// its time on the recording, the derived state after it, and which team was on the camera's left.
-import { other, reduce, type MatchConfig, type MatchEvent, type MatchState, type Team } from '../engine';
+// its time on the recording, the derived state after it, and which team was on the camera's left. With point
+// reasons on (D15) also `stats`, derived from the tags in `events` like `after` is from the points.
+import { matchStats, other, reasonsOn, reduce, type MatchConfig, type MatchEvent, type MatchState, type MatchStats, type Team } from '../engine';
 import type { ClockEstimate, PeerInfo } from '../link/source';
 import type { MirrorLog, RecordingMeta } from './meta';
 import type { Segment } from './session';
@@ -24,6 +25,8 @@ export interface MatchBundle {
   recording?: { segments: Segment[] };
   events: BundleEvent[];
   result: { winner: Team | null; games: Record<Team, number>; completed: Array<Record<Team, number>> };
+  /** D15: why points were won, per game and for the match; absent when the match did not ask. */
+  stats?: MatchStats;
 }
 
 /** The segment recording at camera time `t`, if any. */
@@ -74,6 +77,7 @@ export function buildBundle(input: { meta: RecordingMeta; log: MirrorLog | null;
     });
   const final = cfg && log ? reduce(cfg, log.events) : null;
   const scoreboard = meta.scoreboard ?? { id: log?.events[0]?.by ?? 'unknown', ua: '' };
+  const stats = cfg && log && reasonsOn(cfg) ? { stats: matchStats(cfg, log.events) } : {};
   return {
     format: 'badminton-scoreboard/match',
     version: 1,
@@ -88,5 +92,31 @@ export function buildBundle(input: { meta: RecordingMeta; log: MirrorLog | null;
     result: final
       ? { winner: final.winner, games: final.games, completed: final.completed }
       : { winner: null, games: { A: 0, B: 0 }, completed: [] },
+    ...stats,
+  };
+}
+
+/**
+ * The scoreboard's own match.json (R-EXP-1): the same shape without a recording, so no clock, no segments and
+ * no times on a video (`tRec` null); it replays to the final score.
+ */
+export function buildLogBundle(input: { matchId: string; config: MatchConfig; events: MatchEvent[]; scoreboard: PeerInfo; app: string; now: number }): MatchBundle {
+  const { matchId, config: cfg, events: log, scoreboard, app, now } = input;
+  const events: MatchBundle['events'] = log.map((e, i) => {
+    const after = reduce(cfg, log.slice(0, i + 1));
+    return { ...e, tRec: null, after, leftOnCamera: after.leftTeam };
+  });
+  const final = reduce(cfg, log);
+  return {
+    format: 'badminton-scoreboard/match',
+    version: 1,
+    matchId,
+    createdAt: now,
+    app,
+    config: cfg,
+    devices: { scoreboard },
+    events,
+    result: { winner: final.winner, games: final.games, completed: final.completed },
+    ...(reasonsOn(cfg) ? { stats: matchStats(cfg, log) } : {}),
   };
 }
