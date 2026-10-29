@@ -4,34 +4,18 @@ import { describe, expect, it } from 'vitest';
 import type { MatchConfig, PlayerRef, TagBody } from '../engine';
 import { doublesConfig, makeConfig, Match } from '../engine/test-utils';
 import { DEFAULT_THEME, drawOverlay, panelMaxHeight, panelSize } from './draw';
-import { CORNERS, inset, overlayLayout, panelScale, type Corner, type LogoSize, type TablePlace } from './layout';
+import { cardPlace, CORNERS, inset, overlayLayout, panelScale, type Corner, type LogoSize, type TablePlace } from './layout';
 import { NO_STATS, OverlayClock, overlayModel, stateAt, statsOverlay, type OverlayModel } from './model';
-import { cardLine, cardTitle, drawEndCard, drawStatsTable, endCardSize, OPP_LINE, STAT_WORDS, statColumns, statsTableSize, type StatsTable } from './table';
+import { MOTION } from './motion';
+import { CARD, cardShown, cardTitle, drawEndCard, drawStatsTable, endCardSize, statColumns, statsTableSize, TABLE, type EndCard, type StatsTable } from './table';
+import { fakeCtx, textSpan, words } from './test-ctx';
+import { ERROR_COLUMNS, STAT_WORDS, WORDS } from './words';
 
 const on = (cfg: MatchConfig): MatchConfig => ({ ...cfg, reasons: 'endOfGame' });
 const P = (team: 'A' | 'B', idx: number): PlayerRef => ({ team, idx });
 const tag = (point: string, how: TagBody['how'], hit: PlayerRef, more: Partial<TagBody> = {}): TagBody => ({ type: 'tag', point, how, hit, ...more });
 const plain = { mirrored: false, stale: false };
 const A_TABLE = { table: { team: 'A' as const, opp: true }, card: false };
-
-/** A recording stand-in for CanvasRenderingContext2D: text is `em` (0.6) em per character. */
-function fakeCtx(em = 0.6) {
-  const calls: Array<{ op: string; args: unknown[]; fill: string; font: string; align: string }> = [];
-  const ctx = {
-    fillStyle: '',
-    globalAlpha: 1,
-    font: '10px x',
-    textAlign: 'left',
-    textBaseline: 'alphabetic',
-    measureText(t: string) {
-      const px = Number(/(\d+(?:\.\d+)?)px/.exec(this.font)?.[1] ?? 10);
-      return { width: t.length * px * em };
-    },
-  } as Record<string, unknown> & { fillStyle: string; font: string };
-  for (const op of ['save', 'restore', 'beginPath', 'moveTo', 'lineTo', 'arc', 'arcTo', 'closePath', 'fill', 'clip', 'fillRect', 'fillText', 'drawImage'])
-    ctx[op] = (...args: unknown[]) => calls.push({ op, args, fill: ctx.fillStyle, font: ctx.font, align: String(ctx.textAlign) });
-  return { ctx: ctx as unknown as CanvasRenderingContext2D, calls };
-}
 
 /** Doubles, reasons on: Nok wins a point with Pae's assist, Bank errs unforced, then Pae makes a forced error forced by Bank. */
 function tagged() {
@@ -136,7 +120,12 @@ describe('the end-of-game card', () => {
     if (last === 'clear') m.push({ type: 'tag.clear', point: lastId(m) });
     return m;
   };
-  const card = (m: Match, cutoff = Infinity) => statsOverlay(m.cfg, m.events, m.state, cutoff, { table: null, card: true }).card;
+  const raw = (m: Match, cutoff = Infinity) => statsOverlay(m.cfg, m.events, m.state, cutoff, { table: null, card: true }).card;
+  /** The card as the video shows it with no motion: a closed one is gone at once. */
+  const card = (m: Match, cutoff = Infinity) => {
+    const c = raw(m, cutoff);
+    return cardShown(c, cutoff, 'none') ? c : null;
+  };
 
   it('waits for the last point of the game: hidden while it is untagged, shown once it is tagged or the operator chose no tag', () => {
     expect(fullGame('none').state.phase).toBe('gameOver');
@@ -221,56 +210,105 @@ describe('the end-of-game card', () => {
     expect(statsOverlay(m.cfg, m.events, m.state, Infinity, { table: null, card: false }).card).toBeNull();
   });
 
-  it('is worded in Thai and sized for the middle of the frame', () => {
+  it('carries when it became due (the last tag) and when it was closed; a closed card fades out over cardOut, then is gone', () => {
+    const m = fullGame('tag');
+    const lastTag = m.events.at(-1)!;
+    expect(raw(m)!).toMatchObject({ shownAt: lastTag.at, closedAt: null });
+    m.push({ type: 'summary.close' });
+    const closeAt = m.events.at(-1)!.at;
+    const c = raw(m)!;
+    expect(c.closedAt).toBe(closeAt);
+    expect(cardShown(c, closeAt + MOTION.full.cardOut - 1, 'full')).toBe(true);
+    expect(cardShown(c, closeAt + MOTION.full.cardOut, 'full')).toBe(false);
+    expect(cardShown(c, closeAt, 'none')).toBe(false);
+    // "No tag" resolves it too, and the card counts from that choice
+    const n = fullGame('clear');
+    expect(raw(n)!.shownAt).toBe(n.events.at(-1)!.at);
+  });
+
+  it('carries the game scores for the match card and the playing time in minutes', () => {
+    const m = fullGame('tag').startGame().scoreTo(21, 3);
+    m.push({ type: 'tag.clear', point: lastId(m) });
+    const c = raw(m)!;
+    const left = m.state.leftTeam;
+    expect(c.games).toEqual(m.state.completed.map((g) => [g[left], g[left === 'A' ? 'B' : 'A']]));
+    expect(c.minutes).toBe(Math.max(1, Math.round(((22 + 24 - 2) * 1000) / 60_000))); // the test log puts rallies 1 s apart
+    expect(raw(fullGame('tag'))!.games).toEqual([[21, 1]]);
+  });
+
+  it('is worded in formal Thai with the BWF English name, and sized for the middle of the frame', () => {
     const m = fullGame();
-    const c = card(m)!;
-    expect(cardTitle(c)).toBe('เกม 1 · แต้มมาจากอะไร');
-    expect(cardLine(c.teams.find((t) => t.team === 'A')!)).toMatch(/^NOK \/ PAE {2}21 แต้ม = วินเนอร์ 2 \+ คู่แข่งโดนบีบพลาด 0 \+ คู่แข่งตีเสียเอง 0 \+ ไม่ได้ระบุ 19$/);
+    const c = raw(m)!;
+    expect(cardTitle(c)).toBe('สรุปเกมที่ 1');
+    const size = endCardSize(c, 1);
+    expect(size.w).toBe(CARD.w);
+    const { box } = cardPlace(1920, 1080, size, []);
+    expect(box).toMatchObject({ x: (1920 - CARD.w) / 2, w: CARD.w });
     const r = fakeCtx();
-    const box = drawEndCard(r.ctx, c, 1920, 1080, 1);
-    expect(box).toMatchObject({ ...endCardSize(c, 1), x: (1920 - 720) / 2 });
-    const words = r.calls.filter((x) => x.op === 'fillText').map((x) => String(x.args[0]));
-    for (const k of statColumns(true)) expect(words).toContain(STAT_WORDS[k].long);
-    expect(words).toContain('ติดแท็ก ' + c.tagged + '/' + c.rallies + ' แต้ม');
+    drawEndCard(r.ctx, c, box);
+    const w = words(r.calls);
+    for (const k of statColumns(true)) expect(w).toContain(STAT_WORDS[k]);
+    for (const x of [WORDS.overview, WORDS.players, WORDS.total, WORDS.fromWinners, WORDS.fromForced, WORDS.fromUnforced, WORDS.untagged, WORDS.longestRun, WORDS.wonOnServe])
+      expect(w).toContain(x);
+    expect(w).toContain(WORDS.tagged(c.tagged, c.rallies));
+    expect(w).toContain('GAME 1 SUMMARY');
+    expect(w.some((x) => /แต้มมาจากอะไร|ติดแท็ก|ไม่ได้ระบุ/.test(x))).toBe(false); // the PR 10 words are gone
     expect(box.y + box.h).toBeLessThan(1080);
   });
 
-  it('keeps every word inside the card, the tagged count ends inside the right padding, whatever its width or the scale', () => {
+  it('the match card shows games won, every game, WIN for the winner and the playing time', () => {
+    const m = fullGame('tag').startGame().scoreTo(21, 3);
+    m.push({ type: 'tag.clear', point: lastId(m) });
+    const c = raw(m)!;
+    const r = fakeCtx();
+    drawEndCard(r.ctx, c, cardPlace(1920, 1080, endCardSize(c, 1), []).box);
+    const w = words(r.calls);
+    expect(w).toEqual(expect.arrayContaining([WORDS.cardMatch, 'MATCH SUMMARY', '2', '0', 'WIN', c.games.map(([a, b]) => `${a}–${b}`).join('   ')]));
+    expect(w).toContain(`${WORDS.event(true)}  ·  ${WORDS.duration(c.minutes!)}`);
+  });
+
+  it('keeps every word inside the card, the tagged count inside the padding, whatever its width or the scale', () => {
     const m = fullGame();
-    const base = card(m)!;
-    const wide = { ...base, tagged: 123_456, rallies: 123_456, game: 12 };
-    const widthOf = (font: string, t: string) => t.length * Number(/(\d+(?:\.\d+)?)px/.exec(font)![1]) * 0.6;
+    const base = raw(m)!;
+    const wide: EndCard = { ...base, tagged: 123_456, rallies: 123_456, game: 12 };
     for (const c of [base, wide])
       for (const u of [0.5, 2 / 3, 1, 1.25]) {
+        const size = endCardSize(c, u);
+        const box = { x: 100, y: 50, ...size };
         const r = fakeCtx();
-        const box = drawEndCard(r.ctx, c, 1920 * u, 1080 * u, u);
-        const pad = 22 * u;
-        const texts = r.calls.filter((x) => x.op === 'fillText');
-        for (const t of texts) {
-          const [s, x] = t.args as [string, number];
-          const w = widthOf(t.font, s);
-          const [from, to] = t.align === 'center' ? [x - w / 2, x + w / 2] : t.align === 'right' ? [x - w, x] : [x, x + w];
-          expect(from).toBeGreaterThanOrEqual(box.x);
-          expect(to).toBeLessThanOrEqual(box.x + box.w - pad + 0.01);
+        drawEndCard(r.ctx, c, box);
+        for (const t of r.calls.filter((x) => x.op === 'fillText')) {
+          const [from, to] = textSpan(t);
+          expect(from, String(t.args[0])).toBeGreaterThanOrEqual(box.x - 0.01);
+          expect(to, String(t.args[0])).toBeLessThanOrEqual(box.x + box.w + 0.01);
         }
-        const label = texts.find((t) => String(t.args[0]).startsWith('ติดแท็ก'))!;
-        expect(r.calls.filter((x) => x.op === 'fillText').every((x) => x.font.includes('px'))).toBe(true);
-        expect((label.args[1] as number) + widthOf(label.font, String(label.args[0]))).toBeLessThanOrEqual(box.x + box.w - pad + 0.01);
+        const label = r.calls.find((t) => t.op === 'fillText' && String(t.args[0]).startsWith('บันทึกเหตุผล'))!;
+        expect(textSpan(label)[1]).toBeLessThanOrEqual(box.x + box.w - CARD.pad * (box.w / CARD.w) + 0.01);
       }
   });
 
-  it('never relies on textAlign right or center for the tagged count: it is drawn left-aligned from a measured start', () => {
-    const m = fullGame();
-    const c = card(m)!;
-    const aligns: string[] = [];
+  it('never relies on textAlign right: right-aligned words are drawn left-aligned from a measured start', () => {
+    const m = fullGame('tag').startGame().scoreTo(21, 3);
+    m.push({ type: 'tag.clear', point: lastId(m) });
     const r = fakeCtx();
-    const orig = (r.ctx as unknown as { fillText: (...a: unknown[]) => void }).fillText;
-    (r.ctx as unknown as { fillText: (...a: unknown[]) => void }).fillText = (...a: unknown[]) => {
-      if (String(a[0]).startsWith('ติดแท็ก')) aligns.push(r.ctx.textAlign);
-      orig(...a);
+    drawEndCard(r.ctx, raw(m)!, cardPlace(1920, 1080, endCardSize(raw(m)!, 1), []).box);
+    expect(r.calls.filter((x) => x.op === 'fillText').every((x) => x.align !== 'right')).toBe(true);
+  });
+
+  it('fades in and rises from when it became due; with no motion it is there at once', () => {
+    const m = fullGame();
+    const c = raw(m)!;
+    const box = cardPlace(1920, 1080, endCardSize(c, 1), []).box;
+    const alphaAt = (now: number, motion: 'full' | 'none') => {
+      const r = fakeCtx();
+      drawEndCard(r.ctx, c, box, DEFAULT_THEME, { now, motion });
+      return r.calls.find((x) => x.op === 'fill')?.alpha ?? 0;
     };
-    drawEndCard(r.ctx, c, 1920, 1080, 1);
-    expect(aligns).toEqual(['left']);
+    expect(alphaAt(c.shownAt, 'full')).toBe(0);
+    expect(alphaAt(c.shownAt + MOTION.full.cardIn / 2, 'full')).toBeGreaterThan(0);
+    expect(alphaAt(c.shownAt + MOTION.full.cardIn / 2, 'full')).toBeLessThan(1);
+    expect(alphaAt(c.shownAt + MOTION.full.cardIn, 'full')).toBe(1);
+    expect(alphaAt(c.shownAt, 'none')).toBe(1);
   });
 });
 
@@ -281,7 +319,7 @@ describe('OverlayClock with the stats', () => {
     const model = clock.at(m.cfg, m.events, Infinity, { delayMs: 0, offsetMs: 0, ...plain })!;
     expect(model.table).toBeNull();
     expect(model.card).toBeNull();
-    expect({ ...model, table: null, card: null }).toEqual({ ...overlayModel(m.cfg, m.state, plain), table: null, card: null });
+    expect({ ...model, table: null, card: null, anim: null }).toEqual({ ...overlayModel(m.cfg, m.state, plain), table: null, card: null, anim: null });
   });
 
   it('rebuilds when a tag arrives, when the options change, and when the summary is closed; otherwise it memoises', () => {
@@ -306,65 +344,78 @@ describe('OverlayClock with the stats', () => {
     expect(during.card).not.toBeNull();
     expect(clock.at(m.cfg, m.events, at() + 600_000, o)).toBe(during); // ten minutes on: still there, nothing rebuilt
     m.push({ type: 'summary.close' });
-    expect(clock.at(m.cfg, m.events, at(), o)!.card).toBeNull();
+    const closed = clock.at(m.cfg, m.events, at(), o)!.card!;
+    expect(closed.closedAt).toBe(at());
+    expect(cardShown(closed, at() + MOTION.full.cardOut, 'full')).toBe(false);
   });
 });
 
 describe('drawStatsTable', () => {
-  const table = (doubles: boolean, opp: number | null = 16): StatsTable => ({
+  const table = (doubles: boolean, opp: number | null = 16, changed: Record<string, number> = {}): StatsTable => ({
     team: 'A',
     color: '#2bd4a6',
     doubles,
+    game: 2,
     opp,
+    changed,
     rows: [
       { name: 'NOK', W: 7, A: 3, F: 4, FE: 1, UE: 3 },
       { name: 'PAE', W: 0, A: 4, F: 3, FE: 3, UE: 1 },
     ].slice(0, doubles ? 2 : 1),
   });
-  const draw = (t: StatsTable, u = 1) => {
+  const draw = (t: StatsTable, u = 1, o = {}) => {
     const size = statsTableSize(fakeCtx().ctx, t, u);
     const box = { x: 43, y: 900, ...size };
     const r = fakeCtx();
-    drawStatsTable(r.ctx, t, box, u);
+    drawStatsTable(r.ctx, t, box, u, DEFAULT_THEME, o);
     return { box, ...r, texts: r.calls.filter((c) => c.op === 'fillText') };
   };
 
-  it('draws the Thai headings once, the players, the counts, and the opponent line', () => {
-    const { texts } = draw(table(true));
-    const words = texts.map((t) => String(t.args[0]));
-    for (const k of statColumns(true)) expect(words).toContain(STAT_WORDS[k].short);
-    expect(words).toEqual(expect.arrayContaining(['NOK', 'PAE', '7', '3', '4', '16', OPP_LINE]));
-    expect(words.filter((w) => w === STAT_WORDS.W.short)).toHaveLength(1);
+  it('draws the game in the red header, the Thai headings once, the players, the counts, and the opponent line', () => {
+    const { texts, calls } = draw(table(true));
+    const w = texts.map((t) => String(t.args[0]));
+    expect(w[0]).toBe('GAME 2');
+    for (const k of statColumns(true)) expect(w.filter((x) => x === STAT_WORDS[k])).toHaveLength(1);
+    expect(w).toEqual(expect.arrayContaining(['NOK', 'PAE', '7', '3', '4', '16', WORDS.opp]));
+    expect(calls.some((c) => c.op === 'fillRect' && c.fill === DEFAULT_THEME.table.head)).toBe(true);
+    expect(calls.some((c) => c.op === 'fillRect' && c.fill === DEFAULT_THEME.table.headErr)).toBe(true);
   });
 
-  it('singles has one player row and no ทำเกม column; the opponent line can be left out', () => {
-    const { texts } = draw(table(false, null));
-    const words = texts.map((t) => String(t.args[0]));
-    expect(words).not.toContain(STAT_WORDS.A.short);
-    expect(words).not.toContain('PAE');
-    expect(words).not.toContain(OPP_LINE);
+  it('singles has one player row and no สร้างโอกาส column; the opponent line can be left out', () => {
+    const w = draw(table(false, null)).texts.map((t) => String(t.args[0]));
+    expect(w).not.toContain(STAT_WORDS.A);
+    expect(w).not.toContain('PAE');
+    expect(w).not.toContain(WORDS.opp);
   });
 
-  it('keeps everything inside its box, dims zeros, and uses the team colour for the marker', () => {
+  it('keeps everything inside its box, dims zeros, reds the points-lost counts, uses the team colour for the marker', () => {
     const { box, calls, texts } = draw(table(true));
     for (const c of calls.filter((x) => x.op === 'fillRect' || x.op === 'fillText')) {
+      if (c.fill === DEFAULT_THEME.shadow) continue; // the hard shadow sits 2-3 units out
       const [x, y] = (c.op === 'fillRect' ? c.args : c.args.slice(1)) as number[];
       expect(x).toBeGreaterThanOrEqual(box.x);
       expect(x).toBeLessThanOrEqual(box.x + box.w);
       expect(y).toBeGreaterThanOrEqual(box.y);
       expect(y).toBeLessThanOrEqual(box.y + box.h);
     }
+    const T = DEFAULT_THEME.table;
     expect(calls.some((c) => c.op === 'fill' && c.fill === '#2bd4a6')).toBe(true);
-    expect(texts.find((t) => t.args[0] === '0')?.fill).toBe('rgba(255,255,255,0.4)');
-    expect(texts.find((t) => t.args[0] === '7')?.fill).toBe('#ffffff');
+    expect(texts.find((t) => t.args[0] === '0')?.fill).toBe(T.zero);
+    expect(texts.find((t) => t.args[0] === '7')?.fill).toBe(T.val);
+    // NOK's UE (3) is a points-lost count; their A (3) is not
+    const threes = texts.filter((t) => t.args[0] === '3').map((t) => t.fill);
+    expect(threes).toContain(T.valErr);
+    expect(threes).toContain(T.val);
+    expect(ERROR_COLUMNS).toEqual(new Set(['FE', 'UE']));
   });
 
-  it('has a fixed size for the match: counts reaching two digits do not change it; rows are at least 1.3 x the Thai font', () => {
+  it('has a fixed size for the match: counts reaching two digits do not change it; rows are at least 1.3 x their font', () => {
     const a = table(true);
     const b = { ...a, rows: a.rows.map((r) => ({ ...r, W: 88, UE: 12 })) };
     expect(statsTableSize(fakeCtx().ctx, b, 1)).toEqual(statsTableSize(fakeCtx().ctx, a, 1));
-    expect(28 / 22).toBeGreaterThanOrEqual(1.25);
-    expect(22 / 18).toBeGreaterThanOrEqual(1.2);
+    expect(TABLE.row / TABLE.valFont).toBeGreaterThanOrEqual(1.3);
+    expect(TABLE.head / TABLE.headFont).toBeGreaterThanOrEqual(1.3);
+    expect(TABLE.opp / TABLE.oppFont).toBeGreaterThanOrEqual(1.3);
   });
 
   it('never lets a word cross the box when a wider font draws it than the one that sized it, and clips to the box', () => {
@@ -376,18 +427,28 @@ describe('drawStatsTable', () => {
         const box = { x: 43, y: 900, ...sized };
         drawStatsTable(r.ctx, t, box, 1);
         expect(r.calls.some((c) => c.op === 'clip')).toBe(true);
-        const widthOf = (font: string, text: string) => text.length * Number(/(\d+(?:\.\d+)?)px/.exec(font)![1]) * em;
         for (const c of r.calls.filter((x) => x.op === 'fillText')) {
-          const [text, x] = c.args as [string, number];
-          const w = widthOf(c.font, text);
-          const [from, to] = c.align === 'center' ? [x - w / 2, x + w / 2] : [x, x + w];
-          expect(from, `${text} @${em}`).toBeGreaterThanOrEqual(box.x);
-          expect(to, `${text} @${em}`).toBeLessThanOrEqual(box.x + box.w + 0.01);
+          const [from, to] = textSpan(c, em);
+          expect(from, `${c.args[0]} @${em}`).toBeGreaterThanOrEqual(box.x);
+          expect(to, `${c.args[0]} @${em}`).toBeLessThanOrEqual(box.x + box.w + 0.01);
         }
-        const heads = r.calls.filter((x) => x.op === 'fillText' && x.fill === STAT_WORDS.UE.tint);
-        expect(heads).toHaveLength(1); // the red "เสียเอง" header is drawn once, inside the box
+        // the เสียเอง header is drawn once, inside the box (a wide font may shorten it with an ellipsis)
+        expect(r.calls.filter((x) => x.op === 'fillText' && x.fill === DEFAULT_THEME.table.headFg && String(x.args[0]).startsWith(STAT_WORDS.UE.slice(0, 2)))).toHaveLength(1);
       }
     }
+  });
+
+  it('a count that just went up flashes and pops for the set\'s cell time, from the tag\'s time; with no motion it does not', () => {
+    const at = 5_000_000;
+    const t = table(true, 16, { '0:W': at });
+    const flashes = (now: number, motion: 'full' | 'light' | 'none') => draw(t, 1, { now, motion }).calls.filter((c) => c.op === 'fillRect' && c.fill === DEFAULT_THEME.table.flash);
+    expect(flashes(at + 100, 'full')).toHaveLength(1);
+    expect(flashes(at + 100, 'full')[0].alpha).toBeGreaterThan(0.9);
+    expect(flashes(at + MOTION.full.cell, 'full')).toHaveLength(0);
+    expect(flashes(at + 100, 'light')).toHaveLength(1);
+    expect(flashes(at + 100, 'none')).toHaveLength(0);
+    const seven = (now: number) => draw(t, 1, { now, motion: 'full' }).texts.find((x) => x.args[0] === '7')!.font;
+    expect(seven(at + 10)).not.toBe(seven(at + 5000)); // popped
   });
 
   it('scales with the panel size and 720p', () => {
@@ -400,6 +461,25 @@ describe('drawStatsTable', () => {
   });
 });
 
+describe('the table\'s flash: which counts a tag changed', () => {
+  it('a tag marks the counts it changed with its time, for the chosen team; the opponent line too', () => {
+    const m = tagged(); // e5: Nok winner (Pae assist), e6: Bank unforced, e7: Pae forced error forced by Bank
+    const t = statsOverlay(m.cfg, m.events, m.state, Infinity, A_TABLE).table!;
+    const at = (id: string) => m.events.find((e) => e.id === id)!.at;
+    expect(t.changed).toEqual({ '0:W': at('e5'), '1:A': at('e5'), opp: at('e6'), '1:FE': at('e7') });
+    const b = statsOverlay(m.cfg, m.events, m.state, Infinity, { table: { team: 'B', opp: true }, card: false }).table!;
+    expect(b.changed).toEqual({ '0:UE': at('e6'), '0:F': at('e7'), opp: at('e7') }); // B's view of the same tags
+  });
+
+  it('counts only tags already visible at the cutoff, in the current game', () => {
+    const m = tagged();
+    const t5 = m.events.find((e) => e.id === 'e5')!.at;
+    expect(statsOverlay(m.cfg, m.events, stateAt(m.cfg, m.events, t5), t5, A_TABLE).table!.changed).toEqual({ '0:W': t5, '1:A': t5 });
+    m.scoreTo(21, 1).startGame().point('A');
+    expect(statsOverlay(m.cfg, m.events, m.state, Infinity, A_TABLE).table!.changed).toEqual({});
+  });
+});
+
 describe('table placement: never covers the score panel or the logo', () => {
   const LONG = 'A'.repeat(40); // far longer than any name fits: the names are squeezed, the boxes stay finite
   const names = [['NOK', 'PAE'], [LONG, LONG], ['ณัฐวุฒิ สมบัติ', 'พงศ์พัฒน์']] as const;
@@ -407,8 +487,28 @@ describe('table placement: never covers the score panel or the logo', () => {
   const hit = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) =>
     a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 
-  it('every panel corner x logo corner x logo size x place x size x frame: zero overlaps, inside the safe inset', () => {
+  /** A card of the right shape for the sizes: four players in doubles, two in singles. */
+  const cardFor = (doubles: boolean): EndCard => {
+    const team = (t: 'A' | 'B') => ({
+      team: t,
+      color: '#fff',
+      label: 'X',
+      rows: Array.from({ length: doubles ? 2 : 1 }, () => ({ name: 'X', W: 0, A: 0, F: 0, FE: 0, UE: 0 })),
+      points: 0,
+      winners: 0,
+      oppForced: 0,
+      oppUnforced: 0,
+      untagged: 0,
+      longestRun: 0,
+      wonOnServe: 0,
+    });
+    return { kind: 'match', game: 0, seq: 1, tagged: 0, rallies: 0, doubles, teams: [team('A'), team('B')], games: [], minutes: null, shownAt: 0, closedAt: null };
+  };
+
+  it('every panel corner x logo corner x logo size x place x size x frame: zero overlaps, inside the safe inset; the card misses the panel and the logo', () => {
     let n = 0;
+    let cards = 0;
+    let minK = 1;
     for (const H of [1080, 720]) {
       const W = Math.round((H * 16) / 9);
       const m = inset(H);
@@ -430,10 +530,13 @@ describe('table placement: never covers the score panel or the logo', () => {
                 team: 'A',
                 color: '#fff',
                 doubles,
+                game: games,
                 opp: 16,
+                changed: {},
                 rows: (doubles ? [pa, pb] : [pa]).map((name) => ({ name: name.toUpperCase(), W: 88, A: 88, F: 88, FE: 88, UE: 88 })),
               };
               const tsize = statsTableSize(fakeCtx().ctx, t, u);
+              const csize = endCardSize(cardFor(doubles), u);
               for (const sc of CORNERS as readonly Corner[])
                 for (const lc of CORNERS as readonly Corner[])
                   for (const ls of ['small', 'medium', 'large'] as LogoSize[])
@@ -455,6 +558,15 @@ describe('table placement: never covers the score panel or the logo', () => {
                           expect(b.y + b.h).toBeLessThanOrEqual(H - m);
                         }
                         for (let i = 0; i < 3; i++) for (let j = i + 1; j < 3; j++) if (hit(bs[i], bs[j])) throw new Error(`overlap ${JSON.stringify({ H, size, pa, doubles, games, sc, lc, ls, aspect, place, lay })}`);
+                        if (place === 'auto') {
+                          // The card hides the table; it must miss the panel and the logo, inside the frame.
+                          const { box, k } = cardPlace(W, H, csize, [lay.score, lay.logo]);
+                          if (hit(box, lay.score!) || hit(box, lay.logo!)) throw new Error(`card overlap ${JSON.stringify({ H, size, sc, lc, ls, aspect, box })}`);
+                          expect(box.y).toBeGreaterThanOrEqual(m);
+                          expect(box.y + box.h).toBeLessThanOrEqual(H - m);
+                          minK = Math.min(minK, k);
+                          cards++;
+                        }
                         n++;
                       }
             }
@@ -463,6 +575,8 @@ describe('table placement: never covers the score panel or the logo', () => {
       }
     }
     expect(n).toBeGreaterThan(40_000);
+    expect(cards).toBeGreaterThan(8_000);
+    expect(minK).toBeGreaterThan(0.75); // it gets smaller only with a large panel or logo, never tiny
   });
 
   it('auto picks the free corner: bottom-left by default, the vertical mirror of the panel otherwise', () => {

@@ -1,5 +1,6 @@
 import type { Team } from '../engine';
 import { DEFAULT_LOGO_CORNER, DEFAULT_SCORE_CORNER, type Corner, type LogoSize, type PanelSize, type TablePlace } from '../overlay/layout';
+import { DEFAULT_MOTION, type Motion } from '../overlay/motion';
 
 // Recording constants in one place (technical-design.md §6). The default quality is one line: if the
 // captain's 60-minute soak says 1080p30 is too hot or drops frames, set DEFAULT_QUALITY to '720p'.
@@ -51,6 +52,8 @@ export interface CameraSettings {
   statsOpp: boolean;
   /** C1 "End-of-game summary": the card for both teams after a game and after the match. */
   endCard: boolean;
+  /** C1 "Motion": how the overlay animates (motion.ts); fixed per segment and recorded in its meta. */
+  overlayMotion: Motion;
 }
 
 export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
@@ -66,6 +69,7 @@ export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
   statsPlace: 'auto',
   statsOpp: true,
   endCard: false,
+  overlayMotion: DEFAULT_MOTION,
 };
 
 export function bytesPerMinute(q: Quality, audio: boolean): number {

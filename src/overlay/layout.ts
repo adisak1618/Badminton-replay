@@ -1,6 +1,7 @@
 // Where the overlays sit in the frame (technical-design.md §6.2): the score panel and the optional logo each
 // take one of the four corners, inset by the same fraction of the frame at 1080p and 720p, and so does the optional
-// player stats table (D15). Overlays in one corner are stacked, never overlapped. The boxes are recorded per segment for a later re-render.
+// player stats table (D15). Overlays in one corner are stacked, never overlapped; the end-of-game card goes in the middle
+// (cardPlace). The boxes are recorded per segment for a later re-render.
 import type { Box } from './draw';
 
 export type Corner = 'tl' | 'tr' | 'bl' | 'br';
@@ -106,4 +107,23 @@ export function overlayLayout(
     }
   }
   return { score, logo, table };
+}
+
+/**
+ * The end-of-game card: centred in the frame, where nobody is playing while it shows. If that covers the score panel
+ * or the logo (a large panel or logo), it is centred in the free band between the top and the bottom stacks instead,
+ * and made smaller only when it does not fit there. `k` is its scale against `size`. The live table is hidden while
+ * the card shows, so only the panel and the logo count.
+ */
+export function cardPlace(W: number, H: number, size: { w: number; h: number }, others: ReadonlyArray<Box | null>): { box: Box; k: number } {
+  const boxes = others.filter((b): b is Box => !!b);
+  const centred = { x: Math.round((W - size.w) / 2), y: Math.round((H - size.h) / 2), w: size.w, h: size.h };
+  if (!boxes.some((b) => hit(centred, b))) return { box: centred, k: 1 };
+  const gap = Math.round(H * 0.015);
+  const top = Math.max(inset(H), ...boxes.filter((b) => b.y + b.h / 2 < H / 2).map((b) => b.y + b.h + gap));
+  const bottom = Math.min(H - inset(H), ...boxes.filter((b) => b.y + b.h / 2 >= H / 2).map((b) => b.y - gap));
+  const k = Math.min(1, (bottom - top) / size.h);
+  const w = Math.floor(size.w * k);
+  const h = Math.floor(size.h * k);
+  return { box: { x: Math.round((W - w) / 2), y: Math.round(top + (bottom - top - h) / 2), w, h }, k };
 }

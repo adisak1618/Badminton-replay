@@ -1,7 +1,7 @@
 // Segments and interruptions as a pure state machine (technical-design.md §6.5, §6.6; R-REC-5). The camera
 // controller feeds it what the browser reports; the UI and the `rec` report are read from it.
 import type { Team } from '../engine';
-import type { Box, Corner, LogoSize, PanelSize, TablePlace } from '../overlay';
+import type { Box, Corner, LogoSize, Motion, PanelSize, TablePlace } from '../overlay';
 
 export type EndReason = 'user' | 'interrupted' | 'quota' | 'error';
 
@@ -30,6 +30,8 @@ export interface Segment {
     delayMs: number;
     mirrored: boolean;
     theme: string;
+    /** The animation set burned in (absent in older recordings, which did not animate). */
+    motion?: Motion;
     logo: { box: Box; corner: Corner; size: LogoSize } | null;
     /** The player stats table and end-of-game card as asked for in this segment (absent in older recordings). */
     stats?: { team: 'off' | Team; place: TablePlace; opp: boolean; box: Box | null; card: boolean } | null;
