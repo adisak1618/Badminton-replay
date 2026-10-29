@@ -337,7 +337,11 @@ stays on the phone unless it is copied or shared.
   default panel and logo) or one of the four corners, where it stacks after the
   panel and the logo; it never covers either. "Opponent line" adds
   "ฝั่งตรงข้ามตีพลาด N", one number for the other side. "End summary" shows a
-  Thai card for both teams after each game (20 s) and the match (30 s). Both
+  Thai card for both teams after each game and the match: it waits until the
+  game's last point is tagged (or "No tag" was chosen in the popup), stays until
+  the scoreboard's "ปิดสรุป" button (on the game and match over cards, while a
+  camera is paired) is pressed, and goes by itself with the next game's first
+  rally or, for the match, when the recording stops. Both
   rows are Off by default; when the scoreboard's "Point reasons" is Off they are
   dimmed and Off, with "Point reasons are off on the scoreboard". Frames:
   docs/video-stats/.

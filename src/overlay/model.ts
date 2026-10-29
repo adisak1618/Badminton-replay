@@ -9,6 +9,7 @@ import {
   gameStats,
   matchStats,
   reasonsOn,
+  summaryStatus,
   type MatchStats,
   type Stats,
   type Court,
@@ -56,7 +57,7 @@ export interface OverlayModel {
   stale: boolean;
   /** The player stats table for the chosen team, when the camera asks for it and the match records reasons. */
   table: StatsTable | null;
-  /** The end-of-game card while it is due (20 s after a game, 30 s after the match). */
+  /** The end-of-game summary card: after the last point is resolved, until the operator closes it or play resumes. */
   card: EndCard | null;
 }
 
@@ -71,9 +72,6 @@ export interface StatsOptions {
   card: boolean;
 }
 export const NO_STATS: StatsOptions = { table: null, card: false };
-
-/** How long the end-of-game card stays, in scoreboard time: 20 s after a game, 30 s after the match. */
-export const CARD_MS = { game: 20_000, match: 30_000 } as const;
 
 /** The players' names for the panel, upper case (doubles 'NAME1 / NAME2'). */
 export function playersLabel(cfg: MatchConfig, team: Team): string {
@@ -163,30 +161,29 @@ export function statsOverlay(
     };
   }
   let card: EndCard | null = null;
-  const over = s.phase === 'gameOver' || s.phase === 'matchOver';
-  if (o.card && over && s.phaseSince != null) {
-    const kind = s.phase === 'matchOver' ? 'match' : 'game';
-    if (cutoff - s.phaseSince < CARD_MS[kind]) {
-      const st = kind === 'match' ? stats.match : gameStats(stats, cfg, s.game);
-      const left = s.leftTeam; // the same order as the panel
-      const teams: CardTeam[] = [left, other(left)].map((t) => {
-        const p = st.teams[t];
-        return {
-          team: t,
-          color: cfg.teams[t].color,
-          label: playersLabel(cfg, t),
-          rows: rowsOf(cfg, st, t),
-          points: p.won,
-          winners: p.winners,
-          oppForced: p.oppForced,
-          oppUnforced: p.oppUnforced,
-          untagged: p.untagged,
-          longestRun: st.longestRun[t],
-          wonOnServe: st.wonOnServe[t],
-        };
-      });
-      card = { kind, game: s.game, tagged: st.tagged, rallies: st.rallies, doubles: cfg.doubles, teams };
-    }
+  const sum = o.card ? summaryStatus(cfg, events, s, cutoff) : null;
+  // The summary waits for the last point to be resolved (tagged, or the operator chose not to), then stays until the
+  // operator closes it; it also ends with the next game's first rally (summaryStatus) and with the recording (camera).
+  if (sum && sum.resolved && !sum.closed) {
+    const st = sum.kind === 'match' ? stats.match : gameStats(stats, cfg, sum.game);
+    const left = s.leftTeam; // the same order as the panel
+    const teams: CardTeam[] = [left, other(left)].map((t) => {
+      const p = st.teams[t];
+      return {
+        team: t,
+        color: cfg.teams[t].color,
+        label: playersLabel(cfg, t),
+        rows: rowsOf(cfg, st, t),
+        points: p.won,
+        winners: p.winners,
+        oppForced: p.oppForced,
+        oppUnforced: p.oppUnforced,
+        untagged: p.untagged,
+        longestRun: st.longestRun[t],
+        wonOnServe: st.wonOnServe[t],
+      };
+    });
+    card = { kind: sum.kind, game: sum.game, seq: sum.seq, tagged: st.tagged, rallies: st.rallies, doubles: cfg.doubles, teams };
   }
   return { table, card };
 }
@@ -211,8 +208,6 @@ export class OverlayClock {
   private key = '';
   private cfg: MatchConfig | null = null;
   private model: OverlayModel | null = null;
-  /** Scoreboard time at which the end-of-game card now showing is due to go; the model is rebuilt when it passes. */
-  private cardEnds = Infinity;
 
   /**
    * `now` is the camera's wall clock; `offsetMs` is camera minus scoreboard (technical-design.md §4.5), so an
@@ -231,13 +226,12 @@ export class OverlayClock {
     const last = events[events.length - 1];
     const st = o.stats ?? NO_STATS;
     const stKey = st.table ? `${st.table.team}${st.table.opp ? 1 : 0}` : '-';
-    const key = `${events.length}:${last?.id ?? ''}:${visible}:${o.mirrored}:${o.stale}:${stKey}:${st.card ? 1 : 0}:${cutoff >= this.cardEnds ? 'e' : ''}`;
+    const key = `${events.length}:${last?.id ?? ''}:${visible}:${o.mirrored}:${o.stale}:${stKey}:${st.card ? 1 : 0}`;
     if (key !== this.key || !this.model || cfg !== this.cfg) {
       this.key = key;
       this.cfg = cfg;
       const s = stateAt(cfg, events, cutoff);
       this.model = { ...overlayModel(cfg, s, o), ...statsOverlay(cfg, events, s, cutoff, st) };
-      this.cardEnds = this.model.card && s.phaseSince != null ? s.phaseSince + CARD_MS[this.model.card.kind] : Infinity;
     }
     return this.model;
   }

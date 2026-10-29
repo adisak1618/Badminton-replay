@@ -101,6 +101,8 @@ export class CameraController {
   private logo: Logo | null = null;
   private measure = document.createElement('canvas').getContext('2d')!;
   private sized: { model: OverlayModel; u: number; size: { w: number; h: number } } | null = null;
+  /** The match summary that was on screen while recording: it ends with the recording (R-TAG-7). */
+  private matchCardRecorded: number | null = null;
   private tableSized: { table: StatsTable; u: number; size: { w: number; h: number } } | null = null;
 
   constructor(
@@ -140,11 +142,16 @@ export class CameraController {
         this.dispatch({ type: 'panelBox', at: now, box: layout.score });
         if (this.snap.session !== before) this.saveMeta(); // a new game column or the band: rare
       }
+      let card = model?.card ?? null;
+      if (card?.kind === 'match') {
+        if (isActive(this.snap.session.phase)) this.matchCardRecorded = card.seq;
+        else if (this.matchCardRecorded === card.seq) card = null; // the recording stopped: the match card goes
+      }
       return {
         score: model && layout.score && { model, box: layout.score, u: this.panelU() },
         logo: this.logo && layout.logo ? { image: this.logo.image, box: layout.logo } : null,
         table: model?.table && layout.table ? { model: model.table, box: layout.table, u: this.panelU() } : null,
-        card: model?.card ? { model: model.card, u: this.panelU() } : null,
+        card: card ? { model: card, u: this.panelU() } : null,
       };
     });
     this.compositor.setSize(QUALITIES[settings.quality].width, QUALITIES[settings.quality].height);

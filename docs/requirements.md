@@ -431,11 +431,19 @@ D15. Off records nothing and shows nothing: scoring only, as before D15.
   The table sits in a corner nobody owns (the score panel's vertical mirror,
   bottom-left by default) or in the corner the user picks; each corner stacks
   score panel, logo, table, so none covers another. "End-of-game summary: Off /
-  On" shows a Thai card for both teams in the middle of the frame, 20 s after a
-  game and 30 s after the match (the match totals). Counts follow the overlay
+  On" shows a Thai card for both teams in the middle of the frame (the match
+  totals after the match). It waits for the operator to deal with the last point
+  of the game or match (its tag saved, or "No tag" in the popup, which is saved
+  as a `tag.clear`; a point left for tag later keeps it hidden), then stays in
+  the video until the operator presses "ปิดสรุป" on the scoreboard's game or
+  match over screen (a `summary.close` event, so a reconnect replays it). A game
+  summary also ends by itself when the next game's first rally starts, a match
+  summary when the recording stops, and undoing the last point hides it. Counts follow the overlay
   clock, so a tag counts from the moment it was saved and a point undone inside
   the overlay delay never counts. *Accept:* with both rows Off a recording is
-  byte-for-byte what it was; with the table on, tag a winner and the winners
+  byte-for-byte what it was; with the summary on, it is not in the video while
+  the game's last point is untagged, appears after its tag and is still there
+  a minute later, and is gone after "ปิดสรุป"; with the table on, tag a winner and the winners
   count of that player goes up by one within a second of the tag, and the game
   after starts at zero; no combination of panel corner, logo corner and size
   overlaps the table.

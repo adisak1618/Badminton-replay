@@ -629,7 +629,10 @@ canvas (the visible preview, CSS-scaled) --captureStream(30)--> composited video
   third tenant: each corner stacks panel, logo, table from the frame edge, the
   table takes the first corner nobody owns or the one picked in C1, and a box
   that would still touch another steps past it; the end-of-game card is drawn in
-  the middle. Their numbers are `matchStats(cfg, events, cutoff)` for the
+  the middle: it is a fold over the log (`summaryStatus`: due from the last
+  point of a game or match, resolved when that point has a tag or a
+  `tag.clear`, closed by a `summary.close` after it), so the phones and the video
+  agree and a reconnect replays the close. Their numbers are `matchStats(cfg, events, cutoff)` for the
   current game, computed in `OverlayClock` only when the visible slice of the
   log changes. It
   cannot be HTML: a canvas cannot rasterise DOM, and SVG `foreignObject`

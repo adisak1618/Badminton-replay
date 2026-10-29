@@ -17,6 +17,8 @@ describe('message guards', () => {
       '{"v":3,"t":"rec","state":"recording","segment":1,"startedAt":1793099000456,"elapsedMs":754000,"bytes":565000000,"minutesLeft":26}',
       encode({ t: 'input', matchId: 'm', input: { id: 'u', at: 1, by: 'sb', body: { type: 'undo' } } }),
       encode({ t: 'input', matchId: 'm', input: { id: 's', at: 1, by: 'sb', body: { type: 'match.start', config } } }),
+      encode({ t: 'input', matchId: 'm', input: { id: 'c', at: 1, by: 'sb', body: { type: 'summary.close' } } }), // R-TAG-7: a known type, no new version
+      '{"v":3,"t":"event","matchId":"m-1","event":{"seq":18,"id":"k4","at":1793100000102,"by":"sb-7c2","type":"summary.close"}}',
       encode({ t: 'state', matchId: null }),
       encode({ t: 'state', matchId: 'm', config, events: [], part: [0, 2] }),
       encode({ t: 'resync' }),

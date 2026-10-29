@@ -4,7 +4,7 @@
 // tags; everything here is a pure fold over the log.
 import { apply, initialState, voidSet } from './reducer';
 import { other, receiverIdx } from './rules';
-import type { MatchConfig, MatchEvent, PlayerRef, Shot, TagBody, Team } from './types';
+import type { MatchConfig, MatchEvent, MatchState, PlayerRef, Shot, TagBody, Team } from './types';
 
 export const SHOTS: readonly Shot[] = ['smash', 'kill', 'drop', 'net', 'drive', 'clear', 'serve'];
 
@@ -22,6 +22,8 @@ export interface Rally {
   received: PlayerRef;
   after: Record<Team, number>; // the game score after it
   tag: TagBody | null;
+  /** The operator is done with this point: tagged it, or chose not to (a tag.clear). Untagged and unresolved = tag later. */
+  resolved: boolean;
 }
 
 const ref = (cfg: MatchConfig, r: PlayerRef | undefined): boolean =>
@@ -74,15 +76,21 @@ export function rallies(cfg: MatchConfig, events: readonly MatchEvent[], cutoff:
       const game = s.game;
       apply(cfg, s, e);
       if (!counted) continue;
-      const r: Rally = { n: out.length + 1, id: e.id, seq: e.seq, at: e.at, by: e.by, game, team: e.team, served, received, after: { ...s.score }, tag: null };
+      const r: Rally = { n: out.length + 1, id: e.id, seq: e.seq, at: e.at, by: e.by, game, team: e.team, served, received, after: { ...s.score }, tag: null, resolved: false };
       out.push(r);
       byId.set(e.id, r);
     } else if (e.type === 'tag') {
       const r = byId.get(e.point);
-      if (r && validTag(cfg, r, e)) r.tag = e;
+      if (r && validTag(cfg, r, e)) {
+        r.tag = e;
+        r.resolved = true;
+      }
     } else if (e.type === 'tag.clear') {
       const r = byId.get(e.point);
-      if (r) r.tag = null;
+      if (r) {
+        r.tag = null;
+        r.resolved = true;
+      }
     } else apply(cfg, s, e);
   }
   return out;
@@ -199,3 +207,35 @@ export const untagged = (rs: readonly Rally[]): Rally[] => rs.filter((r) => !r.t
 /** Whether the scoreboards ask why points were won in this match. */
 export const reasonsOn = (cfg: MatchConfig): boolean => cfg.reasons === 'endOfGame';
 
+
+/** The end-of-game summary burned into the video (R-TAG-7) at scoreboard time `cutoff`, for the match state `s` then. */
+export interface SummaryStatus {
+  kind: 'game' | 'match';
+  /** The finished game (the number of the game just played), or 0 for the whole match. */
+  game: number;
+  /** The seq of the game's or match's last point: it identifies this summary; 0 when there was no point. */
+  seq: number;
+  /** The last point is resolved: tagged, or the operator chose not to tag it. Until then the summary waits. */
+  resolved: boolean;
+  /** The operator closed it (a summary.close after the last point). */
+  closed: boolean;
+}
+
+/**
+ * Whether a summary is due: from the last point of a game or the match until the next game's first rally (a game
+ * summary never covers play), and when. It is a fold over the log so every phone and the video agree; an undone
+ * last point is simply not a game over any more, and a close before the last point does not count.
+ */
+export function summaryStatus(cfg: MatchConfig, events: readonly MatchEvent[], s: MatchState, cutoff: number = Infinity): SummaryStatus | null {
+  const over = s.phase === 'gameOver' || s.phase === 'matchOver';
+  const newGameNoRally = s.phase === 'playing' && s.completed.length > 0 && s.score.A + s.score.B === 0 && s.game === s.completed.length + 1;
+  if (!over && !newGameNoRally) return null;
+  const kind = s.phase === 'matchOver' ? 'match' : 'game';
+  const game = kind === 'match' ? 0 : s.completed.length;
+  const rs = rallies(cfg, events, cutoff).filter((r) => kind === 'match' || r.game === game);
+  const last = rs[rs.length - 1] ?? null;
+  const voided = voidSet(events);
+  const seq = last?.seq ?? 0;
+  const closed = events.some((e) => e.type === 'summary.close' && !voided.has(e.seq) && e.at <= cutoff && e.seq > seq);
+  return { kind, game, seq, resolved: !last || last.resolved, closed };
+}

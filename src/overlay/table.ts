@@ -46,7 +46,10 @@ export interface CardTeam {
 /** The end-of-game card: both teams, for the game that just ended or (kind 'match') the whole match. */
 export interface EndCard {
   kind: 'game' | 'match';
+  /** The game it summarises, 0 for the match. */
   game: number;
+  /** The seq of the last point it covers: identifies this summary (the camera ends a match card with the recording). */
+  seq: number;
   tagged: number;
   rallies: number;
   doubles: boolean;

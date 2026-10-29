@@ -704,18 +704,16 @@ async function main() {
       return `bottom-left white-text share ${off.toFixed(4)} (Off) -> ${on.toFixed(4)} (table on) -> ${back.toFixed(4)} (Off again)`;
     });
 
-    await step('end-of-game summary in the video: the card is in the camera frame and its tagged count stays inside it (R-TAG-7)', async () => {
-      const rows = cam.locator('[data-testid=stats-rows]');
-      await rows.getByRole('button').nth(4).click(); // End summary: Off, On (with the table Off the rows are Off A B Off On)
-      await cam.waitForTimeout(800);
-      const r = await cam.evaluate(() => {
+    // Grey text (the tagged count is #9aa4ae) in the right 200 px of the summary card in the camera's composited
+    // canvas, and just outside its right edge: the card is 720 px wide at 1080p, centred.
+    const cardInCamera = () =>
+      cam.evaluate(() => {
         const c = document.querySelector('canvas.preview-canvas') as HTMLCanvasElement;
         const f = c.height / 1080;
-        const right = Math.round((c.width + 720 * f) / 2); // the card is 720 px wide at 1080p, centred
+        const right = Math.round((c.width + 720 * f) / 2);
         const ctx = c.getContext('2d')!;
         const y0 = Math.round(c.height * 0.3);
         const band = Math.round(c.height * 0.4);
-        // Grey text (the tagged count is #9aa4ae) inside the card's right 200 px and outside its right edge.
         const grey = (x: number, w: number) => {
           const d = ctx.getImageData(x, y0, w, band).data;
           let n = 0;
@@ -726,13 +724,42 @@ async function main() {
           }
           return n;
         };
-        return { inside: grey(right - Math.round(200 * f), Math.round(190 * f)), outside: grey(right + Math.round(4 * f), Math.round(200 * f)), right, w: c.width };
+        return { inside: grey(right - Math.round(200 * f), Math.round(190 * f)), outside: grey(right + Math.round(4 * f), Math.round(200 * f)), right };
       });
+
+    await step('end-of-game summary in the video: waits for the last point, stays until the scoreboard closes it (R-TAG-7)', async () => {
+      const b = sbB!;
+      const rows = cam.locator('[data-testid=stats-rows]');
+      await rows.getByRole('button').nth(4).click(); // End summary: Off, On (with the table Off the rows are Off A B Off On)
+      await cam.waitForTimeout(800);
+      const waiting = await cardInCamera();
+      if (waiting.inside >= 20) throw new Error(`the summary is in the video while the last point is untagged: ${JSON.stringify(waiting)}`);
+      const note = await text(sb, '[data-testid=summary-note]');
+      if (!/รอแท็ก/.test(note)) throw new Error(`the scoreboard does not say the summary waits: "${note}"`);
+      // Tag the last point of the game from the rally list on B (a winner in one tap on the side that won it).
+      await b.locator('[data-testid=stats-tag-points]').click();
+      await until('the rally list', async () => (await b.locator('[data-testid=rally-list]').count()) > 0, 3000);
+      const n = await b.evaluate(() =>
+        Math.max(...[...document.querySelectorAll('[data-testid]')].map((e) => /^rally-(\d+)$/.exec(e.getAttribute('data-testid') ?? '')?.[1]).filter(Boolean).map(Number)),
+      );
+      const row = await text(b, `[data-testid=rally-${n}]`);
+      const [, a] = /(\d+)–(\d+)/.exec(row) ?? [];
+      const winner = Number(a) >= 21 ? 'A' : 'B';
+      await b.locator(`[data-testid=rally-${n}-${winner}0]`).click();
+      await b.locator('[data-testid=tag-skip]').click();
+      await b.locator('[data-testid=rally-list]').getByRole('button', { name: 'Close' }).click();
+      await until('the summary in the video', async () => (await cardInCamera()).inside >= 20, 5000);
       await cam.screenshot({ path: path.join(OUT, '05h-camera-end-summary.png') });
+      const shown = await cardInCamera();
+      if (shown.outside > 0) throw new Error(`grey text outside the card's right edge: ${JSON.stringify(shown)}`);
+      await cam.waitForTimeout(22_000); // longer than the old 20 s timer: it stays
+      const still = await cardInCamera();
+      if (still.inside < 20) throw new Error(`the summary went by itself: ${JSON.stringify(still)}`);
+      await sb.locator('[data-testid=summary-close]').click();
+      await until('the summary closed', async () => (await cardInCamera()).inside < 20, 5000);
+      if (!(await sb.locator('[data-testid=summary-close]').isDisabled())) throw new Error('the close button is still enabled after closing');
       await rows.getByRole('button').nth(3).click(); // back to Off
-      if (r.inside < 20) throw new Error(`no card text found in the right of the card: ${JSON.stringify(r)}`);
-      if (r.outside > 0) throw new Error(`grey text outside the card's right edge: ${JSON.stringify(r)}`);
-      return `grey text pixels in the card's right 200 px: ${r.inside}; past its right edge (x ${r.right}): ${r.outside}`;
+      return `hidden while the last point was untagged (${waiting.inside} px); after its tag ${shown.inside} px, none past the edge; still there 22 s later (${still.inside} px); closed from the scoreboard`;
     });
 
     await step('point reasons off: a new match records no tag and opens no popup (D15)', async () => {

@@ -30,6 +30,7 @@ export const EVENT_TYPES: ReadonlySet<string> = new Set<EventType>([
   'match.end',
   'tag',
   'tag.clear',
+  'summary.close',
 ]);
 
 /**
@@ -223,6 +224,7 @@ export function apply(cfg: MatchConfig, s: MatchState, e: MatchEvent): void {
     case 'redo':
     case 'tag': // why a point was won does not change the score (engine/tags.ts)
     case 'tag.clear':
+    case 'summary.close': // only the video's summary card reads it (engine/tags.ts summaryStatus)
       break;
   }
   setFlags(cfg, s);

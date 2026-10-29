@@ -5,7 +5,7 @@ import type { MatchConfig, PlayerRef, TagBody } from '../engine';
 import { doublesConfig, makeConfig, Match } from '../engine/test-utils';
 import { DEFAULT_THEME, drawOverlay, panelMaxHeight, panelSize } from './draw';
 import { CORNERS, inset, overlayLayout, panelScale, type Corner, type LogoSize, type TablePlace } from './layout';
-import { CARD_MS, NO_STATS, OverlayClock, overlayModel, stateAt, statsOverlay, type OverlayModel } from './model';
+import { NO_STATS, OverlayClock, overlayModel, stateAt, statsOverlay, type OverlayModel } from './model';
 import { cardLine, cardTitle, drawEndCard, drawStatsTable, endCardSize, OPP_LINE, STAT_WORDS, statColumns, statsTableSize, type StatsTable } from './table';
 
 const on = (cfg: MatchConfig): MatchConfig => ({ ...cfg, reasons: 'endOfGame' });
@@ -124,52 +124,108 @@ describe('tags, the cutoff and undo (R-REC-4)', () => {
 });
 
 describe('the end-of-game card', () => {
-  const fullGame = () => {
+  const lastId = (m: Match) => [...m.events].reverse().find((e) => e.type === 'point')!.id;
+  /** Game 1 won 21-1 by A. The last point is tagged (a winner) unless `last` says otherwise; 'none' = still untagged. */
+  const fullGame = (last: 'tag' | 'none' | 'clear' = 'tag') => {
     const m = new Match(on(doublesConfig())).rallies('A');
     m.push(tag('e2', 'winner', P('A', 0), { assist: P('A', 1) }));
     m.rallies('B'); // e4 (the tag above is e3)
     m.push(tag('e4', 'unforced', P('A', 1)));
     m.scoreTo(21, 1); // A wins game 1
+    if (last === 'tag') m.push(tag(lastId(m), 'winner', P('A', 0)));
+    if (last === 'clear') m.push({ type: 'tag.clear', point: lastId(m) });
     return m;
   };
+  const card = (m: Match, cutoff = Infinity) => statsOverlay(m.cfg, m.events, m.state, cutoff, { table: null, card: true }).card;
 
-  it('shows both teams for 20 s after a game, in the panel order, with totals that add up to the points', () => {
-    const m = fullGame();
-    const s = m.state;
-    expect(s.phase).toBe('gameOver');
-    const c = statsOverlay(m.cfg, m.events, s, s.phaseSince!, { table: null, card: true }).card!;
+  it('waits for the last point of the game: hidden while it is untagged, shown once it is tagged or the operator chose no tag', () => {
+    expect(fullGame('none').state.phase).toBe('gameOver');
+    expect(card(fullGame('none'))).toBeNull();
+    expect(card(fullGame('tag'))).not.toBeNull();
+    expect(card(fullGame('clear'))).not.toBeNull();
+  });
+
+  it('a game that ends with every point already tagged shows the card at once, in the panel order, with totals that add up', () => {
+    const m = new Match(on(doublesConfig())).rallies('A');
+    for (let i = 0; i < 20; i++) m.point('A');
+    m.events.filter((e) => e.type === 'point').forEach((e) => m.push(tag(e.id, 'winner', P('A', 0))));
+    expect(m.state.phase).toBe('gameOver');
+    const c = card(m)!;
     expect(c.kind).toBe('game');
-    expect(c.teams.map((t) => t.team)).toEqual([s.leftTeam, s.leftTeam === 'A' ? 'B' : 'A']);
+    expect(c.seq).toBe(m.events.filter((e) => e.type === 'point').pop()!.seq);
+    expect(c.teams.map((t) => t.team)).toEqual([m.state.leftTeam, m.state.leftTeam === 'A' ? 'B' : 'A']);
     for (const t of c.teams) expect(t.winners + t.oppForced + t.oppUnforced + t.untagged).toBe(t.points);
     expect(c.teams.find((t) => t.team === 'A')!.points).toBe(21);
+    expect(c.teams.find((t) => t.team === 'A')!.untagged).toBe(0);
     expect(c.rallies).toBe(c.teams[0].points + c.teams[1].points);
-    expect(statsOverlay(m.cfg, m.events, s, s.phaseSince! + CARD_MS.game - 1, { table: null, card: true }).card).not.toBeNull();
-    expect(statsOverlay(m.cfg, m.events, s, s.phaseSince! + CARD_MS.game, { table: null, card: true }).card).toBeNull();
   });
 
-  it('after the match it shows the whole match for 30 s', () => {
-    const m = fullGame().startGame().scoreTo(21, 3);
+  it('stays however long it takes, until the operator closes it; a close before the last point does not count', () => {
+    const m = fullGame('tag');
+    const s = m.state;
+    expect(card(m, s.phaseSince! + 10 * 60_000)).not.toBeNull(); // no timer
+    expect(card(m, s.phaseSince! + 60 * 60_000)).not.toBeNull();
+    m.push({ type: 'summary.close' });
+    expect(card(m)).toBeNull();
+    expect(card(m, m.events[m.events.length - 2].at)).not.toBeNull(); // before the close it was showing
+    const early = new Match(on(doublesConfig())).rallies('A');
+    early.push({ type: 'summary.close' }); // closed during play: nothing to close
+    early.scoreTo(21, 1);
+    early.push(tag(lastId(early), 'winner', P('A', 0)));
+    expect(card(early)).not.toBeNull();
+  });
+
+  it('goes with the next game\'s first rally, never covering play; undoing the last point hides it again', () => {
+    const m = fullGame('tag');
+    m.startGame();
+    expect(m.state.score).toEqual({ A: 0, B: 0 });
+    expect(card(m)).not.toBeNull(); // the next game is started but not played
+    m.point('B');
+    expect(card(m)).toBeNull();
+    m.undo();
+    expect(card(m)).not.toBeNull();
+    m.undo(); // the game start
+    m.undo(); // the last point of game 1
+    expect(m.state.phase).toBe('playing');
+    expect(card(m)).toBeNull();
+  });
+
+  it('a closed game summary stays closed when the next game starts, and the next game gets its own', () => {
+    const m = fullGame('tag');
+    m.push({ type: 'summary.close' });
+    m.startGame();
+    expect(card(m)).toBeNull();
+    m.scoreTo(5, 0);
+    m.scoreTo(21, 0);
+    expect(m.state.phase).toBe('matchOver');
+    expect(card(m)).toBeNull(); // the last point of the match is untagged: waits
+    m.push(tag(lastId(m), 'winner', P('A', 1)));
+    expect(card(m)!.kind).toBe('match');
+  });
+
+  it('after the match it waits for the last point too, then shows the whole match until closed', () => {
+    const m = fullGame('tag').startGame().scoreTo(21, 3);
     const s = m.state;
     expect(s.phase).toBe('matchOver');
-    const c = statsOverlay(m.cfg, m.events, s, s.phaseSince! + CARD_MS.match - 1, { table: null, card: true }).card!;
+    expect(card(m)).toBeNull();
+    m.push({ type: 'tag.clear', point: lastId(m) });
+    const c = card(m, s.phaseSince! + 60 * 60_000)!;
     expect(c.kind).toBe('match');
     expect(c.teams.find((t) => t.team === 'A')!.points).toBe(42);
-    expect(statsOverlay(m.cfg, m.events, s, s.phaseSince! + CARD_MS.match, { table: null, card: true }).card).toBeNull();
+    m.push({ type: 'summary.close' });
+    expect(card(m)).toBeNull();
   });
 
-  it('goes away when the next game starts, and is not drawn while the setting is off', () => {
-    const m = fullGame();
-    const s = m.state;
-    expect(statsOverlay(m.cfg, m.events, s, s.phaseSince!, { table: null, card: false }).card).toBeNull();
-    m.startGame();
-    expect(statsOverlay(m.cfg, m.events, m.state, m.state.phaseSince ?? Infinity, { table: null, card: true }).card).toBeNull();
+  it('is not drawn while the setting is off', () => {
+    const m = fullGame('tag');
+    expect(statsOverlay(m.cfg, m.events, m.state, Infinity, { table: null, card: false }).card).toBeNull();
   });
 
   it('is worded in Thai and sized for the middle of the frame', () => {
     const m = fullGame();
-    const c = statsOverlay(m.cfg, m.events, m.state, m.state.phaseSince!, { table: null, card: true }).card!;
+    const c = card(m)!;
     expect(cardTitle(c)).toBe('เกม 1 · แต้มมาจากอะไร');
-    expect(cardLine(c.teams.find((t) => t.team === 'A')!)).toMatch(/^NOK \/ PAE {2}21 แต้ม = วินเนอร์ 1 \+ คู่แข่งโดนบีบพลาด 0 \+ คู่แข่งตีเสียเอง 0 \+ ไม่ได้ระบุ 20$/);
+    expect(cardLine(c.teams.find((t) => t.team === 'A')!)).toMatch(/^NOK \/ PAE {2}21 แต้ม = วินเนอร์ 2 \+ คู่แข่งโดนบีบพลาด 0 \+ คู่แข่งตีเสียเอง 0 \+ ไม่ได้ระบุ 19$/);
     const r = fakeCtx();
     const box = drawEndCard(r.ctx, c, 1920, 1080, 1);
     expect(box).toMatchObject({ ...endCardSize(c, 1), x: (1920 - 720) / 2 });
@@ -181,7 +237,7 @@ describe('the end-of-game card', () => {
 
   it('keeps every word inside the card, the tagged count ends inside the right padding, whatever its width or the scale', () => {
     const m = fullGame();
-    const base = statsOverlay(m.cfg, m.events, m.state, m.state.phaseSince!, { table: null, card: true }).card!;
+    const base = card(m)!;
     const wide = { ...base, tagged: 123_456, rallies: 123_456, game: 12 };
     const widthOf = (font: string, t: string) => t.length * Number(/(\d+(?:\.\d+)?)px/.exec(font)![1]) * 0.6;
     for (const c of [base, wide])
@@ -205,7 +261,7 @@ describe('the end-of-game card', () => {
 
   it('never relies on textAlign right or center for the tagged count: it is drawn left-aligned from a measured start', () => {
     const m = fullGame();
-    const c = statsOverlay(m.cfg, m.events, m.state, m.state.phaseSince!, { table: null, card: true }).card!;
+    const c = card(m)!;
     const aligns: string[] = [];
     const r = fakeCtx();
     const orig = (r.ctx as unknown as { fillText: (...a: unknown[]) => void }).fillText;
@@ -228,7 +284,7 @@ describe('OverlayClock with the stats', () => {
     expect({ ...model, table: null, card: null }).toEqual({ ...overlayModel(m.cfg, m.state, plain), table: null, card: null });
   });
 
-  it('rebuilds when a tag arrives, when the options change, and when the card is due to go; otherwise it memoises', () => {
+  it('rebuilds when a tag arrives, when the options change, and when the summary is closed; otherwise it memoises', () => {
     const m = new Match(on(doublesConfig())).rallies('A');
     const o = { delayMs: 0, offsetMs: 0, ...plain, stats: { table: { team: 'A' as const, opp: true }, card: true } };
     const clock = new OverlayClock();
@@ -240,13 +296,17 @@ describe('OverlayClock with the stats', () => {
     expect(b).not.toBe(a);
     expect(b.table!.rows[0].W).toBe(1);
     expect(clock.at(m.cfg, m.events, m.events[m.events.length - 1].at, { ...o, stats: { table: { team: 'B', opp: true }, card: true } })!.table!.team).toBe('B');
-    // the card: due at the end of the game, gone 20 s later with no new event
+    // the card: waits for the last point's tag, then stays (no timer) until the operator closes it
     m.scoreTo(21, 0);
-    const end = m.state.phaseSince!;
-    const during = clock.at(m.cfg, m.events, end + 1000, o)!;
+    const lastPoint = [...m.events].reverse().find((e) => e.type === 'point')!;
+    const at = () => m.events[m.events.length - 1].at;
+    expect(clock.at(m.cfg, m.events, at(), o)!.card).toBeNull();
+    m.push(tag(lastPoint.id, 'winner', P('A', 0)));
+    const during = clock.at(m.cfg, m.events, at(), o)!;
     expect(during.card).not.toBeNull();
-    expect(clock.at(m.cfg, m.events, end + 2000, o)).toBe(during);
-    expect(clock.at(m.cfg, m.events, end + CARD_MS.game + 1, o)!.card).toBeNull();
+    expect(clock.at(m.cfg, m.events, at() + 600_000, o)).toBe(during); // ten minutes on: still there, nothing rebuilt
+    m.push({ type: 'summary.close' });
+    expect(clock.at(m.cfg, m.events, at(), o)!.card).toBeNull();
   });
 });
 
