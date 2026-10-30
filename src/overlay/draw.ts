@@ -150,20 +150,18 @@ export function fit(ctx: Ctx, text: string, maxW: number, px: number, minPx: num
 }
 
 /**
- * Text on a centre line. Right-aligned text is placed from its measured width with left alignment: textAlign
- * 'right' ran past the card's edge on the captain's phone (PR 10), a measured start does not depend on it.
+ * Text on a centre line, always drawn left-aligned from a measured start. The captain's phone draws Thai text with
+ * textAlign 'center' or 'right' as if it were 'left' (its measureText is right): the end-of-game card's tag count
+ * ran past the card (PR 10) and every Thai header of the live table started at its column's centre and ran into
+ * the next one (2026-10-30). Digits and Latin were centred there, so only the measured start is safe for all text.
  */
 export function text(ctx: Ctx, s: string, x: number, cy: number, font: string, color: string, align: 'left' | 'center' | 'right' = 'left'): void {
   ctx.font = font;
   ctx.fillStyle = color;
   ctx.textBaseline = 'middle';
-  if (align === 'right') {
-    ctx.textAlign = 'left';
-    ctx.fillText(s, x - ctx.measureText(s).width, cy + 1);
-    return;
-  }
-  ctx.textAlign = align;
-  ctx.fillText(s, x, cy + 1);
+  ctx.textAlign = 'left';
+  const w = align === 'left' ? 0 : ctx.measureText(s).width;
+  ctx.fillText(s, align === 'right' ? x - w : align === 'center' ? x - w / 2 : x, cy + 1);
 }
 
 export const measure = (ctx: Ctx, font: string, s: string): number => {

@@ -90,6 +90,7 @@ export const TABLE = {
   padR: 8,
   colPad: 10,
   groupGap: 3, // before the points-lost columns
+  headGap: 4, // the least room between a header and its column's edge, each side
   headFont: 16,
   valFont: 23,
   nameFont: 20,
@@ -129,19 +130,59 @@ export function statsTableSize(ctx: Ctx, t: StatsTable, u: number, theme: Overla
   return { w: Math.round(g.w), h: Math.round(g.h) };
 }
 
+/** One column of the drawn table: its key, left edge and width in pixels. */
+export interface TableColumn {
+  key: StatKey;
+  x: number;
+  w: number;
+}
+
 /**
- * Draws into `box`, which the layout reserved from a measurement made earlier (and maybe with another font): the
- * columns are fitted to the box and every word to its column, and nothing is drawn outside the box, so an unknown
- * or wider Thai font can make the words smaller but never cross the edge. A count that just went up flashes.
+ * The columns as `drawStatsTable` draws them in `box`, which the layout reserved from a measurement made earlier (and
+ * maybe with another font): they are fitted to the box, so a wider font makes them narrower, never wider than it.
+ */
+export function tableColumns(ctx: Ctx, t: StatsTable, box: Box, u: number, theme: OverlayTheme = DEFAULT_THEME): TableColumn[] {
+  const g = tableGeo(ctx, t, u, theme);
+  const avail = box.w / u - g.nameCol - TABLE.groupGap;
+  const sum = g.colW.reduce((a, b) => a + b, 0);
+  const k = sum > avail ? Math.max(0.4, avail / sum) : 1;
+  let x = box.x + g.nameCol * u;
+  return g.cols.map((key, i) => {
+    if (ERROR_COLUMNS.has(key) && !ERROR_COLUMNS.has(g.cols[i - 1])) x += TABLE.groupGap * u;
+    const c = { key, x, w: g.colW[i] * k * u };
+    x += c.w;
+    return c;
+  });
+}
+
+/**
+ * The size the header words are drawn at: one size for the whole row, the largest at which every word fits inside
+ * its own column with TABLE.headGap on each side, and never cut: smaller words rather than words that touch. The
+ * columns are measured from these words, so with the font that measured the box it is headFont.
+ */
+export function tableHeadPx(ctx: Ctx, cols: readonly TableColumn[], u: number, theme: OverlayTheme = DEFAULT_THEME): number {
+  const full = TABLE.headFont * u;
+  let px = full;
+  for (const c of cols) {
+    const w = measure(ctx, `600 ${full}px ${theme.font}`, STAT_WORDS[c.key]);
+    const room = c.w - 2 * TABLE.headGap * u;
+    if (w > room) px = Math.min(px, (full * room) / w);
+  }
+  return Math.max(1, Math.floor(px * 4) / 4);
+}
+
+/**
+ * Draws into `box` (see tableColumns): every word fits its column, and nothing is drawn outside the box, so an
+ * unknown or wider Thai font can make the words smaller but never cross a column or the edge. A count that just went
+ * up flashes.
  */
 export function drawStatsTable(ctx: Ctx, t: StatsTable, box: Box, u: number, theme: OverlayTheme = DEFAULT_THEME, o: DrawClock = {}): void {
   const g = tableGeo(ctx, t, u, theme);
   const C = theme.table;
   const T = MOTION[o.motion ?? 'none'];
-  const avail = box.w / u - g.nameCol - TABLE.groupGap;
-  const sum = g.colW.reduce((a, b) => a + b, 0);
-  const k = sum > avail ? Math.max(0.4, avail / sum) : 1;
-  const colW = g.colW.map((w) => w * k);
+  const columns = tableColumns(ctx, t, box, u, theme);
+  const colW = columns.map((c) => c.w / u);
+  const colX = columns.map((c) => c.x);
   const r = TABLE.radius * u;
   ctx.save();
   ctx.fillStyle = theme.shadow;
@@ -156,23 +197,13 @@ export function drawStatsTable(ctx: Ctx, t: StatsTable, box: Box, u: number, the
   const headH = TABLE.head * u;
   ctx.fillStyle = C.head;
   ctx.fillRect(box.x, box.y, box.w, headH);
-  const x0 = box.x + g.nameCol * u;
-  const errStart = g.cols.findIndex((c) => ERROR_COLUMNS.has(c));
-  const errX = x0 + colW.slice(0, errStart).reduce((a, b) => a + b, 0) * u + TABLE.groupGap * u;
+  const errX = columns.find((c) => ERROR_COLUMNS.has(c.key))!.x;
   ctx.fillStyle = C.headErr;
   ctx.fillRect(errX, box.y, box.x + box.w - errX, headH);
   const title = fit(ctx, g.title, (g.nameW + TABLE.chip + TABLE.chipGap) * u, TABLE.headFont * u, 10 * u, theme.font, 600);
   text(ctx, title, box.x + TABLE.padL * u, box.y + headH / 2, ctx.font, C.headFg);
-  const colX: number[] = [];
-  let cx = x0;
-  g.cols.forEach((key, i) => {
-    if (i === errStart) cx += TABLE.groupGap * u;
-    colX.push(cx);
-    const cw = colW[i] * u;
-    const head = fit(ctx, STAT_WORDS[key], cw - 6 * u, TABLE.headFont * u, 9 * u, theme.font, 600);
-    text(ctx, head, cx + cw / 2, box.y + headH / 2, ctx.font, C.headFg, 'center');
-    cx += cw;
-  });
+  const headFont = `600 ${tableHeadPx(ctx, columns, u, theme)}px ${theme.font}`;
+  for (const c of columns) text(ctx, STAT_WORDS[c.key], c.x + c.w / 2, box.y + headH / 2, headFont, C.headFg, 'center');
   t.rows.forEach((row, i) => {
     const ry = box.y + headH + i * (TABLE.row + TABLE.rowGap) * u;
     const rh = TABLE.row * u;

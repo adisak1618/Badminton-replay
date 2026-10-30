@@ -315,7 +315,8 @@ describe('drawOverlay: the BWF Championship panel (broadcast design)', () => {
     const { texts } = panel(new Match(named('Chaiyakulsiri', 'Wongsuwanchai')).point('B'));
     const name = texts.find((t) => String(t.args[0]).startsWith('CHAI'))!;
     const score = texts.find((t) => t.args[0] === '0')!; // A's live score, centred in the live cell
-    expect((score.args[1] as number) - PANEL.live / 2 - textSpan(name)[1]).toBeGreaterThanOrEqual(PANEL.nameGap + PANEL.slot + PANEL.padR + PANEL.cellGap - 1);
+    const [from, to] = textSpan(score);
+    expect((from + to) / 2 - PANEL.live / 2 - textSpan(name)[1]).toBeGreaterThanOrEqual(PANEL.nameGap + PANEL.slot + PANEL.padR + PANEL.cellGap - 1);
   });
 
   it('finished games are white with the winner dark and the loser grey; the live game is the two-tone red column, last', () => {
@@ -328,7 +329,7 @@ describe('drawOverlay: the BWF Championship panel (broadcast design)', () => {
     expect(calls.filter((c) => c.op === 'fillRect' && c.fill === D.doneBg)).toHaveLength(4);
     expect(calls.some((c) => c.op === 'fillRect' && c.fill === D.liveTop)).toBe(true);
     expect(calls.some((c) => c.op === 'fill' && c.fill === D.liveBot)).toBe(true);
-    const xs = digits.filter((_, i) => i % 2 === 0).map((t) => t.args[1] as number);
+    const xs = digits.filter((_, i) => i % 2 === 0).map((t) => (textSpan(t)[0] + textSpan(t)[1]) / 2); // centres
     expect(xs[0]).toBeLessThan(xs[1]);
     expect(xs[1]).toBeLessThan(xs[2]);
     expect(xs[2] + PANEL.live / 2).toBeCloseTo(box.x + box.w, 3);
@@ -424,9 +425,23 @@ describe('drawOverlay: the BWF Championship panel (broadcast design)', () => {
     expect(panel(new Match(doublesConfig()).point('A'), {}, { mirrored: true, stale: false }).words[0]).toBe('BANK / TAO');
   });
 
-  it('never uses textAlign right: right-aligned text is placed from its measured width', () => {
-    const g = new Match(makeConfig()).game(21, 10, { start: false });
-    expect(panel(g, { now: g.state.phaseSince! + 1000 }).texts.every((t) => t.align !== 'right')).toBe(true);
+  it('never asks the browser to centre or right-align: every word is drawn left-aligned from its measured start', () => {
+    // The captain's phone ignores textAlign 'center' and 'right' for Thai (PR 10's card, the 2026-10-30 table).
+    const states = [
+      new Match(makeConfig()).scoreTo(5, 3),
+      new Match(makeConfig()).scoreTo(20, 13),
+      new Match(makeConfig()).scoreTo(20, 20),
+      new Match(makeConfig()).scoreTo(11, 4),
+      new Match(makeConfig()).game(21, 10, { start: false }),
+      new Match(doublesConfig()).game(21, 10).game(21, 12),
+      new Match(makeConfig({ format: 'fixed2' })).game(21, 15).game(15, 21),
+    ];
+    for (const m of states) {
+      const p = panel(m, { now: m.events.at(-1)!.at + 500, motion: 'full' });
+      expect(p.texts.length).toBeGreaterThan(3);
+      expect(p.texts.every((t) => t.align === 'left')).toBe(true);
+    }
+    expect(panel(new Match(makeConfig()).scoreTo(5, 3), {}, { mirrored: false, stale: true }).texts.every((t) => t.align === 'left')).toBe(true);
   });
 
   it('draws a logo into its box', () => {

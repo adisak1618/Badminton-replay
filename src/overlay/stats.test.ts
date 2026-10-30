@@ -7,7 +7,7 @@ import { DEFAULT_THEME, drawOverlay, panelMaxHeight, panelSize } from './draw';
 import { cardPlace, CORNERS, inset, overlayLayout, panelScale, type Corner, type LogoSize, type TablePlace } from './layout';
 import { NO_STATS, OverlayClock, overlayModel, stateAt, statsOverlay, type OverlayModel } from './model';
 import { MOTION } from './motion';
-import { CARD, cardShown, cardTitle, drawEndCard, drawStatsTable, endCardSize, statColumns, statsTableSize, TABLE, type EndCard, type StatsTable } from './table';
+import { CARD, cardShown, cardTitle, drawEndCard, drawStatsTable, endCardSize, statColumns, statsTableSize, TABLE, tableColumns, tableHeadPx, type EndCard, type StatsTable } from './table';
 import { fakeCtx, textSpan, words } from './test-ctx';
 import { ERROR_COLUMNS, STAT_WORDS, WORDS } from './words';
 
@@ -287,12 +287,12 @@ describe('the end-of-game card', () => {
       }
   });
 
-  it('never relies on textAlign right: right-aligned words are drawn left-aligned from a measured start', () => {
+  it('never relies on textAlign: every word is drawn left-aligned from a measured start', () => {
     const m = fullGame('tag').startGame().scoreTo(21, 3);
     m.push({ type: 'tag.clear', point: lastId(m) });
     const r = fakeCtx();
     drawEndCard(r.ctx, raw(m)!, cardPlace(1920, 1080, endCardSize(raw(m)!, 1), []).box);
-    expect(r.calls.filter((x) => x.op === 'fillText').every((x) => x.align !== 'right')).toBe(true);
+    expect(r.calls.filter((x) => x.op === 'fillText').every((x) => x.align === 'left')).toBe(true);
   });
 
   it('fades in and rises from when it became due; with no motion it is there at once', () => {
@@ -438,6 +438,54 @@ describe('drawStatsTable', () => {
     }
   });
 
+  it('draws every header whole inside its own column with a gap each side, one size for the row: every scale, wider fonts', () => {
+    // 2026-10-30 on the captain's phone: the Thai headers started at their columns' centres and ran into each other.
+    const names = [['NOK', 'PAE'], ['A 1', 'A 2'], ['KITITHARAKUL', 'PRAJONGJAI']];
+    const scales = [panelScale(720, 'small'), panelScale(720, 'medium'), panelScale(1080, 'small'), 1, panelScale(1080, 'large')];
+    let n = 0;
+    for (const [a, b] of names)
+      for (const doubles of [true, false])
+        for (const u of scales)
+          for (const em of [0.6, 0.75, 0.9, 1.2]) {
+            const t: StatsTable = { ...table(doubles), rows: table(doubles).rows.map((r, i) => ({ ...r, name: [a, b][i] })) };
+            const box = { x: 43, y: 900, ...statsTableSize(fakeCtx(0.6).ctx, t, u) }; // measured with a narrower font
+            const r = fakeCtx(em);
+            drawStatsTable(r.ctx, t, box, u);
+            const cols = tableColumns(fakeCtx(em).ctx, t, box, u);
+            const heads = r.calls.filter((c) => c.op === 'fillText' && statColumns(doubles).some((k) => c.args[0] === STAT_WORDS[k]));
+            expect(heads.map((h) => h.args[0])).toEqual(cols.map((c) => STAT_WORDS[c.key])); // every word, whole, once
+            expect(new Set(heads.map((h) => h.font)).size).toBe(1); // one size for the row
+            heads.forEach((h, i) => {
+              const [from, to] = textSpan(h, em);
+              const c = cols[i];
+              expect(from, `${h.args[0]} u=${u} em=${em}`).toBeGreaterThanOrEqual(c.x + TABLE.headGap * u - 0.01);
+              expect(to, `${h.args[0]} u=${u} em=${em}`).toBeLessThanOrEqual(c.x + c.w - TABLE.headGap * u + 0.01);
+              if (i > 0) expect(from - textSpan(heads[i - 1], em)[1]).toBeGreaterThanOrEqual(2 * TABLE.headGap * u - 0.02);
+            });
+            n++;
+          }
+    expect(n).toBe(3 * 2 * 5 * 4);
+  });
+
+  it('the captain\'s phone case: doubles with blank names (A 1, A 2) at 1080p M, Kanit measuring what draws: full-size headers inside their columns', () => {
+    const cfg = on(doublesConfig({ teams: { A: { name: 'A', color: 0, players: ['', ''], startRight: 0 }, B: { name: 'B', color: 1, players: ['', ''], startRight: 0 } } }));
+    const m = new Match(cfg).rallies('A');
+    const t = statsOverlay(m.cfg, m.events, m.state, Infinity, A_TABLE).table!;
+    expect(t.rows.map((r) => r.name)).toEqual(['A 1', 'A 2']);
+    const box = { x: 43, y: 916, ...statsTableSize(fakeCtx().ctx, t, 1) };
+    const cols = tableColumns(fakeCtx().ctx, t, box, 1);
+    expect(tableHeadPx(fakeCtx().ctx, cols, 1)).toBe(TABLE.headFont); // the columns were measured from these words
+    const r = fakeCtx();
+    drawStatsTable(r.ctx, t, box, 1);
+    for (const c of cols) {
+      const h = r.calls.find((x) => x.op === 'fillText' && x.args[0] === STAT_WORDS[c.key])!;
+      const [from, to] = textSpan(h);
+      expect(from).toBeGreaterThanOrEqual(c.x + TABLE.headGap);
+      expect(to).toBeLessThanOrEqual(c.x + c.w - TABLE.headGap);
+      expect(h.align).toBe('left');
+    }
+  });
+
   it('a count that just went up flashes and pops for the set\'s cell time, from the tag\'s time; with no motion it does not', () => {
     const at = 5_000_000;
     const t = table(true, 16, { '0:W': at });
@@ -482,7 +530,7 @@ describe('the table\'s flash: which counts a tag changed', () => {
 
 describe('table placement: never covers the score panel or the logo', () => {
   const LONG = 'A'.repeat(40); // far longer than any name fits: the names are squeezed, the boxes stay finite
-  const names = [['NOK', 'PAE'], [LONG, LONG], ['ณัฐวุฒิ สมบัติ', 'พงศ์พัฒน์']] as const;
+  const names = [['NOK', 'PAE'], [LONG, LONG], ['ณัฐวุฒิ สมบัติ', 'พงศ์พัฒน์'], ['A 1', 'A 2']] as const;
   const boxes = (l: ReturnType<typeof overlayLayout>) => [l.score, l.logo, l.table].filter(Boolean) as Array<{ x: number; y: number; w: number; h: number }>;
   const hit = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) =>
     a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;

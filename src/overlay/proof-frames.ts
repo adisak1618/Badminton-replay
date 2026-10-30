@@ -5,10 +5,10 @@
 import type { MatchConfig, MatchEvent, PlayerRef, TagBody, Team } from '../engine';
 import { doublesConfig, makeConfig, Match } from '../engine/test-utils';
 import { DEFAULT_THEME, drawLogo, drawOverlay, panelMaxHeight, panelSize, type Box } from './draw';
-import { cardPlace, overlayLayout, panelScale, type Corner } from './layout';
+import { cardPlace, overlayLayout, panelScale, type Corner, type PanelSize } from './layout';
 import { OverlayClock, type OverlayModel, type StatsOptions } from './model';
 import type { Motion } from './motion';
-import { cardShown, drawEndCard, drawStatsTable, endCardSize, statsTableSize } from './table';
+import { cardShown, drawEndCard, drawStatsTable, endCardSize, statsTableSize, TABLE, tableColumns } from './table';
 
 const W = 1920;
 const H = 1080;
@@ -134,9 +134,8 @@ function logoImage(): HTMLCanvasElement {
   g.strokeRect(6, 6, 388, 188);
   g.fillStyle = 'rgba(255,255,255,0.8)';
   g.font = `700 64px ${DEFAULT_THEME.font}`;
-  g.textAlign = 'center';
   g.textBaseline = 'middle';
-  g.fillText('LOGO', 200, 104);
+  g.fillText('LOGO', 200 - g.measureText('LOGO').width / 2, 104);
   return c;
 }
 
@@ -149,31 +148,39 @@ interface Scene {
   stale?: boolean;
   corner?: Corner;
   logo?: Corner | null;
+  /** The frame's height (1080 or 720, 16:9) and the C1 panel size; default 1080p, medium. */
+  frameH?: number;
+  size?: PanelSize;
 }
 
 /** One frame exactly as the camera composes it (controller.ts feed + compositor.ts draw). */
-export function paint(ctx: CanvasRenderingContext2D, sc: Scene): { model: OverlayModel; boxes: { score: Box | null; table: Box | null; card: Box | null } } {
+export function paint(ctx: CanvasRenderingContext2D, sc: Scene): { model: OverlayModel; u: number; boxes: { score: Box | null; table: Box | null; card: Box | null } } {
   const now = sc.now ?? sc.m.events[sc.m.events.length - 1].at + 10_000;
   const motion = sc.motion ?? 'full';
   const model = new OverlayClock().at(sc.m.cfg, sc.m.events, now, { delayMs: 0, offsetMs: 0, mirrored: false, stale: !!sc.stale, stats: sc.stats })!;
-  const u = panelScale(H, 'medium');
+  const fh = sc.frameH ?? H;
+  const fw = Math.round((fh * 16) / 9);
+  const u = panelScale(fh, sc.size ?? 'medium');
   const corner = sc.corner ?? 'tl';
   const card = cardShown(model.card, now, motion) ? model.card : null;
-  const lay = overlayLayout(W, H, {
+  const lay = overlayLayout(fw, fh, {
     scoreCorner: corner,
     score: panelSize(ctx, model, u),
     scoreMaxH: panelMaxHeight(u),
     logo: sc.logo === null ? null : { corner: sc.logo ?? 'tr', size: 'medium', aspect: 2 },
     table: model.table && !card ? { place: 'auto', ...statsTableSize(ctx, model.table, u) } : null,
   });
-  const cardBox = card ? cardPlace(W, H, endCardSize(card, u), [lay.score, lay.logo]).box : null;
+  const cardBox = card ? cardPlace(fw, fh, endCardSize(card, u), [lay.score, lay.logo]).box : null;
+  ctx.save();
+  ctx.scale(fh / H, fh / H);
   background(ctx);
+  ctx.restore();
   const clock = { now, motion };
   if (lay.logo) drawLogo(ctx, logoImage(), lay.logo);
   if (lay.score) drawOverlay(ctx, model, lay.score, u, DEFAULT_THEME, { ...clock, bandAbove: corner === 'bl' || corner === 'br' });
   if (model.table && lay.table) drawStatsTable(ctx, model.table, lay.table, u, DEFAULT_THEME, clock);
   if (card && cardBox) drawEndCard(ctx, card, cardBox, DEFAULT_THEME, clock);
-  return { model, boxes: { score: lay.score, table: lay.table, card: cardBox } };
+  return { model, u, boxes: { score: lay.score, table: lay.table, card: cardBox } };
 }
 
 const TABLE_A: StatsOptions = { table: { team: 'A', opp: true }, card: false };
@@ -201,7 +208,11 @@ function matches() {
   tagAll(singleOver, 19, 0.05);
   const long = new Match(named(['Kititharakul', 'Prajongjai'], ['Puavaranukroh', 'Taerattanachai'])).scoreTo(21, 19).startGame().scoreTo(20, 19);
   tagAll(long, 23);
-  const all = { gamePoint, matchPoint, deuce, interval, decider, gameOver, matchOver, draw, single, singleOver, long };
+  // The captain's phone check on 2026-10-30: doubles with the names left blank (A 1, A 2), game 1, A's table on.
+  const blank = { name: '', color: 0, players: ['', ''] as [string, string], startRight: 0 as const };
+  const phone = new Match(on(doublesConfig({ teams: { A: { ...blank, name: 'A' }, B: { ...blank, name: 'B', color: 1 } } }))).point('A');
+  tagAll(phone, 29, 0);
+  const all = { gamePoint, matchPoint, deuce, interval, decider, gameOver, matchOver, draw, single, singleOver, long, phone };
   for (const m of Object.values(all)) stretch(m);
   return all;
 }
@@ -245,6 +256,8 @@ export function frames(): Shot[] {
   frame('table-singles-1080p', { m: M.single, stats: TABLE_A, logo: 'br' });
   frame('end-card-1080p', { m: resolveLast(M.matchOver), stats: CARD });
   frame('end-card-singles-1080p', { m: resolveLast(M.singleOver), stats: { table: null, card: true } });
+  frame('table-phone-check-1080p', { m: M.phone, stats: TABLE_A, logo: null });
+  likeThePhone(() => frame('table-phone-check-header', { m: M.phone, stats: TABLE_A, logo: null }, 'table')); // as the phone draws it
   // The panel in every state, 1:1 crops for the sheet.
   const states: Array<[string, Scene]> = [
     ['playing', { m: new Match(on(doublesConfig())).scoreTo(21, 17).startGame().scoreTo(14, 12) }],
@@ -270,6 +283,76 @@ export function frames(): Shot[] {
   const over = M.matchOver;
   frame('anim-card-260ms', { m: over, now: lastAt(over) + 260, stats: CARD });
   return shots;
+}
+
+/**
+ * The captain's phone (2026-10-30) draws Thai text with textAlign 'center' or 'right' as if it were 'left'; desktop
+ * Chrome and WebKit do not. This makes a canvas behave like the phone while `fn` runs.
+ */
+function likeThePhone<T>(fn: () => T): T {
+  const proto = CanvasRenderingContext2D.prototype;
+  const fillText = proto.fillText;
+  proto.fillText = function (this: CanvasRenderingContext2D, s: string, x: number, y: number, maxWidth?: number) {
+    const align = this.textAlign;
+    if (/[\u0E00-\u0E7F]/.test(s)) this.textAlign = 'left';
+    if (maxWidth === undefined) fillText.call(this, s, x, y);
+    else fillText.call(this, s, x, y, maxWidth);
+    this.textAlign = align;
+  };
+  try {
+    return fn();
+  } finally {
+    proto.fillText = fillText;
+  }
+}
+
+/**
+ * The live table's headers measured in pixels: in the captain's case (doubles, blank names, game 1) at every panel
+ * size at 1080p and 720p, drawn as this browser draws and as the phone does, the white ink of the header row inside
+ * each column must stay TABLE.headGap clear of its edges (less a pixel of anti-aliasing), and every column must
+ * have its word.
+ */
+export function headerChecks(): { ok: boolean; cases: Array<Record<string, unknown>> } {
+  const M = matches();
+  const cases: Array<Record<string, unknown>> = [];
+  let ok = true;
+  for (const phone of [false, true])
+    for (const frameH of [1080, 720])
+      for (const size of ['small', 'medium', 'large'] as PanelSize[]) {
+        const c = document.createElement('canvas');
+        c.width = Math.round((frameH * 16) / 9);
+        c.height = frameH;
+        const ctx = c.getContext('2d', { willReadFrequently: true })!;
+        const draw = () => paint(ctx, { m: M.phone, stats: TABLE_A, logo: null, frameH, size });
+        const r = phone ? likeThePhone(draw) : draw();
+        const box = r.boxes.table!;
+        const cols = tableColumns(ctx, r.model.table!, box, r.u);
+        const y0 = Math.ceil(box.y + 2);
+        const y1 = Math.floor(box.y + TABLE.head * r.u - 2);
+        const d = ctx.getImageData(0, y0, c.width, y1 - y0).data;
+        const inkAt = (x: number) => {
+          for (let y = 0; y < y1 - y0; y++) {
+            const i = (y * c.width + x) * 4;
+            if (Math.min(d[i], d[i + 1], d[i + 2]) > 170) return true;
+          }
+          return false;
+        };
+        const margin = TABLE.headGap * r.u - 1;
+        const headers = cols.map((col) => {
+          let first = -1;
+          let last = -1;
+          for (let x = Math.floor(col.x); x < Math.ceil(col.x + col.w); x++)
+            if (inkAt(x)) {
+              if (first < 0) first = x;
+              last = x;
+            }
+          const inside = first >= 0 && first >= col.x + margin && last <= col.x + col.w - margin;
+          if (!inside) ok = false;
+          return { key: col.key, col: [Math.round(col.x), Math.round(col.x + col.w)], ink: [first, last], inside };
+        });
+        cases.push({ frame: `${frameH}p${phone ? ' as the phone' : ''}`, size, table: `${box.w}x${box.h}`, headers });
+      }
+  return { ok, cases };
 }
 
 /** Hash of a frame's pixels. */

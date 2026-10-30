@@ -8,7 +8,7 @@
   <body>
     <script type="module">
       // e2e/frames.ts opens this through the dev server: the frames are drawn by src/overlay itself.
-      import { checks, frames } from '/src/overlay/proof-frames.ts';
+      import { checks, frames, headerChecks } from '/src/overlay/proof-frames.ts';
       await Promise.all([500, 600, 700, 800].map((w) => document.fonts.load(`${w} 30px Kanit`, 'กขค ABC 012')));
       const crop = (s) => {
         if (!s.crop) return s.canvas;
@@ -18,8 +18,10 @@
         c.getContext('2d').drawImage(s.canvas, s.crop.x, s.crop.y, s.crop.w, s.crop.h, 0, 0, s.crop.w, s.crop.h);
         return c;
       };
-      window.__frames = frames().map((s) => ({ name: s.name, url: crop(s).toDataURL(s.crop ? 'image/png' : 'image/jpeg', 0.9) }));
+      const only = new URLSearchParams(location.search).has('checks');
+      window.__frames = only ? [] : frames().map((s) => ({ name: s.name, url: crop(s).toDataURL(s.crop ? 'image/png' : 'image/jpeg', 0.9) }));
       window.__checks = checks();
+      window.__header = headerChecks();
       window.__done = true;
     </script>
   </body>

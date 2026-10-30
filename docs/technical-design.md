@@ -648,7 +648,11 @@ canvas (the visible preview, CSS-scaled) --captureStream(30)--> composited video
   the same on every phone; the system Thai fallback differs between phones
   (Thonburi, or the wide Ayuthaya that once pushed a table header past its
   box). A recording does not start until the font is loaded, and every box is
-  measured again when the browser's fonts change.
+  measured again when the browser's fonts change. Every word is drawn
+  left-aligned from its measured start (`text()` in draw.ts): the captain's
+  phone draws Thai with `textAlign` 'center' or 'right' as if it were 'left'
+  (the end-of-game card in PR 10, the table headers on 2026-10-30), and the
+  table's header row takes one size that fits each word in its own column.
   The optional player stats table (R-TAG-7, `src/overlay/table.ts`) is the
   third tenant: each corner stacks panel, logo, table from the frame edge, the
   table takes the first corner nobody owns or the one picked in C1, and a box
