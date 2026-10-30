@@ -254,7 +254,11 @@ fixed 2.
   it shows becomes its own match again.
 - On joining: a camera with a match gives it to the scoreboard, which drops
   whatever it showed (pending inputs for the camera's match are kept and
-  sent); a camera without one adopts the scoreboard's (`sync`). The camera's
+  sent, except those already in its log: a drop cut the camera's reply); a
+  camera without one adopts the scoreboard's (`sync`). A match the scoreboard
+  started while the link was down, later than the camera's, is kept and its
+  start and inputs are sent: the camera takes it as it takes a new match from
+  a linked scoreboard (before 2026-10-30 it vanished at the reopen). The camera's
   `at` times are shown as they are on the scoreboards: both phones keep
   network time, so the difference is far below what a countdown shows.
 - The camera also writes its log plus recording metadata (§6.6) to the
