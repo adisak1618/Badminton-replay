@@ -227,7 +227,7 @@ winner's row shows WIN.
 ```
 +---------------------------------------------------------------+
 | ...  Game 1 · A 0-0 B           [🏷 1 untagged]  link ok      |
-|                       ( ↶ Undo point )                        |
+|               ( ↶ Undo point )  ( ☆ Replay )                  |
 | +-----------------------------------------------------------+ |
 | | Who hit the last shot?  point 4 · A 3-1 B        (6) Later| |
 | | A won the point → winner · 1 tap | B lost it → forced/unf.| |
@@ -253,11 +253,21 @@ the names. Untagged, the popup closes after 6 s (4/6/10 s/never in the
 menu); a tap outside closes it and scores nothing; "↶ Undo point" takes the
 point back with its tag. Labels are English like the rest of the scoreboard.
 
-### S3e Rally list (D15)
+**Replay (D16).** "☆ Replay" beside "↶ Undo point" marks the point for a slow
+replay in the video made after the match; it turns to "★ Replay ✓" (amber) and
+a second tap takes the mark back. It never scores and never closes the popup.
+When no popup opens (point reasons off, "Ask why" off on this phone, a point
+counted on the other scoreboard) or the popup closes early, the same pill
+("☆ Replay point n") shows on its own under the top bar for 8 s after the
+point, next to "Tap to tag", above the game-over and match-over cards.
 
-Every counted rally, grouped by game, newest at the bottom: number, game
-score after it, the side that won it, and its tag or, untagged, the names
-inline (a name opens the popup's second step for that rally). ✎ changes a tag
+### S3e Rally list (D15, D16)
+
+Every counted rally, grouped by game, newest at the bottom: a star (☆, ★ when
+the point has a replay: tap to mark or unmark, D16), number, game score after
+it, the side that won it, and its tag or, untagged, the names inline (a name
+opens the popup's second step for that rally). With point reasons off the rows
+have only the star; the menu opens the list as "★ Rally list · replays". ✎ changes a tag
 (the popup shows "now: ..." and offers "Clear tag"); "Tag one by one ▸" walks
 through the untagged ones. Opened from the top bar's "🏷 N untagged" chip, the
 interval's "Tag N untagged", the game-over and match-over cards, and the menu.
@@ -293,8 +303,10 @@ with scores, games, serving team and player.
 Correct score · Swap ends · Start/stop recording (when paired) · Pair camera,
 or Unpair the camera (when linked) / "Leave: forget the camera" (when the link
 is lost: clears the camera's state, the match stays) · Sound and voice · End
-match · New match · Export this match (match.json) · Pairing diagnostics; with
-point reasons on also Rally list, "Ask why after each point (this phone)" and
+match · New match · Export this match (match.json) · Pairing diagnostics ·
+Rally list (D16: "★ Rally list · replays", or "🏷 Rally list · tag points, ★
+replays" with point reasons on); with point reasons on also "Ask why after
+each point (this phone)" and
 "Untagged popup hides after". Each item is a full-height row, at least 56 px. Paired, New match leaves the camera's match running for the
 other scoreboard until a new one starts.
 

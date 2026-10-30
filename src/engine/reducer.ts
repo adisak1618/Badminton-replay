@@ -31,6 +31,8 @@ export const EVENT_TYPES: ReadonlySet<string> = new Set<EventType>([
   'tag',
   'tag.clear',
   'summary.close',
+  'replay',
+  'replay.clear',
 ]);
 
 /**
@@ -225,6 +227,8 @@ export function apply(cfg: MatchConfig, s: MatchState, e: MatchEvent): void {
     case 'tag': // why a point was won does not change the score (engine/tags.ts)
     case 'tag.clear':
     case 'summary.close': // only the video's summary card reads it (engine/tags.ts summaryStatus)
+    case 'replay': // D16: only the video made after the match reads it (engine/replays.ts)
+    case 'replay.clear':
       break;
   }
   setFlags(cfg, s);

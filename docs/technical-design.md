@@ -162,6 +162,11 @@ type MatchEvent = EventBase & (
       assist?: PlayerRef;      // doubles: the partner of the finisher (or of forcedBy) who played the side's previous shot
       shot?: 'smash' | 'kill' | 'drop' | 'net' | 'drive' | 'clear' | 'serve' }
   | { type: 'tag.clear'; point: string }
+  | { type: 'summary.close' }             // R-TAG-7: the operator closed the summary in the video
+  // D16: this point gets a replay in the video made after the match. Window fields are ms from the point's own
+  // tap (its `at`); absent ones take the defaults (start -6000, end -1000, speed 0.5). The newest mark wins.
+  | { type: 'replay'; point: string; start?: number; end?: number; speed?: 0.5 | 0.75 | 1 }
+  | { type: 'replay.clear'; point: string }
 );
 // PlayerRef = { team: Team; idx: number }  (index into teams[team].players)
 ```
@@ -178,6 +183,17 @@ type MatchEvent = EventBase & (
   its tags, a redo brings them back; the reducer passes over tags, so the
   score, the overlay and speech never see them. Naming the point by `id` (not
   `seq`) keeps it the same on every phone whoever orders the log.
+- **Replay marks (D16, `engine/replays.ts`).** Marks travel like tags (an
+  input the camera applies to a live counted point, in any phase) but whether
+  or not the match asks why; a mark whose window is out of range (start and
+  end from -30 s to +5 s of the tap, at least 1 s long, speed 0.5, 0.75 or 1)
+  is `ignored`. Not undoable; a voided point drops its mark and a redo brings
+  it back. `rallies()` folds the newest valid mark into `Rally.replay`;
+  `replayWindows(rallies)` turns each into a window on the log's clock: the
+  point's tap plus `start`/`end`, and when `start` is unset never earlier than
+  the previous rally's tap + 1 s (and at least 1 s long). The mark names the
+  point, never a time, so a mark made late shows the same moments. No protocol
+  version change: from v3 an unknown type is kept and passed over (§4.4).
 - **Stats.** `matchStats(config, events)` is a pure fold: it replays the
   reducer once to learn each counted rally's game, server and receiver (a
   point made in game over is not a rally), takes the newest valid tag of
@@ -452,7 +468,8 @@ the camera holds the match; a phone on version 1 is told to update. Version 3
 so it is told to update too; from 3 on an event or input of a type the build
 does not know is kept rather than refused (the reducer passes over it, the
 camera answers such an input `ignored`), so a new event type needs no new
-version.
+version: D16's `replay` and `replay.clear` came that way (an older camera
+answers a mark `ignored` and the scoreboard leaves the star off).
 
 ```ts
 type Role = 'scoreboard' | 'camera';
@@ -786,6 +803,8 @@ interface Segment {
   width: number; height: number; fps: number;
   startedAt: number;          // camera wall clock at recorder 'start' event
   startLatencyMs: number;     // calibrated in phase 0 (A8), default 0
+  firstFrameAt?: number;      // D16: camera wall clock of the first frame composited after recorder.start(): the file's
+                              // t = 0 (Chrome's file runs ~0.2 s ahead of the 'start' event, phase 0); absent in older ones
   endedAt: number | null; bytes: number;
   endReason: 'user' | 'interrupted' | 'quota' | 'error' | null;
   overlay: { box: Box;                          // area the score panel covered over the segment
@@ -850,13 +869,20 @@ interface MatchBundle {
   }>;
   result: { winner: Team | null; games: Record<Team, number>; completed: Array<Record<Team, number>> };
   stats?: MatchStats;   // D15, derived from the tags in `events` (§3.3); absent when the match did not ask
+  // D16: each marked point's window (§3.3) on the log's clock and on the recording; absent when nothing is marked
+  replays?: Array<{ point: string; n: number; game: number; at: number; from: number; to: number;
+                    speed: 0.5 | 0.75 | 1; adjusted: boolean;
+                    rec: { segment: number; fromMs: number; toMs: number } | null }>;
 }
 ```
 
 `after` and `leftOnCamera` are redundant with `events` + `config` (the log
 stays the source of truth) but let a later renderer stay a renderer.
-`tRec.ms = (event.at + clock.offsetMs) − segment.startedAt − segment.startLatencyMs`
-(R-BURN-1).
+`tRec.ms = (event.at + clock.offsetMs) − t0`, where the segment's file
+starts at `t0 = segment.firstFrameAt` when recorded (D16) and at
+`segment.startedAt + segment.startLatencyMs` in older recordings (R-BURN-1).
+A replay's `rec` uses the segment recording at its window's end, its start
+clamped to 0 when the window began before the recording did.
 
 ## 9. Browser support matrix (iPhone, D1)
 

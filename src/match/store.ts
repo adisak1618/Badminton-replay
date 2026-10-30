@@ -127,9 +127,9 @@ export class MatchStore {
       return result === 'applied' ? { prev: state, next: this.snap.state!, event: next.events[next.events.length - 1], config: match.config } : null;
     }
     const stamp = { at, by: this.device(), id: randomId() };
-    // A tag follows the camera's rule here too: only for a live point of a match that asks why (D15).
-    if ((body.type === 'tag' || body.type === 'tag.clear') && applyInput(match.config, match.events, { ...stamp, body }, at).result !== 'applied')
-      return null;
+    // Tags and replay marks follow the camera's rule here too: only for a live point (D15, D16).
+    const marks = body.type === 'tag' || body.type === 'tag.clear' || body.type === 'replay' || body.type === 'replay.clear';
+    if (marks && applyInput(match.config, match.events, { ...stamp, body }, at).result !== 'applied') return null;
     const events = append(match.events, body, stamp);
     const m: StoredMatch = { ...match, events, updatedAt: at };
     this.set(m);

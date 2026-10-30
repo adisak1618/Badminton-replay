@@ -15,6 +15,12 @@ export interface Segment {
   fps: number;
   startedAt: number; // camera wall clock at the recorder 'start' event
   startLatencyMs: number; // A8, default 0
+  /**
+   * Camera wall clock of the first frame the compositor drew after the recorder was told to start: the file's t = 0
+   * (D16). In Chrome the file runs ~0.2 s ahead of the 'start' event (phase 0), so this is the closer anchor; absent in
+   * older recordings.
+   */
+  firstFrameAt?: number;
   endedAt: number | null;
   bytes: number;
   endReason: EndReason | null;
@@ -53,12 +59,13 @@ export interface Session {
   message: string | null;
 }
 
-export type SegmentDraft = Omit<Segment, 'index' | 'file' | 'startedAt' | 'endedAt' | 'bytes' | 'endReason'> & { ext: string };
+export type SegmentDraft = Omit<Segment, 'index' | 'file' | 'startedAt' | 'endedAt' | 'bytes' | 'endReason' | 'firstFrameAt'> & { ext: string };
 
 export type SessionAction =
   | { type: 'load'; segments: Segment[] } // a recording directory was opened (earlier segments of this match)
   | { type: 'start'; at: number; draft: SegmentDraft }
   | { type: 'started'; at: number }
+  | { type: 'firstFrame'; at: number } // the compositor drew its first frame after the recorder was told to start
   | { type: 'bytes'; bytes: number }
   | { type: 'panelBox'; at: number; box: Box } // the score panel changed size or place while recording
   | { type: 'stop'; reason: EndReason; message?: string }
@@ -105,6 +112,10 @@ export function sessionReduce(s: Session, a: SessionAction): Session {
     }
     case 'started':
       return s.phase === 'starting' ? { ...s, phase: 'recording', segments: withLast(s, { startedAt: a.at }) } : s;
+    case 'firstFrame': {
+      const seg = current(s);
+      return seg && seg.firstFrameAt == null ? { ...s, segments: withLast(s, { firstFrameAt: a.at }) } : s;
+    }
     case 'panelBox': {
       const seg = current(s);
       if (!seg) return s;

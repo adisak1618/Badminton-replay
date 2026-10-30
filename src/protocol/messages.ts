@@ -2,8 +2,9 @@
 // guards for everything that arrives. Unknown `t` is ignored; an unsupported `v` is answered with `bye`
 // (R-PAIR-7). Version 2 (D14): the camera holds the match; scoreboards send inputs and render what it sends.
 // Version 3 (D15): tag events. From 3 on an event or input of a type this build does not know is kept (the
-// reducer passes over it, the camera answers such an input 'ignored'), so a new event type needs no new version.
-import { EVENT_TYPES, SHOTS, type Input, type InputResult, type MatchConfig, type MatchEvent } from '../engine';
+// reducer passes over it, the camera answers such an input 'ignored'), so a new event type needs no new version:
+// D16's replay and replay.clear came that way.
+import { EVENT_TYPES, SHOTS, validReplay, type Input, type InputResult, type MatchConfig, type MatchEvent } from '../engine';
 import type { RecReport } from '../link/source';
 
 export const PROTOCOL_VERSION = 3;
@@ -113,7 +114,11 @@ function isBody(x: Obj, targeted: boolean): boolean {
         (x.shot === undefined || (SHOTS as readonly unknown[]).includes(x.shot))
       );
     case 'tag.clear':
+    case 'replay.clear':
       return isStr(x.point);
+    case 'replay':
+      // D16: optional window fields, each a number in range when present (engine/replays.ts).
+      return isStr(x.point) && optNum(x.start) && optNum(x.end) && validReplay(x as { start?: number; end?: number; speed?: 0.5 | 0.75 | 1 });
     default:
       return true; // sides.swap, interval.end
   }

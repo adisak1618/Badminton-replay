@@ -51,6 +51,22 @@ export interface TagBody {
   shot?: Shot;
 }
 
+/** D16: how fast a replay plays; half speed ("slow 2x") unless the Studio changes it for that shot. */
+export type ReplaySpeed = 0.5 | 0.75 | 1;
+
+/**
+ * D16: this point gets a replay in the video made after the match. The window is in ms relative to the point's own
+ * tap (its `at`): absent fields take the defaults in engine/replays.ts (5 s ending 1 s before the tap, half speed). A
+ * shot adjusted later is a newer `replay` of the same point carrying the fields; the newest one wins, as for tags.
+ */
+export interface ReplayBody {
+  type: 'replay';
+  point: string; // id of the point event
+  start?: number;
+  end?: number;
+  speed?: ReplaySpeed;
+}
+
 export type Phase = 'playing' | 'interval' | 'gameOver' | 'matchOver';
 
 export interface Positions {
@@ -108,7 +124,9 @@ export type EventBody =
   | { type: 'match.end'; reason: 'won' | 'abandoned' }
   | TagBody // the newest tag of a live point wins; never undone itself (D15)
   | { type: 'tag.clear'; point: string }
-  | { type: 'summary.close' }; // the operator closed the end-of-game summary burned into the video (R-TAG-7)
+  | { type: 'summary.close' } // the operator closed the end-of-game summary burned into the video (R-TAG-7)
+  | ReplayBody // D16: never undone itself; Undo takes back scoring, a replay.clear takes back the mark
+  | { type: 'replay.clear'; point: string };
 
 export type MatchEvent = EventBase & EventBody;
 export type EventType = EventBody['type'];

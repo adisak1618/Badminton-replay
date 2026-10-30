@@ -4,7 +4,8 @@
 // tags; everything here is a pure fold over the log.
 import { apply, initialState, voidSet } from './reducer';
 import { other, receiverIdx } from './rules';
-import type { MatchConfig, MatchEvent, MatchState, PlayerRef, Shot, TagBody, Team } from './types';
+import { validReplay } from './replays';
+import type { MatchConfig, MatchEvent, MatchState, PlayerRef, ReplayBody, Shot, TagBody, Team } from './types';
 
 export const SHOTS: readonly Shot[] = ['smash', 'kill', 'drop', 'net', 'drive', 'clear', 'serve'];
 
@@ -24,6 +25,8 @@ export interface Rally {
   tag: TagBody | null;
   /** The operator is done with this point: tagged it, or chose not to (a tag.clear). Untagged and unresolved = tag later. */
   resolved: boolean;
+  /** D16: this point gets a replay in the video made after the match (the newest valid mark), or null. */
+  replay: ReplayBody | null;
 }
 
 const ref = (cfg: MatchConfig, r: PlayerRef | undefined): boolean =>
@@ -58,9 +61,10 @@ export function validTag(cfg: MatchConfig, rally: Pick<Rally, 'team'>, t: TagBod
 }
 
 /**
- * Every counted rally in order, each with its newest valid tag. Points made in game over or match over do not count.
- * With `cutoff` only events with `at <= cutoff` count, but undos are still taken from the whole log, the same rule as
- * `stateAt` in the overlay: a quick undo never reaches the video, and a tag counts from the moment it was saved.
+ * Every counted rally in order, each with its newest valid tag and replay mark. Points made in game over or match over
+ * do not count. With `cutoff` only events with `at <= cutoff` count, but undos are still taken from the whole log, the
+ * same rule as `stateAt` in the overlay: a quick undo never reaches the video, and a tag counts from the moment it was
+ * saved.
  */
 export function rallies(cfg: MatchConfig, events: readonly MatchEvent[], cutoff: number = Infinity): Rally[] {
   const voided = voidSet(events);
@@ -76,7 +80,7 @@ export function rallies(cfg: MatchConfig, events: readonly MatchEvent[], cutoff:
       const game = s.game;
       apply(cfg, s, e);
       if (!counted) continue;
-      const r: Rally = { n: out.length + 1, id: e.id, seq: e.seq, at: e.at, by: e.by, game, team: e.team, served, received, after: { ...s.score }, tag: null, resolved: false };
+      const r: Rally = { n: out.length + 1, id: e.id, seq: e.seq, at: e.at, by: e.by, game, team: e.team, served, received, after: { ...s.score }, tag: null, resolved: false, replay: null };
       out.push(r);
       byId.set(e.id, r);
     } else if (e.type === 'tag') {
@@ -91,6 +95,12 @@ export function rallies(cfg: MatchConfig, events: readonly MatchEvent[], cutoff:
         r.tag = null;
         r.resolved = true;
       }
+    } else if (e.type === 'replay') {
+      const r = byId.get(e.point);
+      if (r && validReplay(e)) r.replay = e;
+    } else if (e.type === 'replay.clear') {
+      const r = byId.get(e.point);
+      if (r) r.replay = null;
     } else apply(cfg, s, e);
   }
   return out;

@@ -19,7 +19,8 @@
 // 2 s, a tap on the camera within 1 s); a second scoreboard joining mid-match, both scoring, the same rally tapped on both counted once, the second
 // one's screen off and on while the first scores, point reasons (D15: a winner tagged in one tap and an error
 // in two on one scoreboard, the other's game-over card showing them, tagging later from the list there, a match
-// with point reasons off recording no tag), the camera unpairing both (D14); a typed code; the QR's
+// with point reasons off recording no tag), replay marks (D16: "☆ Replay" in the popup, on its own after a point
+// with point reasons off, and the rally list's stars on the other scoreboard), the camera unpairing both (D14); a typed code; the QR's
 // link opened by the iPhone camera app with the viewfinder still
 // on that QR, claimed once; a version mismatch (R-PAIR-7); two phones on different networks told so, with the
 // pairing diagnostics; a camera page reloaded after showing its code (withdrawn), or in the background when it is
@@ -234,6 +235,13 @@ async function tap(p: Page, zone: 'left' | 'right', keepPopup = false): Promise<
 /** The camera's match log (MatchHub keeps it in localStorage, src/link/hub.ts). */
 async function cameraLog(cam: Page): Promise<Array<{ type: string; by: string; point?: string }>> {
   return cam.evaluate(() => JSON.parse(localStorage.getItem('bs.hub') ?? 'null')?.log?.events ?? []);
+}
+
+/** The points the camera's log marks for a replay now (D16): the newest mark or unmark of each point. */
+async function replayMarked(cam: Page): Promise<string[]> {
+  const on = new Map<string, boolean>();
+  for (const e of await cameraLog(cam)) if (e.type === 'replay' || e.type === 'replay.clear') on.set(e.point!, e.type === 'replay');
+  return [...on].filter(([, v]) => v).map(([k]) => k);
 }
 
 /** Points the camera's log has a tag for (a chip appends a newer tag for the same point). */
@@ -554,7 +562,10 @@ async function main() {
       const sorted = [...live].sort((a, b) => a - b);
       fs.writeFileSync(path.join(OUT, 'camera-log.json'), JSON.stringify(camLog, null, 2));
       fs.writeFileSync(path.join(OUT, 'camera-recording.json'), JSON.stringify(rec, null, 2));
-      return `${ids.length} events, none missing or doubled; receive − tap per point (ms, same clock; includes the outage): ${sorted.join(', ')}; clock ${JSON.stringify(rec.clock ?? null)}`;
+      // D16: each segment knows the camera time of its first composited frame, the file's t = 0.
+      const firsts = rec.segments.map((s: { startedAt: number; firstFrameAt?: number }) => (s.firstFrameAt == null ? null : s.firstFrameAt - s.startedAt));
+      if (firsts.some((d: number | null) => d == null || Math.abs(d) > 2000)) throw new Error(`first frame vs recorder start (ms): ${firsts.join(', ')}`);
+      return `${ids.length} events, none missing or doubled; receive − tap per point (ms, same clock; includes the outage): ${sorted.join(', ')}; clock ${JSON.stringify(rec.clock ?? null)}; first frame − recorder start per segment (ms): ${firsts.join(', ')}`;
     });
 
     await step('scoreboard reload: resumes the match and rejoins with no scan', async () => {
@@ -672,6 +683,11 @@ async function main() {
       await tap(sb, 'left', true);
       await until('A’s popup', async () => (await sb.locator('[data-testid=tag-sheet]').count()) > 0, 3000);
       if (await b.locator('[data-testid=tag-sheet]').count()) throw new Error('the popup opened on B too');
+      // D16: "☆ Replay" beside "↶ Undo point" marks this point; the popup stays for the tag.
+      const marked = (await replayMarked(cam)).length;
+      await sb.locator('[data-testid=tag-replay]').click();
+      await until('the camera holds the replay mark', async () => (await replayMarked(cam)).length === marked + 1, 5000);
+      if ((await sb.locator('[data-testid=tag-replay]').getAttribute('aria-pressed')) !== 'true') throw new Error('the popup does not show the mark');
       const offer = await until('B offers to tag', async () => (await b.locator('[data-testid=tag-offer]').count()) > 0, 3000);
       await sb.locator('[data-testid=tag-who-A0]').click(); // A won the rally: a winner in one tap
       await sb.locator('[data-testid=tag-shot-smash]').click();
@@ -818,6 +834,39 @@ async function main() {
       const hint = await until('the camera says why the stats rows are off', async () => (await cam.locator('[data-testid=stats-hint]').count()) > 0, 5000);
       if (!hint || (await cam.locator('[data-testid=stats-rows] button:not([disabled])').count()) > 0) throw new Error('the camera offers the stats rows with point reasons off');
       return `score ${await score(sb)} on both, no popup, no chip, no tag at the camera, the camera's stats rows disabled with a hint`;
+    });
+
+    await step('replay marks with point reasons off: "☆ Replay" after a point, then the rally list’s stars on B (D16)', async () => {
+      const b = sbB!;
+      await tap(sb, 'left');
+      const pill = await until('"☆ Replay" on both scoreboards', async () => (await sb.locator('[data-testid=replay-pill]').count()) > 0 && (await b.locator('[data-testid=replay-pill]').count()) > 0 && 'shown', 3000);
+      await sb.locator('[data-testid=replay-pill]').click();
+      // The two points of the step before and this one, once the camera has them (the scoreboard shows its own at once).
+      const points = await until('the camera has the point', async () => {
+        const p = (await cameraLog(cam)).filter((e) => e.type === 'point') as unknown as Array<{ id: string }>;
+        return p.length >= 3 && p;
+      }, 5000);
+      const last = points[points.length - 1];
+      await until('the camera marks the point just scored', async () => (await replayMarked(cam)).includes(last.id), 5000);
+      await until('B shows the mark', async () => (await b.locator('[data-testid=replay-pill]').getAttribute('aria-pressed')) === 'true', 3000);
+      await sb.screenshot({ path: path.join(OUT, '05i-scoreboard-replay-pill.png') });
+      await until('the pill goes after a few seconds', async () => (await sb.locator('[data-testid=replay-pill]').count()) === 0, 12_000);
+      // Later, from B's rally list: star the first point of this match, take the first mark back.
+      await b.getByRole('button', { name: 'Menu' }).click();
+      await b.locator('[data-testid=menu-rally-list]').click();
+      await until('the rally list', async () => (await b.locator('[data-testid=rally-list]').count()) > 0, 3000);
+      await b.locator('[data-testid=rally-1-replay]').click();
+      const n = await b.locator('[data-testid^=rally-][data-testid$=-replay]').count();
+      await b.screenshot({ path: path.join(OUT, '05j-scoreboard-rally-list-replays.png') });
+      await b.locator(`[data-testid=rally-${n}-replay]`).click();
+      const first = points[points.length - 3].id;
+      await until('the camera holds rally 1 only', async () => {
+        const m = await replayMarked(cam);
+        return m.includes(first) && !m.includes(last.id);
+      }, 5000);
+      if (await b.locator('[data-testid^=rally-][data-testid$=-A0]').count()) throw new Error('names to tag in the list with point reasons off');
+      await b.locator('[data-testid=rally-list]').getByRole('button', { name: 'Close' }).click();
+      return `pill ${pill} on both after a point and gone within 12 s, marked from A; on B's list rally 1 starred and rally ${n} unstarred; the camera's marks follow`;
     });
 
     await step('scoreboard B screen off for 20 s while A scores; B back in seconds with the camera’s state', async () => {

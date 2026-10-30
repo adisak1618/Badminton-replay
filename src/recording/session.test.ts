@@ -95,3 +95,16 @@ describe('segment state machine (R-REC-5, technical-design.md §6.5)', () => {
     expect(current(s)?.file).toBe('video-2.mp4');
   });
 });
+
+describe('first composited frame (D16)', () => {
+  it('is kept once, on the segment being recorded, and only while recording', () => {
+    let s = run(initialSession, { type: 'start', at: 1000, draft }, { type: 'firstFrame', at: 1012 }, { type: 'started', at: 1200 });
+    expect(current(s)).toMatchObject({ startedAt: 1200, firstFrameAt: 1012 });
+    s = run(s, { type: 'firstFrame', at: 1045 });
+    expect(current(s)?.firstFrameAt).toBe(1012);
+    s = run(s, { type: 'stop', reason: 'user' }, { type: 'closed', at: 9000, bytes: 1 });
+    expect(run(s, { type: 'firstFrame', at: 9100 })).toBe(s);
+    s = run(s, { type: 'start', at: 10_000, draft });
+    expect(current(s)?.firstFrameAt).toBeUndefined(); // a new segment waits for its own first frame
+  });
+});

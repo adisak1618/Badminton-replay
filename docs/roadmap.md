@@ -99,6 +99,28 @@ Access tip, export ergonomics.
 finished clips kept, each finding is either fixed or filed under Later, and
 the overlay delay default is decided from the undo counts in the logs.
 
+## D16: point replays and the post-match pass
+
+The captain's picks are in requirements.md D16 and
+data/badminton-replay-research/report.md section 11. Four slices, each its
+own PR:
+
+1. **Marks** (this slice): "☆ Replay" after a point and the rally list's
+   stars, `replay` / `replay.clear` events, the 5 s window rule, each
+   segment's first composited frame, `replays` in `match.json` (R-REP-1 to 4).
+2. **Speed test on the captain's iPhone**: a page that renders a recorded
+   clip full length on the phone, so the post-match pass is sized on the
+   device before it is built.
+3. **Post-match renderer on the camera phone** (WebCodecs through
+   Mediabunny): one pass inserts every replay inline with the BWF card spin,
+   the frozen panel with REPLAY ×0.5 and the real sound after the point, and
+   burns the stats table and summary card from tags added after the match
+   (counted back at their point's time); wake lock, resumable in segments,
+   free-space check.
+4. **Studio screen**: watch the clip, jump per point, tag in place, ★ any
+   point, adjust each replay (start ±1 s, end ±1 s, ×0.5 / ×0.75 / ×1),
+   render; keyboard shortcuts.
+
 ## Later (not scheduled)
 
 - **Mac-side re-render tool** (R-BURN-2): paints a new overlay over the box
@@ -113,8 +135,9 @@ the overlay delay default is decided from the undo counts in the logs.
 - Third phone as a sideline remote through the same protocol.
 - Automatic highlight cuts at point boundaries from the event log (the data
   is already in `match.json`).
-- On-phone clip trimming / export of short highlights (ffmpeg.wasm or
-  MediaRecorder re-encode).
+- On-phone clip trimming / export of short highlights (D16's post-match pass
+  uses WebCodecs through Mediabunny; ffmpeg.wasm was measured 2–5× slower and
+  32 MB, data/badminton-replay-research/report.md §3F).
 - Android support (Chrome 126+ has the APIs; untested, WebM/MP4 differences).
 - Firefox support (Web Share with files and barcode detection are missing).
 - IndexedDB fallback for recording (D10) if a supported browser turns out to

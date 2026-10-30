@@ -66,11 +66,11 @@ export function Menu({
         <button className={row} onClick={() => setPrefs({ ...prefs, lang: prefs.lang === 'en' ? 'th' : 'en' })}>
           Voice language: <b>{prefs.lang === 'en' ? 'English' : 'ไทย (Thai)'}</b>
         </button>
+        <button className={row} onClick={onRallyList} data-testid="menu-rally-list">
+          {reasons ? '🏷 Rally list · tag points, ★ replays' : '★ Rally list · replays'}
+        </button>
         {reasons && (
           <>
-            <button className={row} onClick={onRallyList} data-testid="menu-rally-list">
-              🏷 Rally list · tag points
-            </button>
             <button
               className={row}
               aria-pressed={prefs.askReasons}

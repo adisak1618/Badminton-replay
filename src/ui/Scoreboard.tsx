@@ -1,6 +1,7 @@
 // S3 scoreboard: two tap zones, top bar, Undo band, and the S3a-S3c overlays, S4 correction and S5 menu. With
 // point reasons on (D15): the why-was-this-point-won popup after a tap that counted on this phone (S3d), the
-// rally list to tag later (S3e), and the stats card at game over and match over.
+// rally list to tag later (S3e), and the stats card at game over and match over. Always (D16): "☆ Replay" after each
+// point, in the popup or on its own for a few seconds, and the rally list's stars.
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent } from 'react';
 import {
   matchStats,
@@ -16,6 +17,7 @@ import {
   type MatchEvent,
   type MatchState,
   type PlayerRef,
+  type Rally,
   type Team,
 } from '../engine';
 import { keepScreenOn, subscribeWake, wakeHint, wakeStatus } from '../device/wakeLock';
@@ -37,6 +39,7 @@ import { exportLog } from './exportLog';
 import { RallyList } from './reasons/RallyList';
 import { StatsCard, type SummaryControl } from './reasons/StatsCard';
 import { TagSheet } from './reasons/TagSheet';
+import { ReplayPill } from './ReplayPill';
 
 const REDO_WINDOW_MS = 5000;
 /** After a tap that counted, the popup rises once the flash and the new score have shown (D15). */
@@ -45,6 +48,9 @@ const TAG_OPEN_DELAY_MS = 350;
 const TAG_CHIP_MS = 6000;
 /** How long "already counted" stays up after a duplicate tap (D14). */
 const DUPLICATE_CUE_MS = DUPLICATE_WINDOW_MS;
+/** How long "☆ Replay" stays after a point when no popup is open (D16); the rally list's star works any time later. */
+const REPLAY_PILL_MS = 8000;
+const NO_RALLIES: Rally[] = [];
 const SHUTTLE = '\u{1F3F8}';
 
 interface Props {
@@ -73,7 +79,9 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
 
   // ---- point reasons (D15) ----
   const reasons = reasonsOn(config);
-  const rs = useMemo(() => (reasons ? rallies(config, events) : []), [reasons, config, events]);
+  // Every counted rally: replay marks (D16) work whether or not the match asks why; `rs` is the D15 view of them.
+  const all = useMemo(() => rallies(config, events), [config, events]);
+  const rs = reasons ? all : NO_RALLIES;
   const over = s.phase === 'gameOver' || s.phase === 'matchOver';
   const stats = useMemo(() => (reasons && over ? matchStats(config, events) : null), [reasons, over, config, events]);
   // The summary burned into the video (R-TAG-7): its close button shows while a camera is paired.
@@ -102,6 +110,21 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
       setOffer({ id: newest.id, until: Date.now() + TAG_CHIP_MS });
   }, [newest, me, prefs.askReasons]);
   const offered = offer && now < offer.until && !tagging ? rs.find((r) => r.id === offer.id && !r.tag) : undefined;
+  // ---- replay marks (D16) ----
+  const toggleReplay = (r: Rally) => store.emit(r.replay ? { type: 'replay.clear', point: r.id } : { type: 'replay', point: r.id });
+  const [replayOffer, setReplayOffer] = useState<{ id: string; from: number; until: number } | null>(null);
+  const latest = all[all.length - 1];
+  const seenLatest = useRef(latest?.id ?? null);
+  // A new point, on either scoreboard: "☆ Replay" is offered for a few seconds, inside the popup when one opens (it
+  // waits out the popup's own delay so it does not flash first).
+  useEffect(() => {
+    if (!latest || latest.id === seenLatest.current) return;
+    seenLatest.current = latest.id;
+    const t = Date.now();
+    setReplayOffer({ id: latest.id, from: t + TAG_OPEN_DELAY_MS + 50, until: t + REPLAY_PILL_MS });
+  }, [latest]);
+  const replayShown = replayOffer && now >= replayOffer.from && now < replayOffer.until && !tagging && !listOpen && sheet === 'none' && !resumed;
+  const replayOffered = replayShown ? all.find((r) => r.id === replayOffer.id) : undefined;
   const nextUntagged = (after: number) => rs.find((r) => !r.tag && r.n > after) ?? rs.find((r) => !r.tag && r.n !== after);
   const closeTag = (reason: 'done' | 'later' | 'timeout' | 'outside') => {
     const t = tagging;
@@ -336,32 +359,40 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
         {resumed && (
           <button className="absolute inset-0 z-30 bg-bg/20" onClick={continueResumed} aria-label="Continue the match" />
         )}
-        {duplicate && (
-          <div
-            className="pointer-events-none absolute top-3 left-1/2 z-20 -translate-x-1/2 rounded-full bg-pan2 px-4 py-2 font-semibold text-amber shadow-[0_2px_12px_rgb(0_0_0/0.6)]"
-            role="status"
-            data-testid="duplicate-cue"
-          >
-            Already counted on the other scoreboard
+        {(duplicate || offered || replayOffered) && (
+          // Above the game-over and match-over cards (z-20): the point that ends a game is often the one to replay.
+          <div className="pointer-events-none absolute top-3 left-1/2 z-[31] flex w-max max-w-[95%] -translate-x-1/2 flex-wrap items-center justify-center gap-2">
+            {duplicate && (
+              <div className="rounded-full bg-pan2 px-4 py-2 font-semibold text-amber shadow-[0_2px_12px_rgb(0_0_0/0.6)]" role="status" data-testid="duplicate-cue">
+                Already counted on the other scoreboard
+              </div>
+            )}
+            {offered && (
+              <button
+                className="btn pointer-events-auto rounded-full border border-amber/60 bg-pan2 px-4 font-semibold text-amber shadow-[0_2px_12px_rgb(0_0_0/0.6)]"
+                onClick={() => {
+                  setOffer(null);
+                  setTagging({ id: offered.id, live: true });
+                }}
+                data-testid="tag-offer"
+              >
+                🏷 Tap to tag point {offered.n}
+              </button>
+            )}
+            {replayOffered && (
+              <span className="pointer-events-auto">
+                <ReplayPill on={!!replayOffered.replay} onToggle={() => toggleReplay(replayOffered)} label={`point ${replayOffered.n}`} testid="replay-pill" />
+              </span>
+            )}
           </div>
-        )}
-        {offered && (
-          <button
-            className="btn absolute top-3 left-1/2 z-20 -translate-x-1/2 rounded-full border border-amber/60 bg-pan2 px-4 font-semibold text-amber shadow-[0_2px_12px_rgb(0_0_0/0.6)]"
-            onClick={() => {
-              setOffer(null);
-              setTagging({ id: offered.id, live: true });
-            }}
-            data-testid="tag-offer"
-          >
-            🏷 Tap to tag point {offered.n}
-          </button>
         )}
         {listOpen && (
           <RallyList
             config={config}
-            rallies={rs}
+            rallies={all}
             leftTeam={L}
+            reasons={reasons}
+            onReplay={toggleReplay}
             onOpen={(r, hit) => setTagging({ id: r.id, live: false, hit })}
             onStep={() => {
               const n = nextUntagged(0);
@@ -380,6 +411,7 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
             closeAfterMs={prefs.tagCloseS * 1000}
             initialHit={tagging.hit}
             onTag={(t) => store.emit(t)}
+            replay={tagging.live ? { on: !!tagRally.replay, onToggle: () => toggleReplay(tagRally) } : undefined}
             onClear={() => {
               store.emit({ type: 'tag.clear', point: tagRally.id });
               setTagging(null);

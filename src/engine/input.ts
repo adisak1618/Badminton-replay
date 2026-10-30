@@ -5,6 +5,7 @@
 // within DUPLICATE_WINDOW_MS of the first is the same rally tapped twice. The scoreboard runs the same
 // function over its pending inputs to show them before the camera has answered.
 import { lastRedoable, lastUndoable, reduce, voidSet } from './reducer';
+import { validReplay } from './replays';
 import { rallyOf, reasonsOn, validTag } from './tags';
 import type { EventBody, MatchConfig, MatchEvent } from './types';
 
@@ -83,6 +84,14 @@ export function applyInput(config: MatchConfig, events: readonly MatchEvent[], i
       if (!reasonsOn(config)) return same('ignored');
       const r = rallyOf(config, events, b.point);
       if (!r || (b.type === 'tag' && !validTag(config, r, b))) return same('ignored');
+      body = b;
+      break;
+    }
+    case 'replay':
+    case 'replay.clear': {
+      // D16: for a live counted point, in any phase and whether or not the match asks why (mark later from the list).
+      const r = rallyOf(config, events, b.point);
+      if (!r || (b.type === 'replay' && !validReplay(b))) return same('ignored');
       body = b;
       break;
     }
