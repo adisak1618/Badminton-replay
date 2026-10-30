@@ -747,7 +747,17 @@ export class PeerLink {
         const t3 = this.now();
         this.lastPongAt = t3;
         this.clock.add(m.t0, m.t1, m.t2, t3);
-        if (!this.open && this.snap.remote) this.sendHello(); // the path is back (ICE restart): say hello again
+        if (!this.open && this.snap.remote) {
+          // The path is back (a stall, an ICE restart): say hello again, and count the link open now. The pong
+          // proves it carries this phone's ping out and the answer back, and a phone that never saw the drop is
+          // still open: it does not answer a hello with one, and offers nothing (2026-10-30, stuck for minutes).
+          this.sendHello();
+          this.markOpen();
+          this.log('link', 'open again: pongs are back');
+          void this.checkPath();
+          this.set({ error: null });
+          this.onOpen();
+        }
         if (this.probe) {
           this.log('link', `resume: the link is alive (pong after ${t3 - this.probe.since} ms)`);
           this.probe = null;
@@ -755,14 +765,7 @@ export class PeerLink {
         return;
       }
       case 'hello': {
-        const wasOpen = this.open;
-        this.lastPongAt = this.now();
-        this.open = true;
-        this.down = null;
-        if (this.attempt?.answeredAt != null) this.attempt = null; // an offer still waiting for its answer is kept
-        this.offline = false;
-        this.releaseHeldCapture();
-        this.persist();
+        const wasOpen = this.markOpen();
         if (!wasOpen) {
           this.log('link', `open: the other phone runs ${m.app}`);
           this.sendHello();
@@ -786,6 +789,19 @@ export class PeerLink {
       default:
         this.onMessage(m);
     }
+  }
+
+  /** The link carries both ways again (a hello, or a pong while down). Returns whether it was open before. */
+  private markOpen(): boolean {
+    const wasOpen = this.open;
+    this.lastPongAt = this.now();
+    this.open = true;
+    this.down = null;
+    if (this.attempt?.answeredAt != null) this.attempt = null; // an offer still waiting for its answer is kept
+    this.offline = false;
+    this.releaseHeldCapture();
+    this.persist();
+    return wasOpen;
   }
 
   /** The other phone unpaired (its goodbye, or the helper's `ended`): back to unpaired, pairing forgotten. */

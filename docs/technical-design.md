@@ -477,7 +477,14 @@ Examples:
 - **Liveness.** `ping` every 2 s from both phones; each judges the link by its
   own pongs. 3 missed pongs → chip "reconnecting" (6 s) and the reconnect
   procedure (§4.5 below); after 30 s the chip turns red ("link lost") while
-  the phones keep trying. ICE `connectionState` is watched too. The camera's
+  the phones keep trying. A stall near the 6.5 s limit, or the camera's page
+  away for a few seconds, can take one phone down while the other never
+  misses a pong. So a phone that is down and gets a pong again counts the
+  link open at once and says `hello` (the other phone, still open, does not
+  answer a hello with one, and the camera offers only when it is down
+  itself). Before this, such a scoreboard stayed on "link lost" for minutes
+  while each tap reached the camera 1-2 s late (2026-10-30, relayed link on
+  mobile data). ICE `connectionState` is watched too. The camera's
   clock offset comes from its own pings (the formula below then gives
   scoreboard − camera, which it negates).
 - **Commands** (`cmd`/`ack`) are idempotent and carry an id so a retry after a

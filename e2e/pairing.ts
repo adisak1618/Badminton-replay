@@ -15,7 +15,8 @@
 // tap-to-camera latency; remote REC with ack (D11); a 20 s outage of the channel and the helper with points
 // scored meanwhile (R-PAIR-4/8); a dropped connection rebuilt fresh; remote stop; reloads of either phone
 // rejoining with no scan; the screen of the scoreboard off for 20 s and on again (link back in seconds, §4.5);
-// a second scoreboard joining mid-match, both scoring, the same rally tapped on both counted once, the second
+// the camera's page away 8 s with its connection alive, which only the scoreboard notices (linked again within
+// 2 s, a tap on the camera within 1 s); a second scoreboard joining mid-match, both scoring, the same rally tapped on both counted once, the second
 // one's screen off and on while the first scores, point reasons (D15: a winner tagged in one tap and an error
 // in two on one scoreboard, the other's game-over card showing them, tagging later from the list there, a match
 // with point reasons off recording no tag), the camera unpairing both (D14); a typed code; the QR's
@@ -583,6 +584,30 @@ async function main() {
       );
       if (back > 6000) throw new Error(`link back only after ${back} ms`);
       return `camera chip while off "${camWhileOff}"; link ok on both ${back} ms after the screen came on; scoreboard log "${resume?.slice(0, 90)}"`;
+    });
+
+    // 2026-10-30: the camera's page away for a few seconds with its connection alive (an app switch, or a stall on
+    // mobile data) takes only the scoreboard down. The camera, still open, neither answered its hello nor offered,
+    // and the scoreboard stayed on "link lost" for minutes while each tap reached the camera a ping round late.
+    await step('the camera page away 8 s with its connection alive: the scoreboard is linked again within 2 s, a tap reaches the camera within 1 s', async () => {
+      await cam.evaluate(() => Object.assign(window as any, { __frozen: true, __drop: true, __deaf: true }));
+      const away = Date.now();
+      const sbDown = await until('the scoreboard misses its pongs', async () => (await chip(sb)) !== 'link ok' && `${Date.now() - away} ms`, 12_000);
+      await until('8 s away', async () => Date.now() - away >= 8000, 10_000);
+      const back = Date.now();
+      await cam.evaluate(() => {
+        Object.assign(window as any, { __frozen: false, __drop: false, __deaf: false });
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      const linked = await until('both link ok', async () => (await chip(cam)) === 'link ok' && (await chip(sb)) === 'link ok' && Date.now() - back, 10_000, 50);
+      const n = (await cameraLog(cam)).length;
+      const seen = until('camera has the tap', async () => (await cameraLog(cam)).length > n && Date.now(), 5000, 20);
+      const at = await tap(sb, 'left');
+      const ms = (await seen) - at;
+      await until('camera shows the score', () => cameraShows(cam, sb), 2000);
+      if (linked > 2000) throw new Error(`the scoreboard was linked again only after ${linked} ms`);
+      if (ms > 1000) throw new Error(`the tap reached the camera after ${ms} ms`);
+      return `scoreboard chip left link ok ${sbDown} into the 8 s; link ok on both ${linked} ms after the camera page came back; a tap on the camera after ${ms} ms`;
     });
 
     await step('a second scoreboard joins mid-match by its own code and takes the camera’s match (D14)', async () => {
