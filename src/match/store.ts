@@ -173,12 +173,21 @@ export class MatchStore {
 
   /**
    * The camera's whole match: shown from now on. Pending inputs for that match stay and are sent again; any
-   * other match this phone was showing is dropped (a new pairing, or the camera moved on meanwhile).
+   * other match this phone was showing is dropped (a new pairing, or the camera moved on meanwhile). A match this
+   * phone started while the camera could not hear it, later than the camera's, goes on instead: its start and
+   * inputs stay pending and are sent, and the camera takes it as it takes a new match from a linked scoreboard.
+   * An input already in the camera's log is answered: a drop cut the camera's reply, and resending it would only
+   * be answered `applied` again, which never settles it.
    */
   adopt(log: MatchLog): void {
-    const pending = (this.remote?.pending ?? []).filter((p) => p.matchId === log.matchId && p.input.body.type !== 'match.start');
-    this.remote = { confirmed: log, pending };
-    this.show('remote');
+    const applied = new Set(log.events.map((e) => e.id));
+    const pending = (this.remote?.pending ?? []).filter((p) => !applied.has(p.input.id));
+    const toCamera = this.sink?.toCamera ?? ((t: number) => t);
+    const start = pending.findLast((p) => p.input.body.type === 'match.start');
+    const newer = start && start.matchId !== log.matchId && toCamera(start.input.at) > (log.events[0]?.at ?? -Infinity) ? start.matchId : null;
+    const keep = pending.filter((p) => (p.matchId === log.matchId && p.input.body.type !== 'match.start') || p.matchId === newer);
+    this.remote = { confirmed: log, pending: keep };
+    this.show(newer ? 'local' : 'remote');
   }
 
   /**

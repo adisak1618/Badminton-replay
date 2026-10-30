@@ -2,6 +2,8 @@
 // tested without a network:
 // - both phones ping every 2 s; 3 missed pongs mark the link down and the chip "reconnecting" (amber), and
 //   after 30 s down it turns red ("link lost") while the phones keep trying;
+// - each phone judges by its own pongs, so a stall can take one phone down and not the other: a phone that is
+//   down and gets a pong again counts the link open at once (link.ts), since the other one may never offer;
 // - the camera (the offerer) restarts ICE through the helper's mailbox when ICE reports `failed` or after
 //   10 s without pongs, and builds a fresh connection when the channel is gone or a restart did not bring
 //   the link back;

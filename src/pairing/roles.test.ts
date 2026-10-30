@@ -257,6 +257,60 @@ describe('one camera, two scoreboards (D14)', () => {
     expect(p.mirror.getSnapshot().events).toHaveLength(1);
   });
 
+  it('an input the camera applied while a drop cut its reply leaves the pending list at the reopen, instead of being resent forever', () => {
+    const p = setup(1);
+    const [a] = p.sides;
+    a.store.start(makeConfig());
+    a.connect();
+    a.camPort.open = false; // the drop begins: the scoreboard's input still arrives, the camera's event and result do not
+    a.store.emit({ type: 'point', team: 'A' });
+    expect(p.camera().score).toEqual({ A: 1, B: 0 });
+    expect(a.store.pending()).toHaveLength(1);
+    a.drop();
+    a.connect();
+    expect(a.shown()).toEqual(p.camera());
+    expect(a.store.pending()).toHaveLength(0);
+    const sent = a.sbPort.sent.length;
+    a.connect(); // a later reopen resends nothing
+    expect(a.sbPort.sent.slice(sent).filter((m) => m.t === 'input')).toEqual([]);
+  });
+
+  it('a new match started on a scoreboard while the link is down replaces the camera’s at the reopen, with its points', () => {
+    const p = setup(1);
+    const [a] = p.sides;
+    a.store.start(makeConfig());
+    a.connect();
+    a.store.emit({ type: 'point', team: 'A' });
+    a.drop();
+    p.advance(60_000);
+    a.store.start(makeConfig({ points: 11 })); // the next match, while the camera cannot hear this phone
+    a.store.emit({ type: 'point', team: 'B' });
+    a.store.emit({ type: 'point', team: 'B' });
+    a.connect();
+    expect(p.hub.current()!.matchId).toBe(a.store.getSnapshot().match!.matchId);
+    expect(p.hub.current()!.config.pointsToWin).toBe(11);
+    expect(a.shown()!.score).toEqual({ A: 0, B: 2 });
+    expect(p.camera()).toEqual(a.shown());
+    expect(a.store.pending()).toHaveLength(0);
+  });
+
+  it('a match started on a scoreboard while it was down gives way to a newer one the camera took meanwhile', () => {
+    const p = setup();
+    const [a, b] = p.sides;
+    a.store.start(makeConfig());
+    a.connect();
+    b.connect();
+    a.drop();
+    p.advance(10_000);
+    a.store.start(makeConfig({ points: 11 })); // unheard
+    p.advance(10_000);
+    b.store.start(makeConfig({ points: 15 })); // linked: the camera's match from now
+    a.connect();
+    expect(p.hub.current()!.config.pointsToWin).toBe(15);
+    expect(a.store.getSnapshot().match!.matchId).toBe(b.store.getSnapshot().match!.matchId);
+    expect(a.store.pending()).toHaveLength(0);
+  });
+
   it('inputs that make no sense now are ignored and not shown (both scoreboards end the interval)', () => {
     const p = setup();
     const [a, b] = p.sides;
