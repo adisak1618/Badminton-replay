@@ -5,7 +5,7 @@ import { other, reasonsOn, reduce, type Team } from '../../engine';
 import type { LocalSource } from '../../link/local';
 import type { SlotsSnapshot } from '../../pairing/slots';
 import { saveLogo } from '../../match/persist';
-import type { Corner, LogoSize, TablePlace } from '../../overlay';
+import type { Corner, LogoSize, Motion, TablePlace } from '../../overlay';
 import { DIM_AFTER_MS, LOW_MINUTES, OVERLAY_DELAYS_MS, QUALITIES, type Quality } from '../../recording/config';
 import type { CameraController } from '../../recording/controller';
 import { LOGO_TYPES, prepareLogo } from '../../recording/logo';
@@ -283,6 +283,12 @@ export function CameraScreen({ ctrl, demo, slots, onToggleDemo, onPair, onUnpair
                   value={settings.delayMs}
                   options={OVERLAY_DELAYS_MS.map((d) => [d, `${d / 1000} s`] as [number, string])}
                   onChange={(delayMs) => ctrl.setSettings({ delayMs })}
+                />
+                <Seg
+                  label="Motion"
+                  value={settings.overlayMotion}
+                  options={[['full', 'Full'], ['light', 'Light'], ['none', 'None']] as Array<[Motion, string]>}
+                  onChange={(overlayMotion) => ctrl.setSettings({ overlayMotion })}
                 />
                 <Seg label="Score at" value={settings.scoreCorner} options={CORNER_OPTIONS} onChange={(scoreCorner) => ctrl.setSettings({ scoreCorner })} />
                 <Seg label="Score size" value={settings.scoreSize} options={SIZE_OPTIONS} onChange={(scoreSize) => ctrl.setSettings({ scoreSize })} />

@@ -9,12 +9,18 @@ import type { PeerInfo, RecCommand, RecReport, ScoreSource } from '../link/sourc
 import {
   DEFAULT_THEME,
   OverlayClock,
+  cardPlace,
+  cardShown,
+  endCardSize,
   overlayLayout,
   panelMaxHeight,
   panelScale,
   panelSize,
   statsTableSize,
+  type Box,
+  type EndCard,
   type Layout,
+  type Motion,
   type OverlayModel,
   type StatsOptions,
   type StatsTable,
@@ -50,6 +56,17 @@ export interface CameraSnapshot {
   fps: number;
   /** The overlay logo's size, when one is set (the image itself stays in the controller). */
   logo: { width: number; height: number } | null;
+}
+
+/** Below this many frames a second when a segment starts, the full motion set is recorded as the light one. */
+export const LIGHT_MOTION_BELOW_FPS = 25;
+
+/** The overlay's font (Kanit) must be in before a recording starts: its boxes are measured with it. */
+async function overlayFonts(): Promise<void> {
+  const fonts = typeof document === 'undefined' ? null : document.fonts;
+  if (!fonts?.load) return;
+  const loaded = Promise.all([500, 600, 700, 800].map((w) => fonts.load(`${w} 30px Kanit`, 'กขค ABC 012')));
+  await Promise.race([loaded, new Promise((r) => setTimeout(r, 3000))]).catch(() => {});
 }
 
 export function pickMimeType(): string | null {
@@ -100,7 +117,7 @@ export class CameraController {
   private startingRec = false;
   private logo: Logo | null = null;
   private measure = document.createElement('canvas').getContext('2d')!;
-  private sized: { model: OverlayModel; u: number; size: { w: number; h: number } } | null = null;
+  private sized: { model: OverlayModel; u: number; fonts: number; size: { w: number; h: number } } | null = null;
   /** The match summary that was on screen while recording: it ends with the recording (R-TAG-7). */
   private matchCardRecorded: number | null = null;
   private tableSized: { table: StatsTable; u: number; fonts: number; size: { w: number; h: number } } | null = null;
@@ -138,22 +155,26 @@ export class CameraController {
         stale: m.link !== 'paired',
         stats: this.statsOptions(),
       });
-      const layout = this.layout(model);
-      if (layout.score && this.snap.session.phase === 'recording') {
-        const before = this.snap.session;
-        this.dispatch({ type: 'panelBox', at: now, box: layout.score });
-        if (this.snap.session !== before) this.saveMeta(); // a new game column or the band: rare
-      }
+      const clock = { now: this.overlayClock.cutoff, motion: seg ? (seg.overlay.motion ?? 'none') : s.overlayMotion };
       let card = model?.card ?? null;
       if (card?.kind === 'match') {
         if (isActive(this.snap.session.phase)) this.matchCardRecorded = card.seq;
         else if (this.matchCardRecorded === card.seq) card = null; // the recording stopped: the match card goes
       }
+      if (!cardShown(card, clock.now, clock.motion)) card = null;
+      const layout = this.layout(model, card);
+      if (layout.score && this.snap.session.phase === 'recording') {
+        const before = this.snap.session;
+        this.dispatch({ type: 'panelBox', at: now, box: layout.score });
+        if (this.snap.session !== before) this.saveMeta(); // a new game column or the band: rare
+      }
+      const corner = seg ? seg.overlay.corner : s.scoreCorner;
       return {
-        score: model && layout.score && { model, box: layout.score, u: this.panelU() },
+        score: model && layout.score && { model, box: layout.score, u: this.panelU(), bandAbove: corner === 'bl' || corner === 'br' },
         logo: this.logo && layout.logo ? { image: this.logo.image, box: layout.logo } : null,
         table: model?.table && layout.table ? { model: model.table, box: layout.table, u: this.panelU() } : null,
-        card: card ? { model: card, u: this.panelU() } : null,
+        card: card && layout.card ? { model: card, box: layout.card } : null,
+        clock,
       };
     });
     this.compositor.setSize(QUALITIES[settings.quality].width, QUALITIES[settings.quality].height);
@@ -162,6 +183,7 @@ export class CameraController {
     this.mirror.subscribe(() => this.onMirror());
     document.addEventListener('visibilitychange', this.onVisibility);
     document.fonts?.addEventListener?.('loadingdone', () => this.fontsEpoch++);
+    void overlayFonts().then(() => this.fontsEpoch++);
     setInterval(() => this.tick(), 1000);
     void this.checkOpfs();
     void this.refreshStorage();
@@ -205,8 +227,8 @@ export class CameraController {
   /** The panel's size follows its content; measured once per change of the overlay model, not per frame. */
   private panelSizeFor(model: OverlayModel): { w: number; h: number } {
     const u = this.panelU();
-    if (this.sized?.model !== model || this.sized.u !== u)
-      this.sized = { model, u, size: panelSize(this.measure, model, u) };
+    if (this.sized?.model !== model || this.sized.u !== u || this.sized.fonts !== this.fontsEpoch)
+      this.sized = { model, u, fonts: this.fontsEpoch, size: panelSize(this.measure, model, u) };
     return this.sized.size;
   }
 
@@ -227,18 +249,23 @@ export class CameraController {
     return this.tableSized.size;
   }
 
-  /** Where the score panel, the logo and the stats table go in the current frame (corners and sizes are C1 settings). */
-  layout(model: OverlayModel | null = this.lastModel()): Layout {
+  /**
+   * Where the score panel, the logo and the stats table go in the current frame (corners and sizes are C1 settings),
+   * and the end-of-game card when it shows: the live table is hidden under it (the card has the same numbers).
+   */
+  layout(model: OverlayModel | null = this.lastModel(), card: EndCard | null = null): Layout & { card: Box | null } {
     const { width, height } = this.compositor.canvas;
     const s = this.snap.settings;
     const logo = this.logo ? { corner: s.logoCorner, size: s.logoSize, aspect: this.logo.width / this.logo.height } : null;
-    return overlayLayout(width, height, {
+    const lay = overlayLayout(width, height, {
       scoreCorner: s.scoreCorner,
       score: model && this.panelSizeFor(model),
       scoreMaxH: panelMaxHeight(this.panelU()),
       logo,
-      table: model?.table ? { place: s.statsPlace, ...this.tableSizeFor(model.table) } : null,
+      table: model?.table && !card ? { place: s.statsPlace, ...this.tableSizeFor(model.table) } : null,
     });
+    const placed = card ? cardPlace(width, height, endCardSize(card, this.panelU()), [lay.score, lay.logo]) : null;
+    return { ...lay, card: placed?.box ?? null };
   }
 
   private lastModel(): OverlayModel | null {
@@ -442,7 +469,12 @@ export class CameraController {
 
     const meta = await this.bindRecording();
     this.meta = meta;
+    await overlayFonts();
     const { settings } = this.snap;
+    // The motion set is fixed for the segment and recorded, so a re-render draws the same frames: a phone that is
+    // already behind when the segment starts records the light set instead of the full one.
+    const fps = this.compositor.fps;
+    const motion: Motion = settings.overlayMotion === 'full' && fps > 0 && fps < LIGHT_MOTION_BELOW_FPS ? 'light' : settings.overlayMotion;
     const q = QUALITIES[settings.quality];
     const { width, height } = this.compositor.canvas;
     const layout = this.layout();
@@ -464,6 +496,7 @@ export class CameraController {
           delayMs: settings.delayMs,
           mirrored: settings.mirrored,
           theme: DEFAULT_THEME.id,
+          motion,
           logo: layout.logo && { box: layout.logo, corner: settings.logoCorner, size: settings.logoSize },
           stats:
             settings.statsTeam === 'off' && !settings.endCard

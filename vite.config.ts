@@ -35,7 +35,8 @@ export default defineConfig({
       },
       workbox: {
         // wasm: the QR decoder for S2 (zxing-wasm, ~0.9 MB), so pairing works from the installed app offline-first.
-        globPatterns: ['**/*.{js,css,html,svg,png,webmanifest,wasm}'],
+        // woff2: the overlay font (Kanit), so the camera draws the same words offline.
+        globPatterns: ['**/*.{js,css,html,svg,png,webmanifest,wasm,woff2}'],
         navigateFallbackDenylist: [/^\/api\//],
       },
     }),

@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { reduce } from '../engine';
 import { doublesConfig, makeConfig, Match } from '../engine/test-utils';
-import { bandText, DEFAULT_THEME, drawLogo, drawOverlay, PANEL, panelMaxHeight, panelSize } from './draw';
+import { bandOf, bandText, clockText, DEFAULT_THEME, drawLogo, drawOverlay, PANEL, panelMaxHeight, panelSize, type Box } from './draw';
 import { inset, overlayLayout, panelScale, type Corner } from './layout';
-import { OverlayClock, overlayModel, playersLabel, stateAt } from './model';
+import { OverlayClock, overlayModel, playersLabel, replay, sideAnim, stateAt, type OverlayModel } from './model';
+import { MOTION, progress, type Motion } from './motion';
+import { fakeCtx, textSpan, words, type Call } from './test-ctx';
+import { WORDS } from './words';
 
 const plain = { mirrored: false, stale: false };
 
@@ -33,7 +36,7 @@ describe('overlay model', () => {
     m.point('A').startGame().scoreTo(11, 3);
     const iv = overlayModel(m.cfg, m.state, plain);
     expect(iv.phase).toBe('interval');
-    expect(bandText(iv)).toBe('Interval');
+    expect(bandText(iv)).toBe(WORDS.interval);
     m.endInterval().scoreTo(20, 3);
     expect(overlayModel(m.cfg, m.state, plain).flag).toEqual({ kind: 'matchPoint', team: 'A' });
     m.point('A');
@@ -41,7 +44,7 @@ describe('overlay model', () => {
     expect(fin.phase).toBe('matchOver');
     expect(fin.winner).toBe('A');
     expect(fin.left.serving || fin.right.serving).toBe(false);
-    expect(bandText(fin)).toBe('Match');
+    expect(bandText(fin)).toBe(WORDS.matchOver);
   });
 
   it('names the doubles server and court (R-SCORE-3 sequence)', () => {
@@ -51,7 +54,7 @@ describe('overlay model', () => {
 
   it('marks a stale link above every other status', () => {
     const m = new Match(makeConfig()).scoreTo(20, 15);
-    expect(bandText(overlayModel(m.cfg, m.state, { mirrored: false, stale: true }))).toBe('Link lost');
+    expect(bandText(overlayModel(m.cfg, m.state, { mirrored: false, stale: true }))).toBe(WORDS.stale);
   });
 });
 
@@ -104,24 +107,6 @@ describe('stateAt and the overlay delay (R-REC-4)', () => {
   });
 });
 
-/** A recording stand-in for CanvasRenderingContext2D: text is 0.6 em per character. */
-function fakeCtx() {
-  const calls: Array<{ op: string; args: unknown[]; fill: string; font: string }> = [];
-  const ctx = {
-    fillStyle: '',
-    globalAlpha: 1,
-    font: '10px x',
-    textAlign: 'left',
-    textBaseline: 'alphabetic',
-    measureText(t: string) {
-      const px = Number(/(\d+(?:\.\d+)?)px/.exec(this.font)?.[1] ?? 10);
-      return { width: t.length * px * 0.6 };
-    },
-  } as Record<string, unknown> & { fillStyle: string; font: string };
-  for (const op of ['save', 'restore', 'beginPath', 'moveTo', 'lineTo', 'arc', 'arcTo', 'closePath', 'fill', 'clip', 'fillRect', 'fillText', 'drawImage'])
-    ctx[op] = (...args: unknown[]) => calls.push({ op, args, fill: ctx.fillStyle, font: ctx.font });
-  return { ctx: ctx as unknown as CanvasRenderingContext2D, calls };
-}
 
 describe('players on the panel (round 2)', () => {
   it('doubles shows NAME1 / NAME2 in capitals, singles the one name', () => {
@@ -228,7 +213,7 @@ describe('game columns (round 3)', () => {
     const d = overlayModel(f2.cfg, f2.state, plain);
     expect(d.phase).toBe('matchOver');
     expect(d.games.map((x) => x.live)).toEqual([false, false]);
-    expect(bandText(d)).toBe('Draw');
+    expect(bandText(d)).toBe(WORDS.draw(1, 1));
     const f1 = new Match(makeConfig({ format: 'fixed1' })).game(21, 3);
     expect(overlayModel(f1.cfg, f1.state, plain).games).toHaveLength(1);
   });
@@ -242,119 +227,221 @@ describe('game columns (round 3)', () => {
   });
 });
 
-describe('drawOverlay: BWF TV panel (round 4)', () => {
-  const U = 1; // 1080p, size M
-  const at = (b: { x: number; y: number }, m: Match, opts = plain, u = U) => {
-    const model = overlayModel(m.cfg, m.state, opts);
-    const r = fakeCtx();
-    const size = panelSize(r.ctx, model, u);
-    const box = { x: b.x, y: b.y, ...size };
-    const d = fakeCtx();
-    drawOverlay(d.ctx, model, box, u);
-    const texts = d.calls.filter((c) => c.op === 'fillText');
-    return { box, model, calls: d.calls, texts, words: texts.map((t) => String(t.args[0])) };
-  };
-  const origin = { x: 43, y: 43 };
-  const inBox = (box: { x: number; y: number; w: number; h: number }, calls: ReturnType<typeof fakeCtx>['calls']) => {
-    for (const r of calls.filter((c) => c.op === 'fillRect' || c.op === 'fillText')) {
-      const [x, y] = (r.op === 'fillRect' ? r.args : r.args.slice(1)) as number[];
-      expect(x).toBeGreaterThanOrEqual(box.x - 0.001);
-      expect(x).toBeLessThanOrEqual(box.x + box.w + 0.001);
-      expect(y).toBeGreaterThanOrEqual(box.y - 0.001);
-      expect(y).toBeLessThanOrEqual(box.y + box.h + 0.001);
-    }
-  };
-  const named = (a: string, b: string) =>
-    makeConfig({
-      doubles: true,
-      teams: {
-        A: { name: 'A', color: 0, players: [a, b], startRight: 0 },
-        B: { name: 'B', color: 1, players: ['Bank', 'Tao'], startRight: 0 },
-      },
-    });
+describe('the status badge: BWF words, the countdown, deuce (broadcast design)', () => {
+  const band = (m: Match, opts = plain) => bandOf(overlayModel(m.cfg, m.state, opts));
 
+  it('names every state in BWF English, the stale link above all', () => {
+    expect(band(new Match(makeConfig()).scoreTo(5, 3))).toBeNull();
+    expect(band(new Match(makeConfig()).scoreTo(20, 13))!.text).toBe('GAME POINT');
+    expect(band(new Match(makeConfig()).game(21, 10).scoreTo(20, 4))!.text).toBe('MATCH POINT');
+    expect(band(new Match(makeConfig()).scoreTo(11, 4))!.text).toBe('INTERVAL');
+    expect(band(new Match(makeConfig()).game(21, 10, { start: false }))!.text).toBe('END OF GAME 1');
+    expect(band(new Match(makeConfig()).game(21, 10).game(21, 12))!.text).toBe('END OF MATCH');
+    expect(band(new Match(makeConfig({ format: 'fixed2' })).game(21, 15).game(15, 21))!.text).toBe('DRAW 1–1');
+    expect(band(new Match(makeConfig()).scoreTo(20, 13), { mirrored: false, stale: true })!.kind).toBe('stale');
+    expect(band(new Match(makeConfig()).scoreTo(20, 20))!.text).toBe('DEUCE 20–20');
+  });
+
+  it('deuce is level at pointsToWin - 1 or more with nobody on game point: 20-20, 25-25, not 21-20, not 29-29; 14-14 in a game to 15', () => {
+    const at = (cfg: ReturnType<typeof makeConfig>, a: number, b: number) => overlayModel(cfg, new Match(cfg).scoreTo(a, b).state, plain);
+    const c21 = makeConfig();
+    expect(at(c21, 19, 19).deuce).toBe(false);
+    expect(at(c21, 20, 20).deuce).toBe(true);
+    expect(at(c21, 25, 25).deuce).toBe(true);
+    expect(at(c21, 21, 20)).toMatchObject({ deuce: false, flag: { kind: 'gamePoint' } });
+    expect(at(c21, 29, 29)).toMatchObject({ deuce: false, flag: { kind: 'gamePoint' } }); // both sides one point from the cap
+    expect(at(makeConfig({ points: 15 }), 14, 14).deuce).toBe(true);
+  });
+
+  it('the interval and the break count down from phaseSince + intervalMs; the deciding game says change ends', () => {
+    const m = new Match(makeConfig()).scoreTo(11, 4);
+    const s = m.state;
+    const iv = band(m)!;
+    expect(iv.clock).toBe(s.phaseSince! + 60_000);
+    expect(iv.total).toBe(60_000);
+    const gap = band(new Match(makeConfig()).game(21, 10, { start: false }))!;
+    expect(gap).toMatchObject({ total: 120_000, clockLabel: 'BREAK' });
+    const decider = new Match(makeConfig()).game(21, 10).game(10, 21).scoreTo(11, 3);
+    expect(band(decider)!.text).toBe('INTERVAL · CHANGE ENDS');
+    expect(band(new Match(makeConfig()).game(21, 10).game(10, 21).scoreTo(11, 3).endInterval())).toBeNull();
+    expect([clockText(60_000), clockText(47_001), clockText(1), clockText(0), clockText(-5)]).toEqual(['1:00', '0:48', '0:01', '0:00', '0:00']);
+  });
+});
+
+/** Draws the panel for a match into a box at the top-left inset; `o` is the frame's clock and options. */
+function panel(m: Match | OverlayModel, o: { now?: number; motion?: Motion; bandAbove?: boolean } = {}, opts = plain, u = 1) {
+  const model = m instanceof Match ? { ...overlayModel(m.cfg, m.state, opts), anim: sideAnim(replay(m.cfg, m.events, Infinity).anim, overlayModel(m.cfg, m.state, opts)) } : m;
+  const size = panelSize(fakeCtx().ctx, model, u);
+  const box: Box = { x: 43, y: 43, ...size };
+  const d = fakeCtx();
+  drawOverlay(d.ctx, model, box, u, DEFAULT_THEME, o);
+  return { box, model, calls: d.calls, texts: d.calls.filter((c) => c.op === 'fillText'), words: words(d.calls) };
+}
+const inBox = (box: Box, calls: readonly Call[]) => {
+  for (const c of calls.filter((x) => x.op === 'fillRect' || x.op === 'fillText')) {
+    const [x, y] = (c.op === 'fillRect' ? c.args : c.args.slice(1)) as number[];
+    expect(x).toBeGreaterThanOrEqual(box.x - 0.001);
+    expect(x).toBeLessThanOrEqual(box.x + box.w + 0.001);
+    expect(y).toBeGreaterThanOrEqual(box.y - 0.001);
+    expect(y).toBeLessThanOrEqual(box.y + box.h + 0.001);
+  }
+};
+const named = (a: string, b: string) =>
+  makeConfig({
+    doubles: true,
+    teams: {
+      A: { name: 'A', color: 0, players: [a, b], startRight: 0 },
+      B: { name: 'B', color: 1, players: ['Bank', 'Tao'], startRight: 0 },
+    },
+  });
+const lead = PANEL.padL + PANEL.chipW + PANEL.chipGap;
+const rows = 2 * PANEL.row + PANEL.rowGap;
+
+describe('drawOverlay: the BWF Championship panel (broadcast design)', () => {
   it('is only as wide as its names: short names make a small panel, longer ones a wider one, capped', () => {
-    const short = at(origin, new Match(named('Goh', 'Izz')).point('A'));
-    const long = at(origin, new Match(named('Chaiyakulsiri', 'Wongsuwanchai')).point('A'));
-    const huge = at(origin, new Match(named('Supercalifragilisticexpialidocious', 'Pneumonoultramicroscopic')).point('A'));
+    const short = panel(new Match(makeConfig()).point('A')); // singles A v B: the name slot is at its minimum
+    const long = panel(new Match(named('Chaiyakulsiri', 'Wongsuwanchai')).point('A'));
+    const huge = panel(new Match(named('Supercalifragilisticexpialidocious', 'Pneumonoultramicroscopic')).point('A'));
+    expect(short.box.w).toBe(lead + PANEL.nameMin + PANEL.nameGap + PANEL.slot + PANEL.padR + PANEL.cellGap + PANEL.live);
     expect(short.box.w).toBeLessThan(long.box.w);
     expect(long.box.w).toBeLessThan(huge.box.w);
-    // Width = padding + name slot + shuttle slot + one cell per game; the name slot stops at the cap.
-    const fixed = 2 * PANEL.edge + PANEL.namePadL + PANEL.nameGap + PANEL.shuttle + PANEL.namePadR + PANEL.cellGap + PANEL.cell;
-    expect(huge.box.w).toBe(fixed + PANEL.nameMax);
+    expect(huge.box.w).toBe(lead + PANEL.nameMax + PANEL.nameGap + PANEL.slot + PANEL.padR + PANEL.cellGap + PANEL.live);
     expect(huge.words.find((w) => w.startsWith('SUPER'))!.endsWith('…')).toBe(true);
     expect(long.words).toContain('CHAIYAKULSIRI / WONGSUWANCHAI');
+    inBox(long.box, long.calls);
   });
 
-  it('keeps padding between the name and the first score cell', () => {
-    const { texts, calls } = at(origin, new Match(named('Chaiyakulsiri', 'Wongsuwanchai')).point('B'));
+  it('keeps the shuttle slot between the name and the first score cell', () => {
+    const { texts } = panel(new Match(named('Chaiyakulsiri', 'Wongsuwanchai')).point('B'));
     const name = texts.find((t) => String(t.args[0]).startsWith('CHAI'))!;
-    const px = Number(/(\d+(?:\.\d+)?)px/.exec(name.font)![1]);
-    const nameEnd = (name.args[1] as number) + String(name.args[0]).length * px * 0.6;
-    const score = texts.find((t) => t.args[0] === '0')!; // A's live score, centred in the first cell
-    const cellLeft = (score.args[1] as number) - PANEL.cell / 2;
-    expect(cellLeft - nameEnd).toBeGreaterThanOrEqual(PANEL.nameGap + PANEL.shuttle + PANEL.namePadR + PANEL.cellGap - 1);
-    inBox(at(origin, new Match(named('Chaiyakulsiri', 'Wongsuwanchai')).point('B')).box, calls);
+    const score = texts.find((t) => t.args[0] === '0')!; // A's live score, centred in the live cell
+    const [from, to] = textSpan(score);
+    expect((from + to) / 2 - PANEL.live / 2 - textSpan(name)[1]).toBeGreaterThanOrEqual(PANEL.nameGap + PANEL.slot + PANEL.padR + PANEL.cellGap - 1);
   });
 
-  it('cells run in game order: finished games white with dark digits, the live game grey with white, at the right end', () => {
+  it('finished games are white with the winner dark and the loser grey; the live game is the two-tone red column, last', () => {
     const m = new Match(makeConfig()).game(21, 15).game(17, 21).scoreTo(5, 3);
-    const { words, texts, calls, box } = at(origin, m);
-    expect(words).toEqual(['A', '21', '17', '5', 'B', '15', '21', '3']);
+    const { texts, calls, box } = panel(m);
+    const digits = texts.filter((t) => /^\d+$/.test(String(t.args[0])));
+    expect(digits.map((t) => t.args[0])).toEqual(['21', '15', '17', '21', '5', '3']);
     const D = DEFAULT_THEME;
-    expect(texts.filter((t) => /^\d+$/.test(String(t.args[0]))).map((t) => t.fill)).toEqual([D.doneFg, D.doneFg, D.liveFg, D.doneFg, D.doneFg, D.liveFg]);
-    const cellFills = calls.filter((c) => c.op === 'fill' && (c.fill === D.doneBg || c.fill === D.liveBg)).map((c) => c.fill);
-    expect(cellFills).toEqual([D.doneBg, D.doneBg, D.liveBg, D.doneBg, D.doneBg, D.liveBg]);
-    const xs = texts.filter((t) => /^\d+$/.test(String(t.args[0]))).slice(0, 3).map((t) => t.args[1] as number);
+    expect(digits.map((t) => t.fill)).toEqual([D.doneWin, D.doneLose, D.doneLose, D.doneWin, D.liveFg, D.liveFg]);
+    expect(calls.filter((c) => c.op === 'fillRect' && c.fill === D.doneBg)).toHaveLength(4);
+    expect(calls.some((c) => c.op === 'fillRect' && c.fill === D.liveTop)).toBe(true);
+    expect(calls.some((c) => c.op === 'fill' && c.fill === D.liveBot)).toBe(true);
+    const xs = digits.filter((_, i) => i % 2 === 0).map((t) => (textSpan(t)[0] + textSpan(t)[1]) / 2); // centres
     expect(xs[0]).toBeLessThan(xs[1]);
     expect(xs[1]).toBeLessThan(xs[2]);
-    expect(xs[2] + PANEL.cell / 2).toBeLessThanOrEqual(box.x + box.w - PANEL.edge + 0.001);
+    expect(xs[2] + PANEL.live / 2).toBeCloseTo(box.x + box.w, 3);
     inBox(box, calls);
   });
 
-  it('a new game adds a cell and widens the panel', () => {
+  it('a finished game adds a white cell and widens the panel', () => {
     const m = new Match(makeConfig()).point('A');
-    const one = at(origin, m).box.w;
+    const one = panel(m).box.w;
     m.game(21, 15).point('B');
-    expect(at(origin, m).box.w).toBe(one + PANEL.cell + PANEL.cellGap);
+    expect(panel(m).box.w).toBe(one + PANEL.cellGap + PANEL.done);
   });
 
-  it('the status band shows while a state applies, and the panel is taller only then', () => {
-    const rows = 2 * PANEL.edge + 2 * PANEL.row + PANEL.rowGap;
+  it('the badge shows while a state applies, red, under the rows; the panel is taller only then', () => {
     const withBand = rows + PANEL.bandGap + PANEL.band;
-    const band = (m: Match, opts = plain) => {
-      const r = at(origin, m, opts);
-      return { h: r.box.h, text: r.words[r.words.length - 1] };
-    };
-    expect(band(new Match(makeConfig()).scoreTo(5, 3)).h).toBe(rows);
-    expect(band(new Match(makeConfig()).scoreTo(20, 13))).toEqual({ h: withBand, text: 'Game Point' });
-    expect(band(new Match(makeConfig()).game(21, 10).scoreTo(20, 4))).toEqual({ h: withBand, text: 'Match Point' });
-    expect(band(new Match(makeConfig()).scoreTo(11, 4))).toEqual({ h: withBand, text: 'Interval' });
-    expect(band(new Match(makeConfig()).game(21, 10, { start: false }))).toEqual({ h: withBand, text: 'Game' });
-    expect(band(new Match(makeConfig()).game(21, 10).game(21, 12))).toEqual({ h: withBand, text: 'Match' });
-    expect(band(new Match(makeConfig({ format: 'fixed2' })).game(21, 15).game(15, 21))).toEqual({ h: withBand, text: 'Draw' });
-    expect(band(new Match(makeConfig()).scoreTo(5, 3), { mirrored: false, stale: true })).toEqual({ h: withBand, text: 'Link lost' });
+    const plainPanel = panel(new Match(makeConfig()).scoreTo(5, 3));
+    expect(plainPanel.box.h).toBe(rows);
+    for (const m of [new Match(makeConfig()).scoreTo(20, 13), new Match(makeConfig()).scoreTo(20, 20), new Match(makeConfig()).game(21, 10, { start: false })]) {
+      const p = panel(m, { now: m.events[m.events.length - 1].at });
+      expect(p.box.h).toBe(withBand);
+      const badge = p.calls.find((c) => c.op === 'fill' && c.fill.includes(DEFAULT_THEME.badge[0]))!;
+      expect(JSON.parse(badge.fill).stops.map((x: [number, string]) => x[1])).toEqual(DEFAULT_THEME.badge);
+      expect(p.texts.at(-1)!.args[2] as number).toBeGreaterThan(p.box.y + rows);
+    }
+    const stale = panel(new Match(makeConfig()).scoreTo(5, 3), {}, { mirrored: false, stale: true });
+    expect(stale.calls.some((c) => c.op === 'fill' && c.fill.includes(DEFAULT_THEME.stale[0]))).toBe(true);
+    expect(stale.calls.some((c) => c.fill.includes(DEFAULT_THEME.badge[0]))).toBe(false); // never red: it is not a game state
     expect(panelMaxHeight(1)).toBe(withBand);
   });
 
-  it('a small grey shuttle at the end of the serving team name cell only', () => {
-    const { calls } = at(origin, new Match(makeConfig()).point('B'));
+  it('the interval badge counts down with the frame time and a line that drains; past the end only the word stays', () => {
+    const m = new Match(makeConfig()).scoreTo(11, 4);
+    const since = m.state.phaseSince!;
+    const at = (now: number) => panel(m, { now });
+    expect(at(since + 13_000).words).toEqual(expect.arrayContaining(['INTERVAL', '0:47']));
+    const line = (now: number) => at(now).calls.filter((c) => c.op === 'fillRect' && c.fill === 'rgba(255,255,255,0.85)')[0].args[2] as number;
+    expect(line(since + 30_000) / line(since + 15_000)).toBeCloseTo(30 / 45, 5);
+    expect(at(since + 60_000).words).not.toContain('0:00');
+    expect(at(since + 60_000).words).toContain('INTERVAL');
+    // the break between games puts BREAK before its clock when there is room, and only the clock in a narrow panel
+    const g = new Match(named('Chaiyakulsiri', 'Wongsuwanchai')).game(21, 10, { start: false });
+    expect(panel(g, { now: g.state.phaseSince! + 8000 }).words).toContain('BREAK 1:52');
+    const narrow = new Match(makeConfig()).game(21, 10, { start: false });
+    const w = panel(narrow, { now: narrow.state.phaseSince! + 8000 }).words;
+    expect(w).toContain('1:52');
+    expect(w).toContain('END OF GAME 1');
+  });
+
+  it('after the match the winner row shows WIN in the shuttle slot and the other row is dimmed', () => {
+    const m = new Match(doublesConfig()).game(21, 10).game(21, 12);
+    const { texts, model } = panel(m);
+    const win = texts.find((t) => t.args[0] === 'WIN')!;
+    const winner = model.left.team === m.state.winner ? model.left : model.right;
+    const row = texts.find((t) => t.args[0] === winner.players)!;
+    expect(win.args[2] as number).toBeCloseTo(row.args[2] as number, 5);
+    const loser = model.left === winner ? model.right : model.left;
+    expect(texts.find((t) => t.args[0] === loser.players)!.alpha).toBeLessThan(1);
+    expect(texts.find((t) => t.args[0] === winner.players)!.alpha).toBe(1);
+  });
+
+  it('in a bottom corner the badge goes above the rows, so the rows stay put when it appears', () => {
+    const m = new Match(makeConfig()).scoreTo(20, 13);
+    const H = 1080;
+    const below = panel(m);
+    const above = panel(m, { bandAbove: true });
+    const nameY = (p: ReturnType<typeof panel>) => p.texts.find((t) => t.args[0] === 'A')!.args[2] as number;
+    expect(nameY(above) - nameY(below)).toBeCloseTo(PANEL.bandGap + PANEL.band, 5);
+    const badgeY = (p: ReturnType<typeof panel>) => p.texts.find((t) => t.args[0] === 'GAME POINT')!.args[2] as number;
+    expect(badgeY(above)).toBeLessThan(nameY(above));
+    // Bottom-anchored boxes: the rows' bottom edge is the same with and without the badge.
+    const bottomOfRows = (p: ReturnType<typeof panel>, boxY: number) => boxY + (p.box.h - rows) * 0 + p.box.h;
+    const yNo = H - 43 - rows;
+    const yBand = H - 43 - (rows + PANEL.bandGap + PANEL.band);
+    expect(bottomOfRows(panel(new Match(makeConfig()).scoreTo(5, 3)), yNo)).toBe(bottomOfRows(above, yBand));
+  });
+
+  it('a red shuttle at the end of the serving row only', () => {
+    const { calls } = panel(new Match(makeConfig()).point('B'));
     expect(calls.filter((c) => c.op === 'arc')).toHaveLength(1);
     expect(calls.find((c) => c.op === 'arc')!.fill).toBe(DEFAULT_THEME.shuttle);
   });
 
   it('sizes S, M and L scale the whole panel', () => {
     const m = new Match(named('Chaiyakulsiri', 'Wongsuwanchai')).game(21, 15).scoreTo(20, 13);
-    const [s, md, l] = (['small', 'medium', 'large'] as const).map((z) => at(origin, m, plain, panelScale(1080, z)).box);
+    const [s, md, l] = (['small', 'medium', 'large'] as const).map((z) => panel(m, {}, plain, panelScale(1080, z)).box);
     expect(s.w).toBeLessThan(md.w);
     expect(md.w).toBeLessThan(l.w);
     expect(l.h / md.h).toBeCloseTo(1.25, 1);
-    expect(at(origin, m, plain, panelScale(720, 'medium')).box.h).toBe(Math.round(md.h * (720 / 1080)));
+    expect(panel(m, {}, plain, panelScale(720, 'medium')).box.h).toBe(Math.round(md.h * (720 / 1080)));
   });
 
   it('the mirrored panel puts the other team on top', () => {
-    const { words } = at(origin, new Match(doublesConfig()).point('A'), { mirrored: true, stale: false });
-    expect(words[0]).toBe('BANK / TAO');
+    expect(panel(new Match(doublesConfig()).point('A'), {}, { mirrored: true, stale: false }).words[0]).toBe('BANK / TAO');
+  });
+
+  it('never asks the browser to centre or right-align: every word is drawn left-aligned from its measured start', () => {
+    // The captain's phone ignores textAlign 'center' and 'right' for Thai (PR 10's card, the 2026-10-30 table).
+    const states = [
+      new Match(makeConfig()).scoreTo(5, 3),
+      new Match(makeConfig()).scoreTo(20, 13),
+      new Match(makeConfig()).scoreTo(20, 20),
+      new Match(makeConfig()).scoreTo(11, 4),
+      new Match(makeConfig()).game(21, 10, { start: false }),
+      new Match(doublesConfig()).game(21, 10).game(21, 12),
+      new Match(makeConfig({ format: 'fixed2' })).game(21, 15).game(15, 21),
+    ];
+    for (const m of states) {
+      const p = panel(m, { now: m.events.at(-1)!.at + 500, motion: 'full' });
+      expect(p.texts.length).toBeGreaterThan(3);
+      expect(p.texts.every((t) => t.align === 'left')).toBe(true);
+    }
+    expect(panel(new Match(makeConfig()).scoreTo(5, 3), {}, { mirrored: false, stale: true }).texts.every((t) => t.align === 'left')).toBe(true);
   });
 
   it('draws a logo into its box', () => {
@@ -362,5 +449,83 @@ describe('drawOverlay: BWF TV panel (round 4)', () => {
     const img = {} as CanvasImageSource;
     drawLogo(ctx, img, { x: 1, y: 2, w: 3, h: 4 });
     expect(calls).toEqual([expect.objectContaining({ op: 'drawImage', args: [img, 1, 2, 3, 4] })]);
+  });
+});
+
+describe('animation: when things moved, from the log (OverlayAnim)', () => {
+  it('records the latest point, serve change, badge and finished game with their event times', () => {
+    const m = new Match(makeConfig()).rallies('AB').scoreTo(20, 18);
+    const { anim } = replay(m.cfg, m.events, Infinity);
+    const lastPoint = m.events.at(-1)!;
+    expect(anim.point).toEqual({ team: 'A', at: lastPoint.at });
+    expect(anim.band).toEqual({ kind: 'gamePoint', at: lastPoint.at });
+    m.point('B'); // 20-19, B serves: the serve moved, still game point (A's), so the badge keeps its start
+    const b = replay(m.cfg, m.events, Infinity).anim;
+    expect(b.serve).toEqual({ team: 'B', at: m.events.at(-1)!.at });
+    expect(b.band).toEqual({ kind: 'gamePoint', at: lastPoint.at });
+    m.point('A'); // 21-19: the game ends
+    const c = replay(m.cfg, m.events, Infinity).anim;
+    expect(c.col).toEqual({ index: 0, at: m.events.at(-1)!.at });
+    expect(c.band).toEqual({ kind: 'gameOver', at: m.events.at(-1)!.at });
+  });
+
+  it('follows the cutoff and skips an undone point, like the score', () => {
+    const m = new Match(makeConfig()).point('A').point('B').undo();
+    const a = replay(m.cfg, m.events, Infinity).anim;
+    expect(a.point).toEqual({ team: 'A', at: m.events[1].at });
+    expect(replay(m.cfg, m.events, m.events[0].at).anim.point).toBeNull();
+  });
+
+  it('puts teams on the side of the box they are drawn on, mirrored or not', () => {
+    const m = new Match(makeConfig()).point('A');
+    const a = replay(m.cfg, m.events, Infinity).anim;
+    expect(sideAnim(a, overlayModel(m.cfg, m.state, plain)).point!.side).toBe('left');
+    expect(sideAnim(a, overlayModel(m.cfg, m.state, { mirrored: true, stale: false })).point!.side).toBe('right');
+  });
+
+  it('the clock model carries the anim; drawn without a frame time nothing moves', () => {
+    const m = new Match(makeConfig()).scoreTo(20, 13);
+    const model = new OverlayClock().at(m.cfg, m.events, Infinity, { delayMs: 0, offsetMs: 0, ...plain })!;
+    expect(model.anim.band!.kind).toBe('gamePoint');
+    expect(panel(model).calls).toEqual(panel({ ...model, anim: { point: null, serve: null, band: null, col: null } }).calls);
+  });
+});
+
+describe('determinism: a frame is a function of the log and its time', () => {
+  const m = new Match(doublesConfig()).game(21, 17).scoreTo(19, 20); // game point to B, the latest point was B's
+  const t0 = m.events.at(-1)!.at;
+  const frame = (now: number, motion: Motion = 'full') => panel(m, { now, motion }).calls;
+
+  it('the same t drawn twice gives the same frame, and a t after another t gives the frame of that t', () => {
+    for (const dt of [0, 90, 180, 360, 700, 2000]) {
+      const a = frame(t0 + dt);
+      expect(frame(t0 + dt)).toEqual(a);
+      frame(t0 + dt + 1234); // draw something else in between
+      frame(t0 + dt - 50);
+      expect(frame(t0 + dt)).toEqual(a);
+    }
+  });
+
+  it('mid-animation frames differ from the settled one; after the longest movement every frame is the settled one', () => {
+    const settled = frame(t0 + 10_000);
+    expect(frame(t0 + 100)).not.toEqual(settled);
+    const longest = Math.max(MOTION.full.tick, MOTION.full.flash, MOTION.full.bandIn + MOTION.full.shine);
+    expect(frame(t0 + longest + 1)).toEqual(settled);
+  });
+
+  it('with no motion every frame is the settled one; the light set only flashes and wipes', () => {
+    expect(frame(t0 + 100, 'none')).toEqual(frame(t0 + 10_000, 'none'));
+    expect(frame(t0 + 100, 'light')).not.toEqual(frame(t0 + 10_000, 'light'));
+    expect(MOTION.light.tick + MOTION.light.pulse + MOTION.light.shine).toBe(0);
+    expect(progress(undefined, t0, 500)).toBe(1);
+  });
+
+  it('match point pulses forever (a cycle of pulse ms), game point does not', () => {
+    const mp = new Match(makeConfig()).game(21, 10).scoreTo(20, 4);
+    const s0 = mp.events.at(-1)!.at + 5000;
+    const f = (now: number) => panel(mp, { now, motion: 'full' }).calls;
+    expect(f(s0 + MOTION.full.pulse)).toEqual(f(s0));
+    expect(f(s0 + MOTION.full.pulse / 2)).not.toEqual(f(s0));
+    expect(frame(t0 + 5000)).toEqual(frame(t0 + 5000 + MOTION.full.pulse / 2));
   });
 });

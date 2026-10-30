@@ -619,17 +619,47 @@ canvas (the visible preview, CSS-scaled) --captureStream(30)--> composited video
 - One draw per delivered camera frame via `requestVideoFrameCallback` (Safari
   15.4+, §9), not `requestAnimationFrame`, so output frames track camera
   frames and the overlay is drawn exactly once per frame.
-- `drawOverlay` is a pure Canvas 2D function (`src/overlay/`): a BWF TV style
-  two-row panel (players' names, a shuttle for the server, one cell per game
-  played, a status band for game point, interval and the like), sized S/M/L
-  and only as wide as its content, in the corner chosen in C1 (top-left by
-  default; mirroring swaps the rows), plus an optional logo in its own corner
-  (top-right by default), stacked when both share one.
+- `drawOverlay` is a pure Canvas 2D function (`src/overlay/`) in the look of
+  BWF's world feed (theme `bwf-championship-v1`, chosen on the 2026-10-30
+  design board): two white rows with the team colour where BWF has the flag,
+  the players' names, a red shuttle for the server, a white cell per finished
+  game (the winner's digits dark) and a two-tone red column for the game being
+  played, and a red badge while a state applies (GAME POINT, MATCH POINT,
+  DEUCE 20–20, INTERVAL with a countdown from `phaseSince + intervalMs` and
+  CHANGE ENDS in the deciding game, END OF GAME n with the break's countdown,
+  END OF MATCH with WIN on the winner's row, DRAW; LINK LOST in grey). It is
+  sized S/M/L and only as wide as its content, in the corner chosen in C1
+  (top-left by default; mirroring swaps the rows; in a bottom corner the badge
+  goes above the rows so they never move), plus an optional logo in its own
+  corner (top-right by default), stacked when both share one. The words are in
+  `src/overlay/words.ts` (BWF English on the badges, formal Thai on the table
+  and the card).
+- Animation (`src/overlay/motion.ts`, C1 "Motion": full, light or none) is a
+  pure function of the frame's scoreboard time (the overlay cutoff, so it
+  follows the overlay delay) and the times of the events that started each
+  movement (`OverlayAnim`: the last point, serve change, badge and finished
+  game, from one replay of the visible log; a table count's tag time; the
+  card's due and close times). The same log and time give the same frame, live
+  and in a re-render; `pnpm frames` checks it in Chrome. The set is fixed per
+  segment and recorded in its meta: a phone already under 25 fps when a
+  segment starts records the light set.
+- The overlay draws with Kanit (SIL OFL, `public/fonts/`, woff2 subsets for
+  Thai and Latin, precached by the service worker), so the Thai words measure
+  the same on every phone; the system Thai fallback differs between phones
+  (Thonburi, or the wide Ayuthaya that once pushed a table header past its
+  box). A recording does not start until the font is loaded, and every box is
+  measured again when the browser's fonts change. Every word is drawn
+  left-aligned from its measured start (`text()` in draw.ts): the captain's
+  phone draws Thai with `textAlign` 'center' or 'right' as if it were 'left'
+  (the end-of-game card in PR 10, the table headers on 2026-10-30), and the
+  table's header row takes one size that fits each word in its own column.
   The optional player stats table (R-TAG-7, `src/overlay/table.ts`) is the
   third tenant: each corner stacks panel, logo, table from the frame edge, the
   table takes the first corner nobody owns or the one picked in C1, and a box
   that would still touch another steps past it; the end-of-game card is drawn in
-  the middle: it is a fold over the log (`summaryStatus`: due from the last
+  the middle (`cardPlace`: centred, or centred in the free band between the
+  top and bottom stacks and smaller only when it would cover the panel or the
+  logo; the table is hidden while it shows, it has the same numbers): it is a fold over the log (`summaryStatus`: due from the last
   point of a game or match, resolved when that point has a tag or a
   `tag.clear`, closed by a `summary.close` after it), so the phones and the video
   agree and a reconnect replays the close. Their numbers are `matchStats(cfg, events, cutoff)` for the
@@ -716,6 +746,7 @@ interface Segment {
   overlay: { box: Box;                          // area the score panel covered over the segment
              boxes: Array<{ at: number; box: Box }>; // its box from each camera time on (it follows content)
              corner: Corner; size: 'small' | 'medium' | 'large'; delayMs: number; mirrored: boolean; theme: string;
+             motion?: 'full' | 'light' | 'none';    // the animation set burned in (absent: none)
              logo: { box: Box; corner: Corner; size: 'small' | 'medium' | 'large' } | null };
   // Box = { x, y, w, h } in pixels; Corner = 'tl' | 'tr' | 'bl' | 'br'
 }
@@ -741,12 +772,15 @@ Stored as `matches/<matchId>/recording.json`, updated on every segment change.
   the raw frames under the overlay box are gone; the look is fixed at
   recording time.
 - `match.json` records the score box and corner, the logo box (if any),
-  delay, mirroring and theme per segment, plus
+  delay, mirroring, theme and motion set per segment, plus
   every event with recording-relative time and derived state (§8). A later Mac
   tool (R-BURN-2, roadmap.md Later) can therefore paint a new overlay in the
   same box with `drawOverlay` in node-canvas and one ffmpeg `overlay` pass, to
   change the look or fix a logged correction, but not to reveal what was under
-  the live overlay. A raw + composited dual recording (two MediaRecorders)
+  the live overlay. node-canvas has no `-apple-system` and shapes Thai with
+  Pango rather than WebKit: the tool registers `public/fonts/Kanit-*.ttf`
+  (`registerFont`), and its words may measure a few per cent differently, which
+  the draw absorbs (every word is fitted to the box it is given). A raw + composited dual recording (two MediaRecorders)
   would allow that at double the encode and storage cost; also Later.
 
 ## 8. Export bundle

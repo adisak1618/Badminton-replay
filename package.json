@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.node.json",
     "icons": "pwa-assets-generator",
     "serve:local": "node server/local.ts",
-    "e2e": "node e2e/pairing.ts"
+    "e2e": "node e2e/pairing.ts",
+    "frames": "node e2e/frames.ts"
   },
   "dependencies": {
     "@upstash/redis": "^1.40.0",

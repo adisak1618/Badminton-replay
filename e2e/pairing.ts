@@ -671,8 +671,8 @@ async function main() {
       return `A's card "${tagged}" -> "${now}"`;
     });
 
-    // The share of near-white pixels (the table's text; the fake camera's picture is green and its clock is at the
-    // top) in the bottom-left corner of the camera's composited canvas, where the table goes by default.
+    // The share of near-white pixels (the table's white rows; the fake camera's picture is green and its clock is at
+    // the top) in the bottom-left corner of the camera's composited canvas, where the table goes by default.
     const whiteInCorner = () =>
       cam.evaluate(() => {
         const c = document.querySelector('canvas.preview-canvas') as HTMLCanvasElement;
@@ -704,13 +704,13 @@ async function main() {
       return `bottom-left white-text share ${off.toFixed(4)} (Off) -> ${on.toFixed(4)} (table on) -> ${back.toFixed(4)} (Off again)`;
     });
 
-    // Grey text (the tagged count is #9aa4ae) in the right 200 px of the summary card in the camera's composited
-    // canvas, and just outside its right edge: the card is 720 px wide at 1080p, centred.
+    // Grey (the card's light body and its text) in the right 200 px of the summary card in the camera's composited
+    // canvas, and none just outside its right edge: the card is CARD.w (1240) px wide at 1080p, centred.
     const cardInCamera = () =>
       cam.evaluate(() => {
         const c = document.querySelector('canvas.preview-canvas') as HTMLCanvasElement;
         const f = c.height / 1080;
-        const right = Math.round((c.width + 720 * f) / 2);
+        const right = Math.round((c.width + 1240 * f) / 2);
         const ctx = c.getContext('2d')!;
         const y0 = Math.round(c.height * 0.3);
         const band = Math.round(c.height * 0.4);

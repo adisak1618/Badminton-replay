@@ -8,6 +8,7 @@ import {
   voidSet,
   gameStats,
   matchStats,
+  rallies,
   reasonsOn,
   summaryStatus,
   type MatchStats,
@@ -19,6 +20,7 @@ import {
   type Phase,
   type Team,
 } from '../engine';
+import type { BandKind } from './draw';
 import type { CardTeam, EndCard, StatsRow, StatsTable } from './table';
 
 export interface OverlaySide {
@@ -40,6 +42,22 @@ export interface OverlayGame {
   live: boolean;
 }
 
+/**
+ * When the things that move started, from event times (scoreboard clock): the draw animates from these and the
+ * frame's own `now`, so a frame depends on nothing but the log and its time (motion.ts).
+ */
+export interface OverlayAnim {
+  /** The latest counted point, on the side of the box it was scored. */
+  point: { side: 'left' | 'right'; at: number } | null;
+  /** The latest change of serving side. */
+  serve: { side: 'left' | 'right'; at: number } | null;
+  /** The current status badge and the event that started it (the stale badge has none: it is not in the log). */
+  band: { kind: BandKind; at: number } | null;
+  /** The game that just finished: its column, counted from the left. */
+  col: { index: number; at: number } | null;
+}
+export const NO_ANIM: OverlayAnim = { point: null, serve: null, band: null, col: null };
+
 export interface OverlayModel {
   /** The team drawn on the left of the box: the scoreboard's left team, or the other one when mirrored. */
   left: OverlaySide;
@@ -50,6 +68,13 @@ export interface OverlayModel {
   phase: Phase;
   /** Game or match point, for the team that has it. */
   flag: { kind: 'gamePoint' | 'matchPoint'; team: Team } | null;
+  /** Level at pointsToWin - 1 or more and nobody on game point yet (20-20 in a game to 21). */
+  deuce: boolean;
+  /** The scoreboard time the interval or the break between games ends (phaseSince + intervalMs), for the countdown. */
+  intervalEndsAt: number | null;
+  intervalTotal: number | null;
+  /** The ends change when this interval closes (the deciding game). */
+  pendingSwap: boolean;
   server: { team: Team; name: string; court: Court };
   winner: Team | null;
   mirrored: boolean;
@@ -59,6 +84,7 @@ export interface OverlayModel {
   table: StatsTable | null;
   /** The end-of-game summary card: after the last point is resolved, until the operator closes it or play resumes. */
   card: EndCard | null;
+  anim: OverlayAnim;
 }
 
 export interface OverlayOptions {
@@ -102,11 +128,8 @@ export function overlayModel(cfg: MatchConfig, s: MatchState, opts: OverlayOptio
   }));
   if (s.phase === 'playing' || s.phase === 'interval')
     games.push({ left: s.score[leftTeam], right: s.score[rightTeam], winner: null, live: true });
-  const flag = s.matchPoint
-    ? { kind: 'matchPoint' as const, team: s.matchPoint }
-    : s.gamePoint
-      ? { kind: 'gamePoint' as const, team: s.gamePoint }
-      : null;
+  const flag = flagOf(s);
+  const interval = s.intervalKind && s.phaseSince != null ? cfg.intervalMs[s.intervalKind] : null;
   return {
     left: side(leftTeam),
     right: side(rightTeam),
@@ -114,13 +137,33 @@ export function overlayModel(cfg: MatchConfig, s: MatchState, opts: OverlayOptio
     games,
     phase: s.phase,
     flag,
+    deuce: deuceOf(cfg, s),
+    intervalEndsAt: interval == null ? null : s.phaseSince! + interval,
+    intervalTotal: interval,
+    pendingSwap: s.phase === 'interval' && s.pendingSwap,
     server: { team: s.server, name: cfg.teams[s.server].players[s.serverIdx] ?? cfg.teams[s.server].name, court: servingCourt(s) },
     winner: s.winner,
     mirrored: opts.mirrored,
     stale: opts.stale,
     table: null,
     card: null,
+    anim: NO_ANIM,
   };
+}
+
+const flagOf = (s: MatchState): OverlayModel['flag'] =>
+  s.matchPoint ? { kind: 'matchPoint', team: s.matchPoint } : s.gamePoint ? { kind: 'gamePoint', team: s.gamePoint } : null;
+const deuceOf = (cfg: MatchConfig, s: MatchState): boolean =>
+  s.phase === 'playing' && !s.gamePoint && s.score.A === s.score.B && s.score.A >= cfg.pointsToWin - 1;
+
+/** The badge the state calls for, as `bandOf` names it (without the link state, which is not in the log). */
+function bandKind(cfg: MatchConfig, s: MatchState): BandKind | null {
+  if (s.phase === 'matchOver') return s.winner ? 'matchOver' : 'draw';
+  if (s.phase === 'gameOver') return 'gameOver';
+  if (s.phase === 'interval') return 'interval';
+  const f = flagOf(s);
+  if (f) return f.kind;
+  return deuceOf(cfg, s) ? 'deuce' : null;
 }
 
 const playerNames = (cfg: MatchConfig, team: Team): string[] => {
@@ -133,10 +176,20 @@ const rowsOf = (cfg: MatchConfig, st: Stats, team: Team): StatsRow[] => playerNa
     return { name, W: p.W, A: p.A, F: p.forced, FE: p.FE, UE: p.UE };
   });
 
+/** The live table's numbers for team `t` in `game` at `cutoff`. */
+function tableNumbers(cfg: MatchConfig, events: readonly MatchEvent[], cutoff: number, game: number, t: Team, opp: boolean, ms?: MatchStats) {
+  const g = gameStats(ms ?? matchStats(cfg, events, cutoff), cfg, game);
+  return { rows: rowsOf(cfg, g, t), opp: opp ? g.teams[t].oppForced + g.teams[t].oppUnforced : null };
+}
+
+/** How many of the latest tags of the game are diffed for the table's flash; older ones have long stopped flashing. */
+const RECENT_TAGS = 3;
+
 /**
  * The table and the card for the match state `s` at scoreboard time `cutoff`. The table shows the current game, so
  * its counts start from zero with each game; tags count from the moment they were saved, which is how a tag added
- * later from the rally list simply updates the numbers. Nothing is shown unless the match records reasons.
+ * later from the rally list simply updates the numbers, and the counts a recent tag changed carry its time so the
+ * cell can flash. Nothing is shown unless the match records reasons.
  */
 export function statsOverlay(
   cfg: MatchConfig,
@@ -148,23 +201,32 @@ export function statsOverlay(
 ): Pick<OverlayModel, 'table' | 'card'> {
   if (!reasonsOn(cfg) || (!o.table && !o.card)) return { table: null, card: null };
   const stats = ms ?? matchStats(cfg, events, cutoff);
+  const voided = voidSet(events);
+  const visible = (e: MatchEvent) => e.at <= cutoff && !voided.has(e.seq);
+  const rs = rallies(cfg, events, cutoff);
   let table: StatsTable | null = null;
   if (o.table) {
     const t = o.table.team;
-    const g = gameStats(stats, cfg, s.game);
-    table = {
-      team: t,
-      color: cfg.teams[t].color,
-      doubles: cfg.doubles,
-      rows: rowsOf(cfg, g, t),
-      opp: o.table.opp ? g.teams[t].oppForced + g.teams[t].oppUnforced : null,
-    };
+    const now = tableNumbers(cfg, events, cutoff, s.game, t, o.table.opp, stats);
+    const inGame = new Set(rs.filter((r) => r.game === s.game).map((r) => r.id));
+    const recent = events.filter((e) => (e.type === 'tag' || e.type === 'tag.clear') && visible(e) && inGame.has(e.point)).slice(-RECENT_TAGS);
+    const changed: Record<string, number> = {};
+    for (const e of recent) {
+      const before = tableNumbers(cfg, events, e.at - 1, s.game, t, o.table.opp);
+      const after = tableNumbers(cfg, events, e.at, s.game, t, o.table.opp);
+      after.rows.forEach((row, i) => {
+        for (const k of ['W', 'A', 'F', 'FE', 'UE'] as const) if (row[k] !== before.rows[i][k]) changed[`${i}:${k}`] = e.at;
+      });
+      if (after.opp !== before.opp) changed.opp = e.at;
+    }
+    table = { team: t, color: cfg.teams[t].color, doubles: cfg.doubles, game: s.game, rows: now.rows, opp: now.opp, changed };
   }
   let card: EndCard | null = null;
   const sum = o.card ? summaryStatus(cfg, events, s, cutoff) : null;
   // The summary waits for the last point to be resolved (tagged, or the operator chose not to), then stays until the
-  // operator closes it; it also ends with the next game's first rally (summaryStatus) and with the recording (camera).
-  if (sum && sum.resolved && !sum.closed) {
+  // operator closes it (it fades out from the close); it also ends with the next game's first rally (summaryStatus)
+  // and with the recording (camera).
+  if (sum && sum.resolved) {
     const st = sum.kind === 'match' ? stats.match : gameStats(stats, cfg, sum.game);
     const left = s.leftTeam; // the same order as the panel
     const teams: CardTeam[] = [left, other(left)].map((t) => {
@@ -183,7 +245,24 @@ export function statsOverlay(
         wonOnServe: st.wonOnServe[t],
       };
     });
-    card = { kind: sum.kind, game: sum.game, seq: sum.seq, tagged: st.tagged, rallies: st.rallies, doubles: cfg.doubles, teams };
+    const last = rs.filter((r) => sum.kind === 'match' || r.game === sum.game).pop() ?? null;
+    let shownAt = last?.at ?? s.phaseSince ?? 0;
+    if (last) for (const e of events) if ((e.type === 'tag' || e.type === 'tag.clear') && e.point === last.id && visible(e)) shownAt = Math.max(shownAt, e.at);
+    const close = sum.closed ? events.find((e) => e.type === 'summary.close' && visible(e) && e.seq > sum.seq) : undefined;
+    const games: Array<[number, number]> = s.completed.slice(0, sum.kind === 'match' ? undefined : sum.game).map((g) => [g[left], g[other(left)]]);
+    card = {
+      kind: sum.kind,
+      game: sum.game,
+      seq: sum.seq,
+      tagged: st.tagged,
+      rallies: st.rallies,
+      doubles: cfg.doubles,
+      teams,
+      games,
+      minutes: st.rallies > 1 ? Math.max(1, Math.round(st.durationMs / 60_000)) : null,
+      shownAt,
+      closedAt: close ? close.at : null,
+    };
   }
   return { table, card };
 }
@@ -194,10 +273,49 @@ export function statsOverlay(
  * undo never reach the video (R-REC-4): the voided point is skipped even though its undo is "in the future".
  */
 export function stateAt(cfg: MatchConfig, events: readonly MatchEvent[], cutoff: number): MatchState {
+  return replay(cfg, events, cutoff).state;
+}
+
+/**
+ * `stateAt` plus when each moving part last changed (`OverlayAnim`, by team; `sideAnim` maps it onto the box).
+ * One pass over the visible log, like `stateAt`.
+ */
+export function replay(cfg: MatchConfig, events: readonly MatchEvent[], cutoff: number): { state: MatchState; anim: TeamAnim } {
   const voided = voidSet(events);
   const s = initialState(cfg);
-  for (const e of events) if (e.at <= cutoff && !voided.has(e.seq)) apply(cfg, s, e);
-  return s;
+  const anim: TeamAnim = { point: null, serve: null, band: null, col: null };
+  let band = bandKind(cfg, s);
+  for (const e of events) {
+    if (e.at > cutoff || voided.has(e.seq)) continue;
+    const server = s.server;
+    const games = s.completed.length;
+    const counted = e.type === 'point' && (s.phase === 'playing' || s.phase === 'interval');
+    apply(cfg, s, e);
+    if (counted && e.type === 'point') anim.point = { team: e.team, at: e.at };
+    if (s.server !== server) anim.serve = { team: s.server, at: e.at };
+    if (s.completed.length > games) anim.col = { index: s.completed.length - 1, at: e.at };
+    const k = bandKind(cfg, s);
+    if (k !== band) anim.band = k ? { kind: k, at: e.at } : null;
+    band = k;
+  }
+  return { state: s, anim };
+}
+
+/** The anim with teams, before it is put on the left or right of a (maybe mirrored) box. */
+export interface TeamAnim {
+  point: { team: Team; at: number } | null;
+  serve: { team: Team; at: number } | null;
+  band: OverlayAnim['band'];
+  col: OverlayAnim['col'];
+}
+export function sideAnim(a: TeamAnim, m: Pick<OverlayModel, 'left'>): OverlayAnim {
+  const side = (t: Team): 'left' | 'right' => (m.left.team === t ? 'left' : 'right');
+  return {
+    point: a.point && { side: side(a.point.team), at: a.point.at },
+    serve: a.serve && { side: side(a.serve.team), at: a.serve.at },
+    band: a.band,
+    col: a.col,
+  };
 }
 
 /**
@@ -208,6 +326,8 @@ export class OverlayClock {
   private key = '';
   private cfg: MatchConfig | null = null;
   private model: OverlayModel | null = null;
+  /** The scoreboard time of the last frame asked for: the draw animates against it. */
+  cutoff = 0;
 
   /**
    * `now` is the camera's wall clock; `offsetMs` is camera minus scoreboard (technical-design.md §4.5), so an
@@ -221,6 +341,7 @@ export class OverlayClock {
   ): OverlayModel | null {
     if (!cfg) return null;
     const cutoff = now - o.delayMs - o.offsetMs;
+    this.cutoff = cutoff;
     let visible = 0;
     for (const e of events) if (e.at <= cutoff) visible++;
     const last = events[events.length - 1];
@@ -230,8 +351,9 @@ export class OverlayClock {
     if (key !== this.key || !this.model || cfg !== this.cfg) {
       this.key = key;
       this.cfg = cfg;
-      const s = stateAt(cfg, events, cutoff);
-      this.model = { ...overlayModel(cfg, s, o), ...statsOverlay(cfg, events, s, cutoff, st) };
+      const { state, anim } = replay(cfg, events, cutoff);
+      const model = overlayModel(cfg, state, o);
+      this.model = { ...model, ...statsOverlay(cfg, events, state, cutoff, st), anim: sideAnim(anim, model) };
     }
     return this.model;
   }
