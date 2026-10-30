@@ -257,6 +257,24 @@ describe('one camera, two scoreboards (D14)', () => {
     expect(p.mirror.getSnapshot().events).toHaveLength(1);
   });
 
+  it('an input the camera applied while a drop cut its reply leaves the pending list at the reopen, instead of being resent forever', () => {
+    const p = setup(1);
+    const [a] = p.sides;
+    a.store.start(makeConfig());
+    a.connect();
+    a.camPort.open = false; // the drop begins: the scoreboard's input still arrives, the camera's event and result do not
+    a.store.emit({ type: 'point', team: 'A' });
+    expect(p.camera().score).toEqual({ A: 1, B: 0 });
+    expect(a.store.pending()).toHaveLength(1);
+    a.drop();
+    a.connect();
+    expect(a.shown()).toEqual(p.camera());
+    expect(a.store.pending()).toHaveLength(0);
+    const sent = a.sbPort.sent.length;
+    a.connect(); // a later reopen resends nothing
+    expect(a.sbPort.sent.slice(sent).filter((m) => m.t === 'input')).toEqual([]);
+  });
+
   it('a new match started on a scoreboard while the link is down replaces the camera’s at the reopen, with its points', () => {
     const p = setup(1);
     const [a] = p.sides;
