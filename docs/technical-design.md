@@ -773,6 +773,10 @@ on stop:  postMessage('close')               -->  flush(); close(); reply with s
   `flush` every 5 s bounds what an OS-level crash could lose (A3).
 - `QuotaExceededError` on write stops the recorder cleanly, closes the file,
   and reports `rec.state = 'error'` (R-REC-3). No IndexedDB fallback (D10).
+  A write that takes fewer bytes than given is followed by the rest; a count
+  that cannot be real counts as storage full (Chrome's in-memory OPFS in a
+  private window stops at about 2 GB by returning its "no space" code, −8, as
+  a byte count rather than throwing; found by the 30 min render proof, §6.8).
 
 ### 6.5 Storage estimate, persistence, wake lock, interruptions
 
@@ -828,6 +832,51 @@ Stored as `matches/<matchId>/recording.json`, updated on every segment change.
   whether iOS's share sheet handles a 2 GB file from a web app and offers
   "Save Video" is assumption A5.
 - Delete removes the OPFS directory and refreshes the usage figure (R-EXP-3).
+
+### 6.8 Replays video: the render after the match (D16, `src/render/`)
+
+- **Timeline** (`timeline.ts`, pure): per segment, each marked replay's window
+  (`replays[].rec` in match.json) goes in at its point's `tRec` + 2 s. The
+  card (`overlay/replay.ts`, BWF timings: spin in 180 ms, hold 720 ms with the
+  picture dissolving 250 ms behind it, spin out 200 ms; the light set
+  dissolves 300 ms, none cuts) starts over the live picture; the live picture
+  pauses where the replay dissolves in and resumes there after it, so the
+  output is `sourceMs + Σ (window / speed + 250 ms)`. Under a replay the
+  recording's sound from the pause on plays (the real sound after the point).
+- **Painter** (`paint.ts`): the overlay code itself, given the segment's
+  recorded settings (corner, size, delay, mirroring, motion). A recorded
+  segment already shows the panel and maybe the table: the painter adds or
+  updates the stats table and the end-of-game card from the log with every
+  tag counted from its point (`retro.ts`: a tag saved later than its point
+  + 3 s moves there, the newest choice per point still winning). On replay
+  frames a dark plate covers every box the recording's panel took in the
+  window (`overlay.boxes`) and the frozen panel with "REPLAY ×0.5" goes on
+  top. An imported file (`recording.source: 'imported'`, D17) or a segment
+  with no panel boxes has nothing burned in: the painter draws everything.
+- **Pipeline** (`pipeline.ts`): Mediabunny (WebCodecs; the parts in `mb.ts`,
+  loaded only when a render starts, 85 kB gzipped) decodes the segment, the
+  painter draws each output frame on an `OffscreenCanvas`, `CanvasSource`
+  encodes H.264 at the recording's bitrate (6 Mbit/s at 1080p) with a
+  keyframe every 2 s, and the AAC packets are copied, not re-encoded. Live
+  frames keep their recorded timing; replay frames are made at 30 fps from
+  the window at the replay's speed, each between two recorded frames a blend
+  of the two.
+- **Job** (`job.ts`, `store.ts`): the output is rendered in parts of 120 s,
+  each its own fragmented MP4 under `matches/<id>/render/`, written through the
+  recording worker's sync access handle; `job.json` records the finished
+  parts under a key of the marks, tags and options, so "Continue" resumes and
+  a changed input starts again. The parts are then joined by copying their
+  packets (their decoder configurations must match byte for byte), the two
+  tracks in time order so the muxer never holds a whole part of one, into
+  `video-<n>-replays.mp4`. Bytes go to the worker in pieces of 4 MB at most,
+  and a write that takes fewer bytes than given is followed by the rest
+  (writer.ts). Free space is checked first: the parts and the joined file
+  side by side, 2 × 1.1 × the output at its bitrate.
+- **Proof** (`pnpm render-proof`, `e2e/render.ts`): renders a 90 s clip made
+  like Safari's recordings (and with `CLIP=` a real match) in Chrome and in
+  Playwright's WebKit, checks length, codecs and the sound with ffprobe and the
+  card and the badge in the frames, and drives the app's Recordings → Replays
+  video → Make video in Chrome.
 
 ## 7. Overlay and later re-render
 

@@ -8,10 +8,19 @@ class FakeHandle implements SyncHandle {
   log: string[] = [];
   closed = false;
   failAfterBytes = Infinity;
+  /** At most this many bytes taken per write (a short write). */
+  maxWrite = Infinity;
+  /** From this many bytes on, write returns Chrome's in-memory "no space" code as a count (2^32 - 8) and writes nothing. */
+  noSpaceAfter = Infinity;
   write(buf: ArrayBuffer | ArrayBufferView, opts: { at?: number } = {}): number {
     if (this.closed) throw Object.assign(new Error('closed'), { name: 'InvalidStateError' });
-    const b = buf instanceof ArrayBuffer ? new Uint8Array(buf) : new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+    const all = buf instanceof ArrayBuffer ? new Uint8Array(buf) : new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+    const b = all.subarray(0, Math.min(all.byteLength, this.maxWrite));
     const at = opts.at ?? 0;
+    if (at + b.byteLength > this.noSpaceAfter) {
+      this.log.push(`write@${at} no space`);
+      return 2 ** 32 - 8;
+    }
     if (at + b.byteLength > this.failAfterBytes) {
       this.log.push(`write@${at} quota`);
       throw Object.assign(new Error('The quota has been exceeded.'), { name: 'QuotaExceededError' });
@@ -75,6 +84,27 @@ describe('OPFS recording worker (technical-design.md §6.4)', () => {
     const h = r.files.get('matches/m1/video-1.mp4')!;
     expect([...h.data]).toEqual([1, 1, 1, 2, 2, 3, 3, 3, 3]);
     expect(h.log).toEqual(['truncate 0', 'write@0+3', 'write@3+2', 'write@5+4', 'flush', 'close']);
+  });
+
+  it('a write that takes only part of a chunk is followed by the rest (a long render fragment is never cut short)', async () => {
+    const r = rig();
+    await r.send({ op: 'open', dir: ['m'], file: 'v.mp4' });
+    r.files.get('m/v.mp4')!.maxWrite = 4;
+    const a = await r.send({ op: 'append', buf: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]).buffer });
+    expect(a).toMatchObject({ ok: true, bytes: 10 });
+    const h = r.files.get('m/v.mp4')!;
+    expect([...h.data]).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(h.log.filter((l) => l.startsWith('write'))).toEqual(['write@0+4', 'write@4+4', 'write@8+2']);
+  });
+
+  it('a write that returns an impossible count (Chrome in-memory OPFS when full) fails as storage full, never moving the cursor', async () => {
+    const r = rig();
+    await r.send({ op: 'open', dir: ['m'], file: 'v.mp4' });
+    r.files.get('m/v.mp4')!.noSpaceAfter = 15;
+    expect((await r.send({ op: 'append', buf: r.chunk(10, 1) })).ok).toBe(true);
+    const b = await r.send({ op: 'append', buf: r.chunk(10, 2) });
+    expect(b).toMatchObject({ ok: false, error: 'QuotaExceededError', bytes: 10 });
+    expect(r.files.get('m/v.mp4')!.data.length).toBe(10);
   });
 
   it('flushes every 5 s of appends, and once more on close', async () => {

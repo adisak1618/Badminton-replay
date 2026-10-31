@@ -499,9 +499,32 @@ not the match asks why points were won.
   and event times on the recording count from it. *Accept:* a match with no
   mark exports exactly as before (no `replays`); the scoreboard's own export
   lists the marks without a place on a video.
-- **R-REP-5 Later slices.** The post-match pass that inserts the replays and
-  burns the stats of tags added after the match, and the Studio screen to tag
-  while watching and adjust each shot, follow in their own PRs
+- **R-REP-5 Replays video.** The camera phone's Recordings has "Replays
+  video" per match: a new video of the whole match made on the phone with every
+  marked replay inserted 2 s after its point. The BWF card spins in over the
+  live picture, the live picture pauses and dissolves to the replay (half speed
+  by default, the in-between frames blended), the score panel stays frozen at
+  the score after the point with "REPLAY ×0.5" in its badge slot (the
+  recording's own panel of that moment hidden under it), the real sound that
+  followed the point plays on, then the card spins back and the live picture
+  resumes where it paused: no live moment is lost. The same pass draws the
+  player stats table and the end-of-game summary from the tags as they are now,
+  a tag added after the match counting from its point. The recording itself is
+  never changed. *Accept:* a clip with three marks grows by three replays of
+  10.25 s each, its sound as long as its picture; the card and the badge are in
+  the frames (`pnpm render-proof`).
+- **R-REP-6 Long renders on the phone.** The render keeps the screen awake,
+  works in parts of two minutes of output saved one by one, and stops cleanly
+  when the app is left; "Continue" picks up at the first part not finished.
+  Before it starts it checks the free space (the parts and the joined file side
+  by side) and says how much is missing. The parts become one file per segment
+  by copying their packets.
+- **R-REP-7 Imported video files (D17).** A bundle whose
+  `recording.source` is `'imported'` (or whose segment recorded no panel) has
+  nothing burned in: the render draws the whole overlay (panel, stats, card)
+  as well as the replays, with the same `tRec` meaning.
+- **R-REP-8 Studio.** Tagging while watching the video and adjusting each
+  replay's start, end and speed follow in their own PR
   (data/badminton-replay-research/report.md section 11).
 
 ### Export (R-EXP)

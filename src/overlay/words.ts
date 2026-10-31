@@ -35,6 +35,9 @@ export const WORDS = {
   longestRun: 'คะแนนติดต่อกันสูงสุด',
   wonOnServe: 'ได้คะแนนขณะส่งลูก',
   tagged: (tagged: number, rallies: number) => `บันทึกเหตุผล ${tagged} จาก ${rallies} คะแนน`,
+  /** D16: the badge and the card of a point's slow replay in the video made after the match, and its speed. */
+  replay: 'REPLAY',
+  speed: (s: number) => `×${s}`,
 } as const;
 
 /** The five columns, the same words in the live table and on the card. */

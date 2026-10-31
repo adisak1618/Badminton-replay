@@ -105,13 +105,13 @@ The captain's picks are in requirements.md D16 and
 data/badminton-replay-research/report.md section 11. Four slices, each its
 own PR:
 
-1. **Marks** (this slice): "☆ Replay" after a point and the rally list's
+1. **Marks** (PR 12, merged): "☆ Replay" after a point and the rally list's
    stars, `replay` / `replay.clear` events, the 5 s window rule, each
    segment's first composited frame, `replays` in `match.json` (R-REP-1 to 4).
 2. **Speed test on the captain's iPhone**: a page that renders a recorded
    clip full length on the phone, so the post-match pass is sized on the
    device before it is built.
-3. **Post-match renderer on the camera phone** (WebCodecs through
+3. **Post-match renderer on the camera phone** (this slice; WebCodecs through
    Mediabunny): one pass inserts every replay inline with the BWF card spin,
    the frozen panel with REPLAY ×0.5 and the real sound after the point, and
    burns the stats table and summary card from tags added after the match
