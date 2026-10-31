@@ -91,7 +91,18 @@ export class OpfsWriter {
       case 'append': {
         if (!this.video) return this.fail(req, { name: NOT_OPEN, message: 'no open file' });
         try {
-          this.cursor += this.video.write(new Uint8Array(req.buf), { at: this.cursor });
+          // A write may take fewer bytes than given: the rest goes after them, never silently dropped. Chrome's
+          // in-memory OPFS (a private window) stops at about 2 GB by returning its "no space" code (-8) as a byte
+          // count instead of throwing: any count that cannot be real is a failure.
+          const data = new Uint8Array(req.buf);
+          for (let done = 0; done < data.byteLength; ) {
+            const n = this.video.write(done ? data.subarray(done) : data, { at: this.cursor });
+            if (!(n > 0 && n <= data.byteLength - done)) {
+              throw Object.assign(new Error(`write returned ${n | 0} after ${done} of ${data.byteLength} bytes`), { name: (n | 0) === -8 ? 'QuotaExceededError' : 'ShortWrite' });
+            }
+            done += n;
+            this.cursor += n;
+          }
           const t = this.now();
           if (t - this.lastFlush >= this.flushEveryMs) {
             this.video.flush();

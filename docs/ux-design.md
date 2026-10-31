@@ -421,7 +421,31 @@ stays on the phone unless it is copied or shared.
 Share opens the system share sheet with the segment file(s) and `match.json`
 (R-EXP-1, R-EXP-2). If the browser cannot share files, the row shows
 "Download" instead. Delete is a two-step confirm (R-EXP-3). On the scoreboard
-phone the same list offers the log alone.
+phone the same list offers the log alone. A match with a score log also has
+"Replays video (n)" (D16, n = the points marked ★), which opens C5.
+
+### C5 Replays video (D16)
+
+```
++---------------------------------------------------------------+
+| Replays video · A vs B                                [Close] |
+| A new video of the whole match with 4 replays (★ points)      |
+| slowed down after their point. Keep the app open, screen on,  |
+| phone plugged in. Leaving the app stops it; Continue picks up.|
+| [x] Replays (4 marked)                                        |
+| Player stats table [Off] [A] [B]   [x] End-of-game summary    |
+| [========-----------] 42% · part 3 of 7 · about 3:10 left     |
+| [Stop]                                                        |
++---------------------------------------------------------------+
+```
+
+The stats rows default to what the camera burned in (C1) and are disabled
+when the match did not record why points were won. "Make video" starts;
+while it runs only "Stop" shows; after a stop or an error "Continue" resumes
+at the first part not finished ("n of m parts already made"); a lack of space
+says how much is needed and free. Done: "Share video" (the share sheet with
+one file per segment, `…-video-<n>-replays.mp4`) and "Delete it". Changing
+the marks or the options makes a new video rather than mixing parts.
 
 ### E1 Error, offline and reconnect states
 

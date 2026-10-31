@@ -4,13 +4,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { APP_BUILD } from '../../build';
 import { reduce } from '../../engine';
-import { buildBundle, exportFileName, bundleName } from '../../recording/bundle';
+import { buildBundle, exportFileName, bundleName, type MatchBundle } from '../../recording/bundle';
 import { MATCHES_DIR } from '../../recording/meta';
 import { segmentMs } from '../../recording/session';
 import { deleteRecording, listRecordings, storageFigures, type StorageFigures, type StoredRecording } from '../../recording/storage';
 import { WriterClient } from '../../recording/writerClient';
 import { elapsed } from '../format';
 import { bytes, when } from './format';
+import { RenderSheet } from './RenderSheet';
 import { thisDevice } from './live';
 
 interface Row {
@@ -22,6 +23,7 @@ interface Row {
   videos: File[];
   json: File;
   jsonText: string;
+  bundle: MatchBundle;
 }
 
 function toRow(rec: StoredRecording): Row {
@@ -52,6 +54,7 @@ function toRow(rec: StoredRecording): Row {
     videos,
     json: new File([jsonText], `${bundleName(meta.createdAt)}-match.json`, { type: 'application/json' }),
     jsonText,
+    bundle,
   };
 }
 
@@ -94,6 +97,7 @@ export function Recordings({ onBack }: { onBack: () => void }) {
   const [confirm, setConfirm] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [shareFailed, setShareFailed] = useState(false);
+  const [rendering, setRendering] = useState<Row | null>(null);
 
   const load = useCallback(async () => {
     const [list, st] = await Promise.all([listRecordings(thisDevice()).catch(() => []), storageFigures()]);
@@ -180,6 +184,12 @@ export function Recordings({ onBack }: { onBack: () => void }) {
                       Clip only
                     </button>
                   )}
+                  {row.bundle.config && (
+                    // D16: the video made after the match, with the ★ points replayed (RenderSheet).
+                    <button className="btn" onClick={() => setRendering(row)} data-testid="replays-video">
+                      Replays video{row.bundle.replays?.length ? ` (${row.bundle.replays.length})` : ''}
+                    </button>
+                  )}
                   <button className={`btn ${confirm === meta.id ? 'bg-red/40' : 'btn-ghost'}`} onClick={() => void remove(row)} data-testid="delete">
                     {confirm === meta.id ? 'Tap again to delete' : 'Delete'}
                   </button>
@@ -192,6 +202,7 @@ export function Recordings({ onBack }: { onBack: () => void }) {
       <p className="mt-auto text-sm text-mut">
         Share sends the finished clip and match.json to Photos, AirDrop or Files. Delete asks once.
       </p>
+      {rendering && <RenderSheet rec={rendering.rec} bundle={rendering.bundle} title={rendering.title} onClose={() => setRendering(null)} />}
     </main>
   );
 }
