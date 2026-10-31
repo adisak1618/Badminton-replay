@@ -851,8 +851,9 @@ Stored as `matches/<matchId>/recording.json`, updated on every segment change.
 
 ### 6.7 Export
 
-- Build `match.json` (§8) from the mirrored log, `recording.json` and the
-  clock offset; write it next to the video in OPFS.
+- Build `match.json` (§8) from the mirrored log (with the Studio's events after
+  it, §6.9), `recording.json` and the clock offset; write it next to the video
+  in OPFS.
 - `navigator.canShare({ files })` then `navigator.share({ files, title })`
   from the tap handler; else `<a download>` per file via
   `URL.createObjectURL` (R-EXP-2). A `File` from `getFile()` is disk-backed;
@@ -904,6 +905,32 @@ Stored as `matches/<matchId>/recording.json`, updated on every segment change.
   Playwright's WebKit, checks length, codecs and the sound with ffprobe and the
   card and the badge in the frames, and drives the app's Recordings → Replays
   video → Make video in Chrome.
+
+### 6.9 Studio (D16, `ui/camera/Studio.tsx`, `ui/camera/shots.ts`)
+
+- The camera rewrites `log.json` from its mirror of the scoreboard's log
+  whenever the mirror changes, after the match too (a tag added on the
+  scoreboard later). The Studio therefore keeps its own events in
+  `matches/<id>/studio.json` (`StudioLog`: the match id and the events with
+  their stamps), and reading a recording (`readRecording`) appends them after
+  the log's (`withStudio`): numbered on from its last event, so an undo's
+  target never moves, and as the newest they win over an earlier tag or mark.
+  Export, the replays video and the Studio all read that merged log.
+- An edit is an ordinary event stamped `at = now − clock.offsetMs` (the log's
+  clock) and `by` = the camera's device id: `replay` / `replay.clear`, `tag`
+  / `tag.clear`. A changed window sets `start`, `end` and `speed` together
+  (`adjusted`): both ends within `REPLAY_LIMITS`, at least 1 s long, the end
+  not moved giving way. Late tags count from their point in the render
+  (§6.8, `retro.ts`).
+- Each change is written at once through a short-lived recording worker
+  (`put`, in order). The video plays the segment file from a blob URL made and
+  revoked in one effect; a preview seeks to the window on the recording
+  (`replays[].rec`), plays at the replay's speed and pauses at its end.
+- Proof: `pnpm render-proof`'s Studio step (also alone with `ONLY_STUDIO=1`
+  on an earlier run's outputs) gives point 1 a replay, moves its start with
+  "]", sets ×0.75 with "2", previews, re-tags it with "T", checks
+  `studio.json`, and makes the video: it must be that replay's 3 s ÷ 0.75 +
+  0.25 s longer than the same clip with the three marks it started with.
 
 ## 7. Overlay and later re-render
 

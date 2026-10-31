@@ -1,12 +1,15 @@
 // Reading the camera's OPFS records on the main thread (lists, export, delete) and the storage figures
 // (R-REC-3, R-REC-6, R-EXP-3, N-STORE-1). Writes go through the recording worker.
 import type { PeerInfo } from '../link/source';
-import { LOG_FILE, MATCHES_DIR, RECORDING_FILE, repairMeta, type MirrorLog, type RecordingMeta, type StoredFile } from './meta';
+import { LOG_FILE, MATCHES_DIR, RECORDING_FILE, STUDIO_FILE, repairMeta, withStudio, type MirrorLog, type RecordingMeta, type StoredFile, type StudioLog } from './meta';
 
 export interface StoredRecording {
   meta: RecordingMeta;
+  /** The scoreboard's log with the Studio's events after it (withStudio). */
   log: MirrorLog | null;
   files: Map<string, File>;
+  /** D16: the Studio's events on their own, and the log before them. */
+  studio?: { base: MirrorLog; log: StudioLog };
 }
 
 export const opfsSupported = (): boolean =>
@@ -41,7 +44,9 @@ export async function readRecording(dir: FileSystemDirectoryHandle, camera: Peer
   }
   const stored: StoredFile[] = [...files.values()].map((f) => ({ name: f.name, size: f.size, lastModified: f.lastModified }));
   const meta = repairMeta(await readJson<RecordingMeta>(files, RECORDING_FILE), dir.name, stored, camera);
-  return { meta, log: await readJson<MirrorLog>(files, LOG_FILE), files };
+  const log = await readJson<MirrorLog>(files, LOG_FILE);
+  const studio = log ? ((await readJson<StudioLog>(files, STUDIO_FILE)) ?? { matchId: log.matchId, events: [] }) : null;
+  return { meta, log: withStudio(log, studio), files, ...(log && studio ? { studio: { base: log, log: studio } } : {}) };
 }
 
 /** Every recorded match, newest first. */

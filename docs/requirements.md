@@ -538,9 +538,17 @@ not the match asks why points were won.
   `recording.source` is `'imported'` (or whose segment recorded no panel) has
   nothing burned in: the render draws the whole overlay (panel, stats, card)
   as well as the replays, with the same `tRec` meaning.
-- **R-REP-8 Studio.** Tagging while watching the video and adjusting each
-  replay's start, end and speed follow in their own PR
-  (data/badminton-replay-research/report.md section 11).
+- **R-REP-8 Studio.** After the match, Recordings opens a Studio per
+  recording: the video with its rally list, where any point is given a replay
+  or has it taken off, each replay's start and end move by 1 s or to the
+  playhead and its speed is ×0.5, ×0.75 or ×1, the window is previewed at its
+  speed, points are tagged while watching, with keyboard shortcuts, and "Make
+  video" makes the replays video (R-REP-5) with the changes. The changes are
+  ordinary `tag` / `replay` events kept beside the camera's copy of the log
+  (`studio.json`), so the scoreboard's later updates of that copy never lose
+  them, and they count after its events. *Accept:* in `pnpm render-proof`,
+  point 1 given a replay, its start moved 2 s later, ×0.75, previewed and
+  re-tagged in the Studio makes a video exactly that replay longer.
 
 ### Scoring a saved video (R-VID)
 
