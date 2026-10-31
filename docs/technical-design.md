@@ -530,7 +530,12 @@ Reconnect (R-PAIR-8): when ICE reports `failed`, or pongs are missing for
 `RTCPeerConnection` and posts it with `gen + 1`; the scoreboard phone, which
 polls `offer?gen=N` every 2 s while the link is down, applies it, answers,
 and the camera polls the answer. If the connection object is unusable a fresh
-one is created. Backoff: 2 s for the first minute, then 5 s. When the helper
+one is created. An offer gathered while this phone's network is still down
+(no candidate at all, or no relay candidate when the link ran through the relay
+or the phones are on different networks) is not posted: the camera gathers
+again 2 s later, rather than wait out a 10 s attempt the other phone cannot
+connect to (the link came back 16 s after the network before, 2026-10-31
+audit). Backoff: 2 s for the first minute, then 5 s. When the helper
 is unreachable the chip says "offline" and polling continues at 5 s until it
 answers. Nothing is lost meanwhile (R-PAIR-3, R-PAIR-4).
 

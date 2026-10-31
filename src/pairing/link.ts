@@ -218,6 +218,8 @@ export class PeerLink {
   private lastPollAt = 0;
   /** Camera: its code on show was withdrawn on pagehide; a page restored from the back-forward cache shows a new one. */
   private withdrewCode = false;
+  /** The link was last carried by the relay: a reconnect offer without a relay candidate cannot reach the other phone. */
+  private relayed = false;
   private gen = 0;
   /** The newest generation the helper said it holds (a 409): the next offer goes above it. */
   private latestGen = 0;
@@ -542,6 +544,7 @@ export class PeerLink {
     this.firstAnswerAt = null;
     this.peerSeenAt = null;
     this.withdrewCode = false;
+    this.relayed = false;
     this.sessionLost = false;
     this.shown.save(null);
     this.ice = null;
@@ -755,6 +758,7 @@ export class PeerLink {
     const line = `${p.type}: ${p.detail}`;
     if (line !== this.lastPathLine) this.log('path', line);
     this.lastPathLine = line;
+    this.relayed = p.type === 'relay';
     this.set({ path: p.type });
   }
 
@@ -1155,6 +1159,13 @@ export class PeerLink {
       kind = 'fresh';
       sdp = await this.makeOffer('fresh', gen);
     }
+    if (!this.reachable(sdp)) {
+      // Gathered while this phone's network was down: posting it would only cost a 10 s attempt the other phone
+      // cannot connect to (2026-10-31 audit, BUG-7). Try again soon instead.
+      if (kind === 'restart' && this.pc?.signalingState === 'have-local-offer') await this.pc.setLocalDescription({ type: 'rollback' }).catch(() => {});
+      this.log('sdp', `offer gen ${gen} not posted: nothing in it the other phone could reach`);
+      throw new PairFailure('no-candidates');
+    }
     try {
       await this.helper.postOffer(this.session!, { gen, sdp, fresh: kind === 'fresh', by: this.role, ...this.meta() });
     } catch (err) {
@@ -1172,13 +1183,24 @@ export class PeerLink {
     this.nextPollAt = this.now() + (this.role === 'scoreboard' ? answerPollEvery(this.now(), this.now(), POLL_FAST_MS) : cameraPollEvery(this.now(), this.down, false));
   }
 
+  /**
+   * Whether an offer can reach the other phone: it has a candidate at all, and a relay one when the link last ran
+   * through the relay or the phones are on different networks (with relay servers to gather from).
+   */
+  private reachable(sdp: string): boolean {
+    if (!hasCandidates(sdp)) return false;
+    if (!this.pcServers.length || !(this.relayed || this.snap.net?.verdict === 'different')) return true;
+    return / typ relay /.test(sdp);
+  }
+
   private async runAttempt(kind: 'restart' | 'fresh'): Promise<void> {
     const epoch = this.epoch;
     this.busy = true;
     try {
       await this.offer(kind);
     } catch (err) {
-      if (epoch === this.epoch) {
+      if (epoch === this.epoch && err instanceof PairFailure) this.retryAt = this.now() + POLL_FAST_MS; // not posted: gather again soon
+      else if (epoch === this.epoch) {
         this.helperFailed(err);
         if (err instanceof HelperError && err.kind === 'stale') {
           this.latestGen = Math.max(this.latestGen, err.gen ?? 0);
