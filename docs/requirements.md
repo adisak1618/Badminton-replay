@@ -539,16 +539,30 @@ not the match asks why points were won.
   nothing burned in: the render draws the whole overlay (panel, stats, card)
   as well as the replays, with the same `tRec` meaning.
 - **R-REP-8 Studio.** After the match, Recordings opens a Studio per
-  recording: the video with its rally list, where any point is given a replay
-  or has it taken off, each replay's start and end move by 1 s or to the
-  playhead and its speed is ×0.5, ×0.75 or ×1, the window is previewed at its
-  speed, points are tagged while watching, with keyboard shortcuts, and "Make
-  video" makes the replays video (R-REP-5) with the changes. The changes are
-  ordinary `tag` / `replay` events kept beside the camera's copy of the log
-  (`studio.json`), so the scoreboard's later updates of that copy never lose
-  them, and they count after its events. *Accept:* in `pnpm render-proof`,
-  point 1 given a replay, its start moved 2 s later, ×0.75, previewed and
-  re-tagged in the Studio makes a video exactly that replay longer.
+  recording, landscape only, in two modes (design B, the captain's pick on
+  2026-11-01, "เอาแบบ B", ux-design.md C6).
+  - **Watching:** the recording fills the screen with the whole match laid
+    over its bottom edge. Each point is a block from the previous tap to its
+    own (breaks over 45 s hatched), and each replay is a bright bar from its
+    start to its end with a star.
+  - **Focus on a point:** the video docks above a zoomed lane of that point.
+    There, any point is given a replay or has it taken off; the replay's ends
+    are dragged by their knobs or moved by 1 s or to the playhead; its speed
+    is ×0.5, ×0.75 or ×1; it is previewed at its speed; and the point is
+    tagged.
+  - **Around it:** a points list with filters, PR 17's keyboard shortcuts,
+    and "Make video", which makes the replays video (R-REP-5) with the
+    changes.
+
+  The changes are ordinary `tag` / `replay` events kept beside the camera's
+  copy of the log (`studio.json`), so the scoreboard's later updates of that
+  copy never lose them, and they count after its events. *Accept:* in
+  `pnpm render-proof`:
+  - point 3's star on the overview opens it in focus;
+  - the list opens point 1, and ★, "]" twice, "2", dragging the end knob half
+    a second later, a preview and a re-tag are all saved, the drag as one
+    event;
+  - the video made is exactly that replay longer.
 
 ### Scoring a saved video (R-VID)
 

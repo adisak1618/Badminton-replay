@@ -523,37 +523,90 @@ says how much is needed and free. Done: "Share video" (the share sheet with
 one file per segment, `…-video-<n>-replays.mp4`) and "Delete it". Changing
 the marks or the options makes a new video rather than mixing parts.
 
-### C6 Studio (D16)
+### C6 Studio (D16, design B "watch, then focus")
+
+The captain picked design B of three (data/badminton-replay-research/studio-ux/,
+2026-11-01): "เอาแบบ B". Landscape only: in portrait the rotate screen shows
+(R-DISP-7).
+
+Watching:
 
 ```
-+---------------------------------------------------------------+
-| ‹ Studio · A vs B                      ★ 4 replays [Make video]|
-| +---------------------------------+ GAME 1                    |
-| |                                 | ★ #1 1–0 A Nan · winner 0:04|
-| |       the recording             | ☆ #2 1–1 B Sax · winner 0:13|
-| |                                 | ★ #3 2–1 A Golf · winner 0:22|
-| +---------------------------------+ ...                       |
-| [−2 s] [▶] [+2 s] [====o==========] 0:04 / 1:30               |
-| [★ Replay] #1 · 1–0  follow video            [🏷 Nan · winner] |
-| Start [−] −4.0 s [+] here  End [−] −1.0 s [+] here            |
-| [×0.5] [×0.75] [×1] [▶ Preview] Reset  3.0 s → 4.3 s          |
-| Space play · ←→ 2 s · ↑↓ point · R ★ · T tag · [ ] start ...  |
-+---------------------------------------------------------------+
++------+----------------------------------------------+------+
+| [‹]  |                                              | ★ 4  |
+| [☰]  |          the recording, full height           |[Make |
+|      |            (82 % of a phone's screen)          |video]|
+|      |                                              |      |
+|      | [▶] 0:22 / 29:10  #3 · 2–1 Golf · winner  [✎ Edit this point] |
+|      |      ★          ★★              ★          ★ |      |
+|      | ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬//▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬ |      |
++------+----------------------------------------------+------+
 ```
 
-The recording with its rally list, after the match (a recording whose match
-is known). A row jumps the video to that point's replay window (or 6 s before
-its tap) and selects it; with nothing selected the editor follows the point
-the playhead has just passed. The editor gives or takes the point's replay
-(★, like the rally list), moves the window's start and end by 1 s or to the
-playhead ("here"), within 30 s before the tap to 5 s after and at least 1 s
-long, sets ×0.5 / ×0.75 / ×1, previews the window at that speed and resets it
-to the default. "🏷" opens the tag popup (S3d, from the list: nothing closes
-by itself) when the match asks why points were won. Every change is saved at
-once; "Make video" opens C5 with them. Keys (shown on screens taller than a
-phone in landscape): Space play, ← → 2 s (Shift 10 s), ↑ ↓ previous / next
-point, R ★, T tag, [ ] start ∓1 s, , . end ∓1 s, I O start / end at the
-playhead, 1 2 3 speed, S next speed, P preview, Esc follow the video.
+The recording fills the screen. The whole match lies over its bottom edge: a
+band of point blocks tinted by the side that won each, breaks hatched, a bright
+bar for each replay window with a star above it, and the playhead. A point's
+block runs from the previous point's tap to its own tap (the log has taps, not
+serves); more than 45 s before a tap is a break (the interval, between games).
+Dragging the overview scrubs; tapping a star opens that point in focus;
+tapping elsewhere moves the video there. The controls fade 2.5 s into playback
+and come back on a tap. "✎ Edit this point" opens the point just played; "☰"
+opens the points list.
+
+Focus on a point:
+
+```
++------------+--------------------------------+------------+
+| [‹ Watch][☰]|                                | [🏷][★ Replay]|
+| #3 · 2–1 A  |      the recording (42 %)      | END −1.0 s |
+| START −6.0 s|                                | [−1 s][+1 s][here]|
+| [−1 s][+1 s][here]|                          | [×0.5][×0.75][×1]|
+|            |                                | [▶ Preview][Reset]|
+| [◀ #2][#4 ▶]|                                |            |
++------------+--------------------------------+------------+
+| −8 −6 −4 −2 ±0 +2 +4 +6      (seconds from the tap)       |
+|   ◯━━━━━ ★ 5.0 s ×0.5 → 10.3 s ━━━━━◯      | tap  #4 …    |
++-------------------------------------------------------------+
+| the whole match, with the lane's range boxed                |
++-------------------------------------------------------------+
+```
+
+The video docks at the top. Underneath, a zoomed lane shows that point: from
+6 s before its replay starts (22 s before the tap without one) to 7 s after
+the tap, in seconds from the tap. It shows the point's block, its neighbours
+dimmed, the tap, and the replay bar with a round knob at each end.
+- **Knobs:** dragging one moves that end in tenths of a second and the video
+  shows that frame. The change is saved when the finger lifts.
+- **Lane gestures:** dragging elsewhere scrubs; tapping a neighbouring point
+  focuses it; pinch (or ctrl/⌘ + wheel, + / −) zooms it, between 5 s and
+  3 min.
+- **Side columns:** the start's buttons sit on the left (−1 s, +1 s, "here" =
+  the playhead), the end's on the right, the bar's own two sides. The right
+  also holds ★ (give or take the replay), 🏷 (the tag popup, S3d, when the
+  match asks why points were won), ×0.5 / ×0.75 / ×1, ▶ Preview (the window
+  at its speed, pausing at its end) and Reset (the default window).
+- **Moving and leaving:** ◀ / ▶ move to the neighbouring point. The overview
+  stays at the bottom with the lane's range boxed; tapping it moves the focus
+  there. "‹ Watch" goes back.
+- **Every touch target is at least 44 px.**
+
+Points (☰, either mode): a sheet over the lower three quarters. It has
+filters (All, ★, Untagged) and one row per point: its ★ (a tap gives or
+takes the replay), number, score, winner, tag, speed and time on the
+recording. A row opens that point in focus.
+
+Every change is saved at once; "Make video" (watching) opens C5 with them.
+Keys (listed in focus on screens taller than a phone):
+- Space play
+- ← → 2 s (Shift 10 s)
+- ↑ ↓ previous / next point
+- Enter focus on the point just played
+- R ★, T tag
+- [ ] start ∓1 s, , . end ∓1 s, I O start / end at the playhead
+- 1 2 3 speed, S next speed, P preview
+- + − zoom the lane, 0 / Z back to the point
+- L the list
+- Esc closes the list, then leaves focus
 
 ### E1 Error, offline and reconnect states
 

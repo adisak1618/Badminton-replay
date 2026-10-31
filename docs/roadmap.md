@@ -111,15 +111,19 @@ own PR:
 2. **Speed test on the captain's iPhone**: a page that renders a recorded
    clip full length on the phone, so the post-match pass is sized on the
    device before it is built.
-3. **Post-match renderer on the camera phone** (PR 16; WebCodecs through
+3. **Post-match renderer on the camera phone** (PR 16, merged; WebCodecs through
    Mediabunny): one pass inserts every replay inline with the BWF card spin,
    the frozen panel with REPLAY ×0.5 and the real sound after the point, and
    burns the stats table and summary card from tags added after the match
    (counted back at their point's time); wake lock, resumable in segments,
    free-space check.
-4. **Studio screen** (this slice): watch the clip, jump per point, tag in
-   place, ★ any point, adjust each replay (start ±1 s, end ±1 s, ×0.5 /
+4. **Studio screen** (PR 17, merged): watch the clip, jump per point, tag
+   in place, ★ any point, adjust each replay (start ±1 s, end ±1 s, ×0.5 /
    ×0.75 / ×1), render; keyboard shortcuts.
+5. **Studio, design B** (this slice; the captain's pick of three, "เอาแบบ B"):
+   watch full screen with the whole match laid over the video; focus on a
+   point with a zoomed lane and draggable knobs on the replay's ends; the
+   points list as a sheet; landscape only.
 
 ## Later (not scheduled)
 

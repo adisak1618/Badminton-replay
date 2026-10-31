@@ -204,9 +204,11 @@ async function ui(browser: Browser): Promise<void> {
 }
 
 /**
- * The Studio (C6) on a seeded recording: give point 1 a replay, move its start 2 s later with "]", ×0.75 with "2",
- * preview it, change its tag with "T", then Make video. The Studio's events must land in studio.json and the made video
- * must grow by exactly that replay.
+ * The Studio (C6, design B) on a seeded recording, at a phone's landscape size: watching, a tap on point 3's star on the
+ * overview opens it in focus; back, then the points sheet opens point 1 in focus; ★ gives it a replay, "]" twice moves
+ * its start 2 s later, "2" sets ×0.75, the end knob is dragged half a second later on the lane, "P" previews it and "T"
+ * re-tags it; then Make video. The Studio's events must land in studio.json and the made video must grow by exactly
+ * that replay.
  */
 async function studio(browser: Browser): Promise<void> {
   const ctx = await browser.newContext({ viewport: { width: 844, height: 390 }, deviceScaleFactor: 2 });
@@ -223,27 +225,64 @@ async function studio(browser: Browser): Promise<void> {
   await page.goto(`${base}/`);
   await page.getByRole('button', { name: /Recordings \(1\)/ }).click();
   await page.locator('[data-testid=studio-open]').click();
-  await page.waitForSelector('[data-testid=studio-points] [data-testid=studio-point-1]');
+  await page.waitForSelector('[data-testid=studio][data-mode=watch]');
+  const mode = () => page.locator('[data-testid=studio]').getAttribute('data-mode');
   const marked = async () => (await page.locator('[data-testid=studio-marked]').textContent())?.trim();
-  if ((await marked()) !== '★ 3 replays') throw new Error(`studio: starts with ${await marked()}`);
+  // The overview knows its span once the video's length is known.
+  await page.waitForFunction(() => Number(document.querySelector('[data-testid=studio-overview]')?.getAttribute('data-span')?.split(',')[1]) > 1000);
+  if ((await marked()) !== '★ 3') throw new Error(`studio: starts with ${await marked()}`);
+  await page.waitForFunction(() => (document.querySelector('[data-testid=studio-video]') as HTMLVideoElement | null)?.readyState! >= 2);
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: path.join(OUT, 'studio-1-watch.png') });
+  /** Where recording ms `ms` is on a timeline canvas (its data-span), at height `y` px from its top. */
+  const at = async (id: string, ms: number, y: number | 'knob') => {
+    const c = page.locator(`[data-testid=${id}]`);
+    const b = (await c.boundingBox())!;
+    const [from, to] = (await c.getAttribute('data-span'))!.split(',').map(Number);
+    return { x: b.x + ((ms - from) / (to - from)) * b.width, y: b.y + (y === 'knob' ? (14 + b.height - 4) / 2 - 4 : y) };
+  };
+  // Point 3 (tap at 22 s) replays 16–21 s by default: its star sits over 18.5 s, near the overview's top.
+  const s3 = await at('studio-overview', 18_500, 13);
+  await page.mouse.click(s3.x, s3.y);
+  await page.waitForSelector('[data-testid=studio][data-mode=focus]');
+  const head3 = await page.locator('[data-testid=studio]').innerText();
+  if (!head3.includes('#3 · 2–1')) throw new Error('studio: the star did not open point 3');
+  await page.locator('[data-testid=studio-watch]').click();
+  if ((await mode()) !== 'watch') throw new Error('studio: ‹ Watch did not go back');
+  await page.locator('[data-testid=studio-list-open]').first().click();
+  await page.waitForSelector('[data-testid=studio-sheet]');
+  await page.screenshot({ path: path.join(OUT, 'studio-2-sheet.png') });
   await page.locator('[data-testid=studio-point-1]').click();
+  await page.waitForSelector('[data-testid=studio][data-mode=focus]');
   await page.locator('[data-testid=studio-star]').click();
+  if ((await page.locator('[data-testid=studio-star]').getAttribute('aria-pressed')) !== 'true') throw new Error('studio: ★ did not give point 1 a replay');
   await page.keyboard.press(']');
   await page.keyboard.press(']');
   await page.keyboard.press('2');
   const start = await page.locator('[data-testid=studio-start]').textContent();
-  if ((await marked()) !== '★ 4 replays' || start !== '−4.0 s') throw new Error(`studio: after the edits ${await marked()}, start ${start}`);
+  if (start !== '−4.0 s') throw new Error(`studio: start ${start} after "]" twice`);
   if ((await page.locator('[data-testid="studio-speed-0.75"]').getAttribute('aria-pressed')) !== 'true') throw new Error('studio: ×0.75 not on');
+  // Drag the end knob from 3 s (1 s before point 1's tap at 4 s) to 3.5 s on the lane.
+  const e0 = await at('studio-lane', 3000, 'knob');
+  const e1 = await at('studio-lane', 3500, 'knob');
+  await page.mouse.move(e0.x, e0.y);
+  await page.mouse.down();
+  await page.mouse.move((e0.x + e1.x) / 2, e0.y, { steps: 3 });
+  await page.mouse.move(e1.x, e1.y, { steps: 3 });
+  await page.screenshot({ path: path.join(OUT, 'studio-3-drag.png') });
+  await page.mouse.up();
+  const end = await page.locator('[data-testid=studio-end]').textContent();
+  if (end !== '−0.5 s') throw new Error(`studio: the end knob dragged to 3.5 s gives ${end}`);
   await page.keyboard.press('p');
   await page.waitForTimeout(1200);
   const v = await page.locator('[data-testid=studio-video]').evaluate((el: HTMLVideoElement) => ({ rate: el.playbackRate, paused: el.paused, t: el.currentTime }));
   if (v.rate !== 0.75 || v.paused || v.t <= 0) throw new Error(`studio: preview ${JSON.stringify(v)} ${await page.locator('[role=status]').allTextContents()}`);
-  await page.screenshot({ path: path.join(OUT, 'studio-1-edit.png') });
   await page.keyboard.press('t');
   await page.locator('[data-testid=tag-who-A1]').click();
-  await page.screenshot({ path: path.join(OUT, 'studio-2-tag.png') });
+  await page.screenshot({ path: path.join(OUT, 'studio-4-tag.png') });
   await page.locator('[data-testid=tag-skip]').click();
-  const tag = await page.locator('[data-testid=studio-tag]').textContent();
+  const tag = await page.locator('[data-testid=studio-tag]').getAttribute('title');
+  if (tag !== 'Nan · winner') throw new Error(`studio: the tag is ${tag}`);
   const saved = await page.evaluate(async () => {
     const r = await navigator.storage.getDirectory();
     const d = await (await r.getDirectoryHandle('matches')).getDirectoryHandle('studio-proof');
@@ -258,13 +297,22 @@ async function studio(browser: Browser): Promise<void> {
     }
     return null;
   });
+  // ★, "]", "]", "2", the drag (one event on release, not one per move), the tag.
   const types = saved?.map((e) => e.type).join(',');
-  if (types !== 'replay,replay,replay,replay,tag') throw new Error(`studio: studio.json holds ${types}`);
+  if (types !== 'replay,replay,replay,replay,replay,tag') throw new Error(`studio: studio.json holds ${types}`);
   const last = saved!.filter((e) => e.type === 'replay').pop()!;
-  if (last.start !== -4000 || last.end !== -1000 || last.speed !== 0.75) throw new Error(`studio: the last mark is ${JSON.stringify(last)}`);
+  if (last.start !== -4000 || last.end !== -500 || last.speed !== 0.75) throw new Error(`studio: the last mark is ${JSON.stringify(last)}`);
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.waitForTimeout(300);
-  await page.screenshot({ path: path.join(OUT, 'studio-3-large.png') });
+  await page.screenshot({ path: path.join(OUT, 'studio-5-large-focus.png') });
+  await page.locator('[data-testid=studio-watch]').click();
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: path.join(OUT, 'studio-6-large-watch.png') });
+  await page.setViewportSize({ width: 844, height: 390 });
+  if ((await marked()) !== '★ 4') throw new Error(`studio: after the edits ${await marked()}`);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: path.join(OUT, 'studio-7-portrait.png') });
   await page.setViewportSize({ width: 844, height: 390 });
   await page.locator('[data-testid=studio-render]').click();
   await page.locator('[data-testid=render-start]').click();
@@ -285,12 +333,12 @@ async function studio(browser: Browser): Promise<void> {
   const out = path.join(OUT, 'chrome-studio.mp4');
   fs.writeFileSync(out, Buffer.concat(chunks));
   const dur = Number(probe(out).format.duration) * 1000;
-  // The scenario's three replays (the proof's "burned" render of the same clip) plus point 1's: 3 s at ×0.75 = 4 s, and
-  // the 0.25 s dissolve back.
-  const want = Number(probe(path.join(OUT, 'chrome-burned.mp4')).format.duration) * 1000 + 4000 + 250;
+  // The scenario's three replays (the proof's "burned" render of the same clip) plus point 1's: 0 s to 3.5 s at ×0.75
+  // (4.67 s), and the 0.25 s dissolve back.
+  const want = Number(probe(path.join(OUT, 'chrome-burned.mp4')).format.duration) * 1000 + 3500 / 0.75 + 250;
   if (Math.abs(dur - want) > 150) throw new Error(`studio: the made video is ${dur} ms, expected ${want}`);
   if (errors.length) throw new Error(errors.join('\n'));
-  console.log(`chrome studio: ★ point 1, start ${start}, ×0.75, preview at ${v.rate}x, tag "${tag?.trim()}", studio.json ${types}; the made video ${(dur / 1000).toFixed(2)} s (expected ${(want / 1000).toFixed(2)} s)`);
+  console.log(`chrome studio (B): star on the overview opens #3; sheet opens #1; ★, start ${start}, ×0.75, end knob dragged to ${end}, preview at ${v.rate}x, tag "${tag}", studio.json ${types}; the made video ${(dur / 1000).toFixed(2)} s (expected ${(want / 1000).toFixed(2)} s)`);
   await ctx.close();
 }
 
