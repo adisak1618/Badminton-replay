@@ -4,9 +4,10 @@
 // old ones run out, and a relayed link restarts ICE before they expire.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryStore, createHandler, type TurnServer } from '../../api/signal';
-import { slowConnectText, SLOW_CONNECT_TEXT, SLOW_RELAY_TEXT } from '../ui/pairText';
+import { unreachableText } from '../ui/pairText';
 import { encode } from '../protocol/messages';
 import { HelperClient, type Desc, type IceReply, type Session } from './helper';
+import { unreachable } from './unreachable';
 import {
   ICE_REFRESH_BEFORE_MS,
   STUN_URLS,
@@ -120,12 +121,10 @@ describe('why the relay did not carry the link', () => {
     expect(relayReason({ state: 'ready' }, netCheck(relayed(B), relayed(A)))).toBe('the relay did not connect');
   });
 
-  it('the different-networks line carries the reason; with a working relay the plain line does not demand one Wi-Fi', () => {
-    const text = slowConnectText(netCheck(B, A), { state: 'not-configured' });
+  it('a pairing that could not open names the networks and the reason', () => {
+    const text = unreachableText(unreachable({ state: 'not-configured' }, netCheck(B, A), null), 'scoreboard');
     expect(text).toContain('different networks (this phone 10.131.171.124, the other 10.195.144.160), probably mobile data, and the internet relay is not set up.');
-    expect(slowConnectText(netCheck(relayed(B), relayed(A)), { state: 'ready' })).toContain('and the relay did not connect.');
-    expect(slowConnectText(null, { state: 'ready' })).toBe(SLOW_RELAY_TEXT);
-    expect(slowConnectText(null, { state: 'not-configured' })).toBe(SLOW_CONNECT_TEXT);
+    expect(unreachableText(unreachable({ state: 'ready' }, netCheck(relayed(B), relayed(A)), { app: 'x@1' }), 'camera')).toContain('both phones reached the internet relay but not each other');
   });
 });
 

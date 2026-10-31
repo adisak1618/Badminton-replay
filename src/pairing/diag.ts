@@ -166,7 +166,10 @@ type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 
 /** `/sessions/ff8a33…/answer?gen=1` out of a helper URL: a short session id, never the secret (a header). */
 export function helperPath(url: string): string {
-  return url.replace(/^.*\/api\/signal/, '').replace(/(\/sessions\/[0-9a-f]{6})[0-9a-f]{26}/, '$1…');
+  return url
+    .replace(/^.*\/api\/signal/, '')
+    .replace(/(\/sessions\/[0-9a-f]{6})[0-9a-f]{26}/, '$1…')
+    .replace(/\?claim=[0-9a-f]+$/, ''); // the claim id (BUG-5) says nothing to a reader
 }
 
 /** A fetch for HelperClient that logs each request: method, path, status (and the helper's error code). */

@@ -11,11 +11,20 @@
 //
 // Either phone may offer a new connection (the camera to reconnect, a scoreboard coming back from a locked
 // screen); GET sessions/:id/poll gives each side what the other one posted. POST sessions/:id/end marks a
-// pairing one phone ended, so the other learns it even when the goodbye on the channel was lost.
+// pairing one phone ended, so the other learns it even when the goodbye on the channel was lost, and why: it
+// unpaired, withdrew the code, could not connect, or runs another protocol version.
+//
+// Each description may say which build and protocol version made it and whether that phone had a relay, so
+// the other phone can refuse a build it cannot talk to, or say why a link cannot open, before the data
+// channel exists (a build that cannot open the channel was never told, 2026-10-30). Older builds send none of it.
 import { Redis } from '@upstash/redis';
 
 export const ROOM_TTL_S = 600; // a room code lives 10 minutes and is deleted on first read
-export const SESSION_TTL_S = 6 * 3600; // refreshed on every write, so a match never outlives its session
+/** A claim the page gave up on (its 4 s timeout) can be asked again with the same claim id for this long. */
+export const CLAIMED_TTL_S = 60;
+export const SESSION_TTL_S = 6 * 3600; // refreshed on every write and, at most every TOUCH_EVERY_S, by a poll
+/** A poll keeps its session alive this often: an open link on one Wi-Fi writes nothing after pairing. */
+export const TOUCH_EVERY_S = 600;
 export const CLAIM_LIMIT_PER_MIN = 20; // GET rooms/:code per IP: a six-digit code cannot be brute-forced in 10 min
 export const CREATE_LIMIT_PER_MIN = 10; // POST rooms per IP: keeps the store from being flooded
 export const MAX_BODY_BYTES = 16_384;
@@ -214,7 +223,14 @@ export async function mintTurn(cfg: TurnConfig, ttlS: number, fetchImpl: Fetch =
 
 export type Side = 'camera' | 'scoreboard';
 
-export interface Offer {
+/** What the sending phone says about itself: its build, protocol version, and relay state ('ready', 'failed: …'). */
+export interface PeerMeta {
+  app?: string;
+  v?: number;
+  relay?: string;
+}
+
+export interface Offer extends PeerMeta {
   gen: number;
   sdp: string;
   /** A description for a new RTCPeerConnection rather than an ICE restart of the current one. */
@@ -225,10 +241,17 @@ export interface Offer {
 }
 export type Answer = Offer;
 
+/** Why a phone ended a session: unpaired, withdrew its code (or showed a new one), could not connect, or the other phone's protocol is not its own. */
+export const END_REASONS = ['unpaired', 'withdrawn', 'unreachable', 'version'] as const;
+export type EndReason = (typeof END_REASONS)[number];
+
 interface Session {
   secret: string;
-  /** One phone unpaired: every later call on the session answers 410 `ended`. */
+  /** One phone ended it: every later call on the session answers 410 `ended`, with the reason and that phone's build. */
   ended?: boolean;
+  reason?: EndReason;
+  app?: string;
+  v?: number;
 }
 
 export interface HandlerOptions {
@@ -242,6 +265,7 @@ export interface HandlerOptions {
 
 const CODE = /^\d{6}$/;
 const ID = /^[0-9a-f]{32}$/;
+const CLAIM = /^[0-9a-f]{8,64}$/;
 
 class HttpError extends Error {
   status: number;
@@ -303,6 +327,15 @@ function genOf(v: unknown): number {
   return v;
 }
 
+/** The sender's build, protocol and relay state, when present and sane; anything else is dropped, never refused. */
+function metaOf(body: Record<string, unknown>): PeerMeta {
+  const m: PeerMeta = {};
+  if (typeof body.app === 'string' && body.app.length <= 100 && /^[\w.@+:-]+$/.test(body.app)) m.app = body.app;
+  if (typeof body.v === 'number' && Number.isInteger(body.v) && body.v >= 1 && body.v <= 1000) m.v = body.v;
+  if (typeof body.relay === 'string' && body.relay.length <= 160) m.relay = body.relay;
+  return m;
+}
+
 /** The path below /api/signal: from the pathname, or from the `path` query a rewrite may add. */
 function routeOf(url: URL): string[] {
   let p = url.pathname.replace(/^\/api\/signal\/?/, '');
@@ -326,7 +359,7 @@ export function createHandler(getStore: () => SignalStore | null, opts: HandlerO
     if (!raw) throw new HttpError(404, 'no-session');
     const s = JSON.parse(raw) as Session;
     if (typeof secret !== 'string' || !sameSecret(secret, s.secret)) throw new HttpError(403, 'bad-secret');
-    if (s.ended) throw new HttpError(410, 'ended');
+    if (s.ended) throw new HttpError(410, 'ended', { reason: s.reason ?? 'unpaired', ...(s.app ? { app: s.app } : {}), ...(s.v ? { v: s.v } : {}) });
     return s;
   };
 
@@ -364,7 +397,7 @@ export function createHandler(getStore: () => SignalStore | null, opts: HandlerO
       const id = hex(randomBytes(16));
       const secret = hex(randomBytes(16));
       await store.set(`sess:${id}`, JSON.stringify({ secret } satisfies Session), SESSION_TTL_S);
-      const offer: Offer = { gen: 1, sdp, fresh: true, at: now() };
+      const offer: Offer = { gen: 1, sdp, fresh: true, at: now(), ...metaOf(body) };
       await store.set(`offer:${id}`, JSON.stringify(offer), SESSION_TTL_S);
       const code = await newCode(store, id);
       return json(201, { code, session: id, secret, expiresIn: ROOM_TTL_S });
@@ -374,7 +407,15 @@ export function createHandler(getStore: () => SignalStore | null, opts: HandlerO
       if (m !== 'GET') throw new HttpError(405, 'method');
       await limit(store, 'claim', req, CLAIM_LIMIT_PER_MIN);
       if (!CODE.test(b)) throw new HttpError(404, 'no-room');
-      const id = await store.take(`room:${b}`);
+      // One-shot, except for the claim that took it: a page whose claim timed out while the helper completed it
+      // asks again with the same claim id and gets the same session (the code was burned before: 2026-10-31 audit).
+      const claim = url.searchParams.get('claim');
+      let id = await store.take(`room:${b}`);
+      if (id && claim && CLAIM.test(claim)) await store.set(`claimed:${b}`, JSON.stringify({ id, claim }), CLAIMED_TTL_S);
+      if (!id && claim && CLAIM.test(claim)) {
+        const prev = JSON.parse((await store.get(`claimed:${b}`)) ?? 'null') as { id: string; claim: string } | null;
+        if (prev?.claim === claim) id = prev.id;
+      }
       if (!id) throw new HttpError(404, 'no-room');
       const raw = await store.get(`sess:${id}`);
       const offer = await readDesc(store, `offer:${id}`);
@@ -388,7 +429,7 @@ export function createHandler(getStore: () => SignalStore | null, opts: HandlerO
         await session(store, b, body.secret ?? headerSecret);
         const gen = genOf(body.gen);
         const sdp = sdpOf(c === 'answer' ? body.answer : body.offer);
-        const desc: Offer = { gen, sdp, fresh: body.fresh === true, at: now() };
+        const desc: Offer = { gen, sdp, fresh: body.fresh === true, at: now(), ...metaOf(body) };
         if (c === 'offer') desc.by = body.by === 'scoreboard' ? 'scoreboard' : 'camera';
         const current = await readDesc(store, `offer:${b}`);
         if (c === 'answer' && current?.gen !== gen) throw new HttpError(409, 'stale', { gen: current?.gen ?? 0 });
@@ -403,6 +444,7 @@ export function createHandler(getStore: () => SignalStore | null, opts: HandlerO
         const desc = await readDesc(store, `${c}:${b}`);
         // An answer is fetched for exactly its offer's generation; an offer when it is newer than the last seen.
         const ready = desc && (c === 'answer' ? desc.gen === gen : desc.gen > gen);
+        if (ready && c === 'answer') await store.set(`seen:${b}`, String(gen), SESSION_TTL_S);
         return ready ? json(200, { [c]: desc }) : json(204);
       }
       throw new HttpError(405, 'method');
@@ -413,6 +455,8 @@ export function createHandler(getStore: () => SignalStore | null, opts: HandlerO
       await session(store, b, headerSecret);
       const side = url.searchParams.get('role');
       if (side !== 'camera' && side !== 'scoreboard') throw new HttpError(400, 'bad-role');
+      // A phone still polling is still paired: keep the session alive (one write per TOUCH_EVERY_S).
+      if (await store.set(`touch:${b}`, '1', TOUCH_EVERY_S, true)) await touch(store, b);
       const gen = Number(url.searchParams.get('gen') ?? 0);
       const offer = await readDesc(store, `offer:${b}`);
       const mine = (offer?.by ?? 'camera') === side;
@@ -420,8 +464,15 @@ export function createHandler(getStore: () => SignalStore | null, opts: HandlerO
       if (offer && !mine && offer.gen > gen) return json(200, { offer });
       if (offer && mine && offer.gen === gen) {
         const answer = await readDesc(store, `answer:${b}`);
-        if (answer?.gen === gen) return json(200, { answer });
+        if (answer?.gen === gen) {
+          await store.set(`seen:${b}`, String(gen), SESSION_TTL_S); // the answering phone may ask (below)
+          return json(200, { answer });
+        }
       }
+      // The phone that answered asks whether the other one has fetched its answer: whether that phone's page is
+      // running at all (a camera reloaded or in the background after showing its code, 2026-10-31 audit).
+      if (offer && !mine && offer.gen === gen && url.searchParams.get('seen') === '1' && Number(await store.get(`seen:${b}`)) === gen)
+        return json(200, { seen: true });
       return json(204);
     }
 
@@ -429,7 +480,9 @@ export function createHandler(getStore: () => SignalStore | null, opts: HandlerO
       if (m !== 'POST') throw new HttpError(405, 'method');
       const body = await readBody(req);
       const s = await session(store, b, body.secret ?? headerSecret);
-      await store.set(`sess:${b}`, JSON.stringify({ ...s, ended: true } satisfies Session), SESSION_TTL_S);
+      const reason = END_REASONS.find((r) => r === body.reason) ?? 'unpaired';
+      const { app, v } = metaOf(body);
+      await store.set(`sess:${b}`, JSON.stringify({ ...s, ended: true, reason, ...(app ? { app } : {}), ...(v ? { v } : {}) } satisfies Session), SESSION_TTL_S);
       await Promise.all(['offer', 'answer'].map((k) => store.take(`${k}:${b}`)));
       return json(204);
     }

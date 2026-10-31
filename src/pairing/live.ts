@@ -11,7 +11,7 @@ import { briefCapture } from './capture';
 import { PairingDiag, loggedFetch } from './diag';
 import { HelperClient } from './helper';
 import { PeerLink } from './link';
-import { loadPairing, savePairing } from './saved';
+import { loadPairing, loadShown, savePairing, saveShown } from './saved';
 import { ScoreboardLink } from './scoreboard';
 import { CameraPairing, SLOTS } from './slots';
 
@@ -79,6 +79,7 @@ export function cameraPairing(): CameraPairing {
           log: (k, t) => diag.log(k, i ? `[scoreboard ${i + 1}] ${t}` : t),
           hello: () => ({ deviceId: deviceId(), app: APP_BUILD, ua: ua() }),
           saved: { load: () => loadPairing('camera', Date.now(), i), save: (p) => savePairing('camera', p, i) },
+          shown: { load: () => loadShown('camera', i), save: (s) => saveShown('camera', s, i) },
         }),
     );
     const c = new CameraPairing(links);

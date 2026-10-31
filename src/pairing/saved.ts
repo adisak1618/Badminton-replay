@@ -24,6 +24,30 @@ export function loadPairing(role: Role, now = Date.now(), slot = 0): SavedPairin
   }
 }
 
+/**
+ * The camera's code on show (its session), until a scoreboard links with it: a page that went away without
+ * withdrawing it (killed, not unloaded) withdraws it at its next launch, so nobody waits on a code with no page.
+ */
+const shownKey = (role: Role, slot = 0) => `${key(role, slot)}.shown`;
+
+export function loadShown(role: Role, slot = 0): Session | null {
+  try {
+    const s = JSON.parse(localStorage.getItem(shownKey(role, slot)) ?? 'null') as Session | null;
+    return s && typeof s.session === 'string' && typeof s.secret === 'string' ? s : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveShown(role: Role, s: Session | null, slot = 0): void {
+  try {
+    if (s) localStorage.setItem(shownKey(role, slot), JSON.stringify({ session: s.session, secret: s.secret }));
+    else localStorage.removeItem(shownKey(role, slot));
+  } catch {
+    // private mode or storage full
+  }
+}
+
 export function savePairing(role: Role, p: SavedPairing | null, slot = 0): void {
   try {
     if (p) localStorage.setItem(key(role, slot), JSON.stringify(p));

@@ -10,6 +10,7 @@ import { PROTOCOL_VERSION, encode, parse, type Msg, type Role } from '../protoco
 import type { ClockEstimate, LinkState } from '../link/source';
 import type { DiagKind } from './diag';
 import { HelperError, type Desc, type HelperClient, type HelperErrorKind, type PollReply, type Session } from './helper';
+import { PAIR_GIVE_UP_MS, PEER_SILENT_MS, relayTag, unreachable, type Unreachable } from './unreachable';
 import {
   GATHER_LAN_MS,
   GATHER_RELAY_MS,
@@ -43,15 +44,19 @@ import {
   type Down,
   type DownCause,
 } from './reconnect';
-import { loadPairing, savePairing, type SavedPairing } from './saved';
+import { loadPairing, loadShown, savePairing, saveShown, type SavedPairing } from './saved';
 
 const TICK_MS = 250;
 /** Not open this long after the answer: the pairing screens say why (pairText.ts) and the log records it. */
 export const SLOW_CONNECT_MS = 15_000;
 /** How often an open link reads which candidate pair carries it (it can change after an ICE restart). */
 const PATH_EVERY_MS = 10_000;
-/** After a failed credential fetch, and after "not configured", ask the helper again only this much later. */
-const ICE_RETRY_FAILED_MS = 30_000;
+/**
+ * After a failed credential fetch, and after "not configured", ask the helper again only this much later. A first
+ * pairing gives up PAIR_GIVE_UP_MS after its first answer, so the answer to the camera's second attempt (10 s
+ * after the first) must be able to ask again.
+ */
+const ICE_RETRY_FAILED_MS = 10_000;
 const ICE_RETRY_UNCONFIGURED_MS = 10 * 60_000;
 /** Renew the camera's code shortly before the helper forgets the room. */
 const ROOM_RENEW_BEFORE_MS = 20_000;
@@ -60,11 +65,14 @@ const BYE_DRAIN_MS = 1000;
 /** visibilitychange, pageshow and online often fire together: one resume per this. */
 const RESUME_DEBOUNCE_MS = 500;
 
-export type PairErrorKind = HelperErrorKind | 'expired' | 'no-candidates' | 'failed';
+/** unreachable: a first pairing that never opened (unreachable.ts); withdrawn: the other phone ended it first. */
+export type PairErrorKind = HelperErrorKind | 'expired' | 'no-candidates' | 'failed' | 'unreachable' | 'withdrawn';
 
 export interface PairError {
   kind: PairErrorKind;
   detail?: string;
+  /** unreachable: why, from what this phone saw. */
+  why?: Unreachable;
 }
 
 export interface Mismatch {
@@ -96,6 +104,8 @@ export interface LinkSnapshot {
   path: PathType;
   /** Since when the link has been down (the last pong when pongs stopped); null while open or unpaired. */
   downSince: number | null;
+  /** Scoreboard, first pairing: the camera has not fetched the answer PEER_SILENT_MS after it was posted. */
+  peerSilent: boolean;
 }
 
 export type HelloFields = { deviceId: string; app: string; ua?: string; matchId?: string; lastSeq?: number };
@@ -114,6 +124,8 @@ export interface PeerLinkDeps {
   ensureCapture?: (why: 'pair' | 'reconnect') => Promise<(() => void) | void>;
   /** Persisted pairing; defaults to localStorage. */
   saved?: { load(): SavedPairing | null; save(p: SavedPairing | null): void };
+  /** Camera: the session of the code on show, withdrawn at the next launch if the page died with it (saved.ts). */
+  shown?: { load(): Session | null; save(s: Session | null): void };
   /** The pairing diagnostics log (diag.ts). */
   log?: (kind: DiagKind, text: string) => void;
 }
@@ -131,6 +143,7 @@ const INITIAL: LinkSnapshot = {
   relay: RELAY_UNKNOWN,
   path: 'none',
   downSince: null,
+  peerSilent: false,
 };
 
 export function hasCandidates(sdp: string): boolean {
@@ -183,6 +196,7 @@ export class PeerLink {
   private readonly now: () => number;
   private readonly ensureCapture: NonNullable<PeerLinkDeps['ensureCapture']>;
   private readonly saved: NonNullable<PeerLinkDeps['saved']>;
+  private readonly shown: NonNullable<PeerLinkDeps['shown']>;
   private readonly log: NonNullable<PeerLinkDeps['log']>;
 
   private snap: LinkSnapshot = INITIAL;
@@ -190,9 +204,22 @@ export class PeerLink {
   private session: Session | null = null;
   /** Scoreboard: the room code the current pairing was claimed with. */
   private joined: string | null = null;
+  /** Scoreboard: this phone's claim id for a code, the same for every try at that code (api/signal.ts CLAIMED_TTL_S). */
+  private claimFor: { code: string; id: string } | null = null;
   /** The last description this phone sent and the last one it received, for the network check. */
   private localSdp: string | null = null;
   private remoteSdp: string | null = null;
+  /** The last description the other phone posted: what it said about its build, protocol and relay. */
+  private peer: Desc | null = null;
+  /** A first pairing: when its first answer was posted (scoreboard) or applied (camera); the camera gives up PAIR_GIVE_UP_MS later. */
+  private firstAnswerAt: number | null = null;
+  /** Scoreboard, first pairing: when the camera was first seen running (it fetched the answer, or offered); it gives up PAIR_GIVE_UP_MS later. */
+  private peerSeenAt: number | null = null;
+  private lastPollAt = 0;
+  /** Camera: its code on show was withdrawn on pagehide; a page restored from the back-forward cache shows a new one. */
+  private withdrewCode = false;
+  /** The link was last carried by the relay: a reconnect offer without a relay candidate cannot reach the other phone. */
+  private relayed = false;
   private gen = 0;
   /** The newest generation the helper said it holds (a 409): the next offer goes above it. */
   private latestGen = 0;
@@ -224,6 +251,11 @@ export class PeerLink {
   private epoch = 0;
   /** The page came back and its link was found dead: the scoreboard offers a fresh connection (§4.5). */
   private resuming = false;
+  /**
+   * The helper answered that it no longer knows this session while the link was open: the link is kept (it needs
+   * no helper), the idle polls stop, and the pairing ends only if the link goes down and needs the helper.
+   */
+  private sessionLost = false;
   /** A resume probe: the ping sent at `since` must be answered within PROBE_MS. */
   private probe: { since: number } | null = null;
   private lastResumeAt = 0;
@@ -242,6 +274,7 @@ export class PeerLink {
     this.now = deps.now ?? Date.now;
     this.ensureCapture = deps.ensureCapture ?? (async () => {});
     this.saved = deps.saved ?? { load: () => loadPairing(deps.role), save: (p) => savePairing(deps.role, p) };
+    this.shown = deps.shown ?? { load: () => loadShown(deps.role), save: (s) => saveShown(deps.role, s) };
     this.log = deps.log ?? (() => {});
   }
 
@@ -301,24 +334,27 @@ export class PeerLink {
   /** Camera: open a room and show its code (C2). */
   async pair(): Promise<void> {
     if (this.role !== 'camera') throw new Error('only the camera opens a room');
+    // A new code replaces the one on show: withdraw that one, so a scoreboard that typed it is told.
+    const old = this.snap.room && !this.snap.everOpened ? this.session : null;
     const epoch = this.reset();
+    if (old) void this.helper.end(old, { reason: 'withdrawn', ...this.meta() }).catch(() => {});
     this.setBusy(true);
     this.set({ error: null, mismatch: null, room: null, net: null });
     try {
       this.holdCapture(await this.ensureCapture('pair'));
       const sdp = await this.makeOffer('fresh', 1);
       if (!hasCandidates(sdp)) throw new PairFailure('no-candidates');
-      const r = await this.helper.createRoom(sdp);
+      const r = await this.helper.createRoom(sdp, this.meta());
       if (epoch !== this.epoch) return;
       this.session = { session: r.session, secret: r.secret };
       this.gen = 1;
       this.latestGen = 1;
       // The room needs a session before TURN credentials can be had; with them, a new offer carrying relay
       // candidates replaces the local-network one before the code is shown (the claim gets the latest offer).
-      if ((await this.iceServers()).length) {
+      if ((await this.iceServersForPairing()).length) {
         if (epoch !== this.epoch) return;
         const relayed = await this.makeOffer('fresh', 2);
-        await this.helper.postOffer(this.session, { gen: 2, sdp: relayed, fresh: true, by: 'camera' });
+        await this.helper.postOffer(this.session, { gen: 2, sdp: relayed, fresh: true, by: 'camera', ...this.meta() });
         if (epoch !== this.epoch) return;
         this.gen = 2;
       }
@@ -329,6 +365,7 @@ export class PeerLink {
       this.nextPollAt = this.now() + POLL_FAST_MS;
       this.offline = false;
       this.set({ room: { code: r.code, expiresAt: this.now() + r.expiresIn * 1000 }, everOpened: false });
+      this.shown.save(this.session);
       this.log('link', `showing code ${r.code}`);
       this.startTimer();
     } catch (err) {
@@ -350,9 +387,19 @@ export class PeerLink {
     this.log('link', `joining with code ${code}`);
     try {
       this.holdCapture(await this.ensureCapture('pair'));
-      const r = await this.helper.claimRoom(code);
+      if (this.claimFor?.code !== code) this.claimFor = { code, id: claimId() };
+      let r: Awaited<ReturnType<HelperClient['claimRoom']>>;
+      try {
+        r = await this.helper.claimRoom(code, this.claimFor.id);
+      } catch (err) {
+        // No reply in time: the helper may have taken the code all the same. The same claim gets that session.
+        if (!(err instanceof HelperError) || err.kind !== 'offline' || epoch !== this.epoch) throw err;
+        this.log('link', 'the claim got no reply in time; asking again with the same claim');
+        r = await this.helper.claimRoom(code, this.claimFor.id);
+      }
       if (epoch !== this.epoch) return;
       this.session = { session: r.session, secret: r.secret };
+      if (this.refuses(r.offer)) return;
       this.gen = 0;
       this.down = { since: this.now(), cause: 'closed' };
       this.set({ everOpened: false });
@@ -370,6 +417,13 @@ export class PeerLink {
 
   /** Pick up the saved pairing after a reload, with no user action; false when there is none. */
   rejoin(): boolean {
+    const left = this.session ? null : this.shown.load();
+    if (left) {
+      // The page that showed this code went away without withdrawing it (killed rather than unloaded).
+      this.log('link', `withdrawing the code a previous page left on show (session ${left.session.slice(0, 6)}…)`);
+      void this.helper.end(left, { reason: 'withdrawn', ...this.meta() }).catch(() => {});
+      this.shown.save(null);
+    }
     const p = this.saved.load();
     if (!p || this.session) return false;
     this.session = { session: p.session, secret: p.secret };
@@ -391,7 +445,7 @@ export class PeerLink {
     const s = this.session;
     this.log('link', 'unpaired on this phone');
     this.send({ t: 'bye', reason: 'unpaired' });
-    if (s) void this.helper.end(s).catch(() => {});
+    if (s) void this.helper.end(s, { reason: 'unpaired', ...this.meta() }).catch(() => {});
     this.reset(true);
     this.saved.save(null);
     this.set({ ...INITIAL });
@@ -402,7 +456,7 @@ export class PeerLink {
     if (!this.snap.room || this.snap.everOpened) return;
     const s = this.session;
     this.log('link', `code ${this.snap.room.code} withdrawn`);
-    if (s) void this.helper.end(s).catch(() => {});
+    if (s) void this.helper.end(s, { reason: 'withdrawn', ...this.meta() }).catch(() => {});
     this.reset();
     this.saved.save(null);
     this.set({ ...INITIAL });
@@ -420,8 +474,17 @@ export class PeerLink {
     this.lastResumeAt = now;
     this.nextPollAt = Math.min(this.nextPollAt, now);
     // Not while still pairing. A helper call that was in flight when the page was suspended does not stop it:
-    // its answer is judged by what this decides (an attempt it belonged to is dropped).
-    if (!this.snap.everOpened) return void this.set({});
+    // its answer is judged by what this decides (an attempt it belonged to is dropped). A first pairing's clocks
+    // start again: the page was away, not the network.
+    if (!this.snap.everOpened) {
+      if (this.firstAnswerAt != null) this.firstAnswerAt = now;
+      if (this.peerSeenAt != null) this.peerSeenAt = now;
+      if (this.withdrewCode && this.snap.room) {
+        this.withdrewCode = false;
+        void this.pair(); // its code was withdrawn when the page was hidden away: show a new one
+      }
+      return void this.set({});
+    }
     const facts = {
       channelOpen: this.open && this.dc?.readyState === 'open',
       connectionState: this.pc?.connectionState ?? ('none' as const),
@@ -451,6 +514,12 @@ export class PeerLink {
   /** The page is going away: tell the other phone so it reconnects at once instead of waiting for pongs. */
   leave(): void {
     this.send({ t: 'bye', reason: 'leaving' });
+    // A code on show dies with the page: withdraw it, so a scoreboard that types it is told so.
+    if (this.session && this.snap.room && !this.snap.everOpened) {
+      this.helper.endBeacon?.(this.session, { reason: 'withdrawn', ...this.meta() });
+      this.shown.save(null);
+      this.withdrewCode = true;
+    }
   }
 
   // ---- internals ----
@@ -471,6 +540,13 @@ export class PeerLink {
     this.retryAt = 0;
     this.localSdp = null;
     this.remoteSdp = null;
+    this.peer = null;
+    this.firstAnswerAt = null;
+    this.peerSeenAt = null;
+    this.withdrewCode = false;
+    this.relayed = false;
+    this.sessionLost = false;
+    this.shown.save(null);
     this.ice = null;
     this.iceRetryAt = 0;
     this.stuckSince = null;
@@ -648,6 +724,18 @@ export class PeerLink {
     return servers;
   }
 
+  /**
+   * A new pairing's credentials: a fetch the helper refused is tried once more at once (the pairing gives up 18 s
+   * after its first answer). One that got no reply in time is not: that would hold the answer up another 4 s, and
+   * the 10 s retry still serves the answer to the camera's second attempt.
+   */
+  private async iceServersForPairing(): Promise<RTCIceServer[]> {
+    const servers = await this.iceServers();
+    if (servers.length || this.snap.relay.state !== 'failed' || this.snap.relay.detail?.startsWith('offline')) return servers;
+    this.iceRetryAt = 0;
+    return this.iceServers();
+  }
+
   /** An ICE restart gathers with the connection's configuration: give it new credentials first. */
   private configure(pc: RTCPeerConnection, servers: RTCIceServer[], strict: boolean): void {
     if (servers === this.pcServers || typeof pc.setConfiguration !== 'function') return;
@@ -670,6 +758,7 @@ export class PeerLink {
     const line = `${p.type}: ${p.detail}`;
     if (line !== this.lastPathLine) this.log('path', line);
     this.lastPathLine = line;
+    this.relayed = p.type === 'relay';
     this.set({ path: p.type });
   }
 
@@ -704,10 +793,11 @@ export class PeerLink {
       this.pc.signalingState === 'stable' &&
       this.dc?.readyState === 'open';
     if (!first && !this.open) this.holdCapture(await this.ensureCapture('reconnect'));
-    const servers = await this.iceServers();
+    const servers = first ? await this.iceServersForPairing() : await this.iceServers();
     const pc = reuse ? this.pc! : this.newPc(servers, false);
     if (reuse) this.configure(pc, servers, false);
     await pc.setRemoteDescription({ type: 'offer', sdp: offer.sdp });
+    this.peer = offer;
     this.remote(`offer gen ${offer.gen} ${offer.fresh ? 'new connection' : 'ICE restart'}`, offer.sdp);
     await pc.setLocalDescription(await pc.createAnswer());
     const start = this.now();
@@ -716,7 +806,8 @@ export class PeerLink {
     const sdp = pc.localDescription!.sdp;
     this.local(`answer gen ${offer.gen} ${reuse ? 'ICE restart' : 'new connection'}`, sdp, this.now() - start);
     if (first && !hasCandidates(sdp)) throw new PairFailure('no-candidates');
-    await this.helper.postAnswer(this.session!, { gen: offer.gen, sdp, fresh: !reuse });
+    await this.helper.postAnswer(this.session!, { gen: offer.gen, sdp, fresh: !reuse, ...this.meta() });
+    if (!this.snap.everOpened) this.firstAnswerAt ??= this.now();
     this.gen = offer.gen;
     this.latestGen = Math.max(this.latestGen, offer.gen);
     this.resuming = false;
@@ -727,6 +818,38 @@ export class PeerLink {
 
   private sendHello(): void {
     this.send({ t: 'hello', role: this.role, ...this.helloFields() });
+  }
+
+  /** What this phone says about itself in every description it posts (api/signal.ts PeerMeta). */
+  private meta(): { app: string; v: number; relay: string } {
+    return { app: this.helloFields().app, v: PROTOCOL_VERSION, relay: relayTag(this.snap.relay) };
+  }
+
+  /**
+   * The other phone's description says it speaks another protocol: stop before any connection, and end the
+   * session so it is told too (R-PAIR-7). A build that cannot open the channel was never told otherwise.
+   */
+  private refuses(d: Desc): boolean {
+    if (typeof d.v !== 'number' || d.v === PROTOCOL_VERSION) return false;
+    const s = this.session;
+    if (s) void this.helper.end(s, { reason: 'version', ...this.meta() }).catch(() => {});
+    this.versionMismatch(d.v, d.app ?? null);
+    return true;
+  }
+
+  /**
+   * A first pairing that has not opened PAIR_GIVE_UP_MS after its first answer, or that the other phone gave up
+   * on: say why (unreachable.ts), end the session so the other phone stops too, and offer nothing more.
+   */
+  private giveUp(endSession: boolean): void {
+    const why = unreachable(this.snap.relay, this.snap.net, this.peer);
+    const s = this.session;
+    const after = this.firstAnswerAt == null ? '' : ` ${Math.round((this.now() - this.firstAnswerAt) / 1000)} s after the first answer`;
+    this.log('error', `could not connect${after}: ${why.reason}${why.detail ? ` (${why.detail})` : ''}${why.peerOld ? '; the other phone did not say its build' : ''}`);
+    if (s && endSession) void this.helper.end(s, { reason: 'unreachable', ...this.meta() }).catch(() => {});
+    this.reset();
+    this.saved.save(null);
+    this.set({ ...INITIAL, error: { kind: 'unreachable', why } });
   }
 
   private ping(): void {
@@ -791,9 +914,17 @@ export class PeerLink {
     }
   }
 
+  /** Scoreboard, first pairing: the camera's page is running; the give-up clock starts. */
+  private peerSeen(how: string): void {
+    if (this.peerSeenAt != null || this.role !== 'scoreboard') return;
+    this.peerSeenAt = this.now();
+    if (this.snap.peerSilent) this.log('link', `the camera answers again (it ${how})`);
+  }
+
   /** The link carries both ways again (a hello, or a pong while down). Returns whether it was open before. */
   private markOpen(): boolean {
     const wasOpen = this.open;
+    if (!wasOpen && !this.snap.everOpened) this.shown.save(null); // the code on show has done its job
     this.lastPongAt = this.now();
     this.open = true;
     this.down = null;
@@ -860,6 +991,12 @@ export class PeerLink {
       this.recover();
     }
     this.checkSlow(now);
+    // The camera's clock starts at its first answer; the scoreboard's once the camera is seen running.
+    const since = this.role === 'camera' ? this.firstAnswerAt : this.peerSeenAt;
+    if (!this.open && !this.snap.everOpened && since != null && now - since >= PAIR_GIVE_UP_MS) return this.giveUp(true);
+    const silent = this.role === 'scoreboard' && !this.open && !this.snap.everOpened && this.firstAnswerAt != null && this.peerSeenAt == null && now - this.firstAnswerAt >= PEER_SILENT_MS;
+    if (silent && !this.snap.peerSilent) this.log('link', `the camera has not fetched the answer ${Math.round((now - this.firstAnswerAt!) / 1000)} s after it was posted: its app is not running`);
+    if (silent !== this.snap.peerSilent) this.set({ peerSilent: silent });
     if (this.role === 'camera') this.tickCamera(now);
     else this.tickScoreboard(now);
     this.set({});
@@ -894,6 +1031,8 @@ export class PeerLink {
     }
     const room = this.snap.room;
     if (!this.open && room && now >= room.expiresAt - ROOM_RENEW_BEFORE_MS && !this.attempt?.answeredAt) {
+      // An answer may be waiting (the page was suspended past the renewal): look before replacing the code.
+      if (now - this.lastPollAt > 3000) return void this.poll();
       void this.pair(); // nobody took the code: show a new one
       return;
     }
@@ -918,6 +1057,7 @@ export class PeerLink {
     // Its own offer answered but the link never opened: leave reconnecting to the camera's offers.
     if (a && a.answeredAt != null && !this.open && now - a.answeredAt >= ATTEMPT_TIMEOUT_MS) this.attempt = null;
     if (now < this.nextPollAt) return;
+    if (this.sessionLost && this.open) return; // nothing to look for: the helper forgot the session
     void this.poll();
   }
 
@@ -945,12 +1085,18 @@ export class PeerLink {
     const a = this.attempt;
     let soon = false;
     this.busy = true;
+    this.lastPollAt = this.now();
+    // Scoreboard, first pairing: ask whether the camera has fetched the answer, i.e. whether its page runs at all.
+    const askSeen = this.role === 'scoreboard' && !this.snap.everOpened && this.firstAnswerAt != null && this.peerSeenAt == null;
     try {
-      const r: PollReply = await this.helper.poll(this.session!, this.gen, this.role);
+      const r: PollReply = await this.helper.poll(this.session!, this.gen, this.role, askSeen);
       if (epoch !== this.epoch) return;
       this.offline = false;
-      if (r && 'offer' in r) {
+      if (r && 'seen' in r) this.peerSeen('fetched the answer');
+      else if (r && 'offer' in r) {
         this.latestGen = Math.max(this.latestGen, r.offer.gen);
+        if (this.refuses(r.offer)) return;
+        if (!this.snap.everOpened) this.peerSeen('offered a new connection');
         if (this.resuming && resumeReply(r.offer) === 'offer') {
           this.log('link', `resume: the camera's offer gen ${r.offer.gen} restarts the old connection; offering a fresh one instead`);
           await this.offer('fresh');
@@ -989,9 +1135,12 @@ export class PeerLink {
       if (!this.open && this.down) this.down = { ...this.down, cause: 'closed' };
       return;
     }
+    if (this.refuses(ans)) return;
     await this.pc!.setRemoteDescription({ type: 'answer', sdp: ans.sdp });
+    this.peer = ans;
     this.remote(`answer gen ${ans.gen}`, ans.sdp);
     a.answeredAt = this.now();
+    if (!this.snap.everOpened) this.firstAnswerAt ??= a.answeredAt;
     this.resuming = false;
     if (this.open) this.attempt = null;
     if (this.snap.room) this.set({ room: null });
@@ -1010,8 +1159,15 @@ export class PeerLink {
       kind = 'fresh';
       sdp = await this.makeOffer('fresh', gen);
     }
+    if (!this.reachable(sdp)) {
+      // Gathered while this phone's network was down: posting it would only cost a 10 s attempt the other phone
+      // cannot connect to (2026-10-31 audit, BUG-7). Try again soon instead.
+      if (kind === 'restart' && this.pc?.signalingState === 'have-local-offer') await this.pc.setLocalDescription({ type: 'rollback' }).catch(() => {});
+      this.log('sdp', `offer gen ${gen} not posted: nothing in it the other phone could reach`);
+      throw new PairFailure('no-candidates');
+    }
     try {
-      await this.helper.postOffer(this.session!, { gen, sdp, fresh: kind === 'fresh', by: this.role });
+      await this.helper.postOffer(this.session!, { gen, sdp, fresh: kind === 'fresh', by: this.role, ...this.meta() });
     } catch (err) {
       // The other phone never saw this restart offer: take it back so the connection stays usable.
       if (kind === 'restart' && this.pc?.signalingState === 'have-local-offer') await this.pc.setLocalDescription({ type: 'rollback' }).catch(() => {});
@@ -1027,13 +1183,24 @@ export class PeerLink {
     this.nextPollAt = this.now() + (this.role === 'scoreboard' ? answerPollEvery(this.now(), this.now(), POLL_FAST_MS) : cameraPollEvery(this.now(), this.down, false));
   }
 
+  /**
+   * Whether an offer can reach the other phone: it has a candidate at all, and a relay one when the link last ran
+   * through the relay or the phones are on different networks (with relay servers to gather from).
+   */
+  private reachable(sdp: string): boolean {
+    if (!hasCandidates(sdp)) return false;
+    if (!this.pcServers.length || !(this.relayed || this.snap.net?.verdict === 'different')) return true;
+    return / typ relay /.test(sdp);
+  }
+
   private async runAttempt(kind: 'restart' | 'fresh'): Promise<void> {
     const epoch = this.epoch;
     this.busy = true;
     try {
       await this.offer(kind);
     } catch (err) {
-      if (epoch === this.epoch) {
+      if (epoch === this.epoch && err instanceof PairFailure) this.retryAt = this.now() + POLL_FAST_MS; // not posted: gather again soon
+      else if (epoch === this.epoch) {
         this.helperFailed(err);
         if (err instanceof HelperError && err.kind === 'stale') {
           this.latestGen = Math.max(this.latestGen, err.gen ?? 0);
@@ -1053,14 +1220,36 @@ export class PeerLink {
   private helperFailed(err: unknown): void {
     if (!(err instanceof HelperError)) return;
     if (err.kind === 'offline') this.offline = !this.open;
-    if (err.kind === 'ended') return this.ended('the other phone ended the pairing (helper)');
+    if (err.kind === 'ended') {
+      const e = err.ended;
+      if (e?.reason === 'version') return this.versionMismatch(e.v, e.app ?? null);
+      if (this.snap.everOpened) return this.ended('the other phone ended the pairing (helper)');
+      // A first pairing the other phone ended before it opened: it gave up too (say why from here), or the
+      // camera withdrew the code.
+      if (e?.reason === 'unreachable') return this.giveUp(false);
+      this.log('link', `the other phone ended the pairing before it opened (${e?.reason ?? 'unpaired'})`);
+      this.reset();
+      this.saved.save(null);
+      return this.set({ ...INITIAL, error: { kind: 'withdrawn' } });
+    }
     if (err.kind === 'no-session') {
+      // An open link does not need the helper: keep it (it was torn down on both phones, and the camera dropped
+      // its match, when a test helper restarted or a session outlived its TTL: 2026-10-31 audit, BUG-3).
+      if (this.isOpen()) {
+        if (!this.sessionLost) this.log('error', 'the helper no longer knows this pairing; the open link is kept');
+        this.sessionLost = true;
+        return;
+      }
       this.log('error', 'the helper no longer knows this pairing (expired)');
       this.reset();
       this.saved.save(null);
       this.set({ ...INITIAL, error: { kind: 'expired' } });
     }
   }
+}
+
+function claimId(): string {
+  return [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 class PairFailure extends Error {

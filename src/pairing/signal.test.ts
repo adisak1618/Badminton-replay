@@ -1,12 +1,14 @@
 // The signaling helper (api/signal.ts) against the in-memory store: one-shot codes, generations, secrets,
 // TTL expiry, rate limits, size caps, and that nothing but descriptors and secrets is ever stored (R-PAIR-9).
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  CLAIMED_TTL_S,
   CLAIM_LIMIT_PER_MIN,
   MAX_BODY_BYTES,
   MemoryStore,
   ROOM_TTL_S,
   SESSION_TTL_S,
+  TOUCH_EVERY_S,
   createHandler,
   redisCredentials,
   storeFromEnv,
@@ -112,6 +114,49 @@ describe('signaling helper', () => {
     expect(await kind(client.claimRoom(r2.code))).toBe('no-room');
   });
 
+  it('a description carries what its phone says about itself; an ended session says why, and which build ended it', async () => {
+    const { client } = setup();
+    const room = await client.createRoom(SDP('o1'), { app: 'badminton-scoreboard@1.0+x', v: 3, relay: 'unknown' });
+    const sb = await client.claimRoom(room.code);
+    expect(sb.offer).toMatchObject({ gen: 1, app: 'badminton-scoreboard@1.0+x', v: 3, relay: 'unknown' });
+    await client.postAnswer(sb, { gen: 1, sdp: SDP('a1'), fresh: true, app: 'sb@2', v: 3, relay: 'failed: helper: store' });
+    expect(await client.poll(room, 1, 'camera')).toEqual({ answer: expect.objectContaining({ app: 'sb@2', v: 3, relay: 'failed: helper: store' }) });
+    // Junk is dropped, never refused: older and odd clients keep pairing.
+    await client.postOffer(room, { gen: 2, sdp: SDP('o2'), fresh: true, app: 'no spaces allowed', v: 2.5, relay: 'x'.repeat(500) });
+    const o = await client.poll(sb, 1, 'scoreboard');
+    expect(o && 'offer' in o && [o.offer.app, o.offer.v, o.offer.relay]).toEqual([undefined, undefined, undefined]);
+    await client.end(sb, { reason: 'version', app: 'sb@2', v: 2 });
+    const ended = await client.poll(room, 2, 'camera').catch((e) => e);
+    expect(ended).toMatchObject({ kind: 'ended', ended: { reason: 'version', app: 'sb@2', v: 2 } });
+    // An older client ending with no reason: "unpaired", as before.
+    const r2 = await client.createRoom(SDP('o3'));
+    const sb2 = await client.claimRoom(r2.code);
+    await client.end(sb2);
+    expect(await client.poll(r2, 1, 'camera').catch((e) => e)).toMatchObject({ kind: 'ended', ended: { reason: 'unpaired' } });
+  });
+
+  it('the phone that answered can ask whether the other one fetched its answer (is that page running?)', async () => {
+    const { client } = setup();
+    const room = await client.createRoom(SDP('o1'));
+    const sb = await client.claimRoom(room.code);
+    await client.postAnswer(sb, { gen: 1, sdp: SDP('a1'), fresh: true });
+    expect(await client.poll(sb, 1, 'scoreboard', true)).toBeNull(); // the camera has not looked yet
+    expect(await client.poll(room, 1, 'camera')).toEqual({ answer: expect.objectContaining({ gen: 1 }) });
+    expect(await client.poll(sb, 1, 'scoreboard', true)).toEqual({ seen: true });
+    expect(await client.poll(sb, 1, 'scoreboard')).toBeNull(); // only when asked: older builds see nothing new
+  });
+
+  it('a claim may be asked again with the same claim id for a minute (its reply was lost), and only with it', async () => {
+    const { client, clock } = setup();
+    const room = await client.createRoom(SDP('o1'));
+    const first = await client.claimRoom(room.code, 'a1b2c3d4e5f60718');
+    expect(await client.claimRoom(room.code, 'a1b2c3d4e5f60718')).toEqual(first);
+    expect(await kind(client.claimRoom(room.code))).toBe('no-room'); // still one-shot for anyone else
+    expect(await kind(client.claimRoom(room.code, 'ffffffffffffffff'))).toBe('no-room');
+    clock.advance(CLAIMED_TTL_S * 1000 + 1);
+    expect(await kind(client.claimRoom(room.code, 'a1b2c3d4e5f60718'))).toBe('no-room');
+  });
+
   it('every session call needs the secret', async () => {
     const { client } = setup();
     const room = await client.createRoom(SDP('o1'));
@@ -122,7 +167,7 @@ describe('signaling helper', () => {
     expect(await kind(client.poll({ session: 'f'.repeat(32), secret: room.secret }, 0, 'scoreboard'))).toBe('no-session');
   });
 
-  it('room codes expire after 10 minutes, sessions 6 h after their last write', async () => {
+  it('room codes expire after 10 minutes, sessions 6 h after their last write or poll', async () => {
     const { client, clock, store } = setup();
     const room = await client.createRoom(SDP('o1'));
     clock.advance(ROOM_TTL_S * 1000 + 1);
@@ -133,11 +178,26 @@ describe('signaling helper', () => {
     clock.advance(SESSION_TTL_S * 1000 - 60_000);
     await client.postOffer(r2, { gen: 2, sdp: SDP('o3'), fresh: true }); // a write refreshes the whole session
     clock.advance(SESSION_TTL_S * 1000 - 60_000);
-    expect(await client.poll(r2, 1, 'scoreboard')).toEqual({ offer: expect.objectContaining({ gen: 2 }) });
-    clock.advance(120_000);
+    expect(await client.poll(r2, 1, 'scoreboard')).toEqual({ offer: expect.objectContaining({ gen: 2 }) }); // so does a poll
+    clock.advance(SESSION_TTL_S * 1000 - 60_000);
+    expect(await client.poll(r2, 2, 'scoreboard')).toBeNull();
+    clock.advance(SESSION_TTL_S * 1000 + 1); // nobody wrote or polled for 6 h
     expect(await kind(client.poll(r2, 0, 'scoreboard'))).toBe('no-session');
     clock.advance(61_000); // the rate-limit counters are gone too
     expect(store.keys()).toEqual([]);
+  });
+
+  it('an open link on one Wi-Fi writes nothing after pairing: its scoreboard’s idle polls keep the session for 12 h, one refresh per 10 min', async () => {
+    const { client, clock, store } = setup();
+    const room = await client.createRoom(SDP('o1'));
+    const sb = await client.claimRoom(room.code);
+    await client.postAnswer(sb, { gen: 1, sdp: SDP('a1'), fresh: true });
+    const expire = vi.spyOn(store, 'expire');
+    for (let i = 0; i < (12 * 3600) / 15; i++) {
+      clock.advance(15_000);
+      expect(await client.poll(sb, 1, 'scoreboard')).toBeNull();
+    }
+    expect(expire.mock.calls.length).toBeLessThanOrEqual(3 * ((12 * 3600) / TOUCH_EVERY_S + 1)); // sess, offer, answer
   });
 
   it('rate-limits claims per IP so a code cannot be brute-forced', async () => {

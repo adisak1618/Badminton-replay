@@ -2,18 +2,20 @@
 // while typing too: on iPhone the camera permission is what lets the browser offer local-network candidates
 // (technical-design.md §4.3).
 import { useEffect, useRef, useState } from 'react';
+import { checkForUpdate } from '../device/update';
 import { keepScreenOn } from '../device/wakeLock';
 import { registerCapture } from '../pairing/capture';
 import { codeFromText, grabFrame, qrReader } from '../pairing/qr';
 import { useCameraLink } from './CameraLink';
 import { DiagChip } from './DiagSheet';
 import { useNow } from './useNow';
-import { SLOW_CONNECT_MS, mismatchText, pairErrorText, slowConnectText } from './pairText';
+import { CAMERA_SILENT_TEXT, SLOW_CONNECT_MS, SLOW_CONNECT_TEXT, mismatchText, pairErrorText } from './pairText';
+import { UpdateBanner } from './RoleScreen';
 
 type Cam = 'starting' | 'live' | 'denied' | 'off';
 const SCAN_EVERY_MS = 300;
 
-export function PairScreen({ initialCode, onClose }: { initialCode: string | null; onClose: () => void }) {
+export function PairScreen({ initialCode, onUpdate, onClose }: { initialCode: string | null; onUpdate: (() => void) | null; onClose: () => void }) {
   const { link, l, b } = useCameraLink();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [cam, setCam] = useState<Cam>('starting');
@@ -28,6 +30,10 @@ export function PairScreen({ initialCode, onClose }: { initialCode: string | nul
   const tried = useRef<string | null>(null);
   const paired = l.state === 'paired';
   const now = useNow(1000, joinedAt != null && !paired);
+
+  // Pairing an older build with a newer one can fail before any version check: look for an update first, and
+  // again when the other phone says this one is older.
+  useEffect(() => checkForUpdate(), [l.mismatch]);
 
   // The screen stays on while pairing (and while paired, live.ts): a locked screen suspends the link.
   useEffect(() => {
@@ -110,18 +116,20 @@ export function PairScreen({ initialCode, onClose }: { initialCode: string | nul
   const status = l.mismatch
     ? mismatchText(l.mismatch)
     : l.error
-      ? pairErrorText(l.error)
+      ? pairErrorText(l.error, 'scoreboard')
       : paired
         ? null
         : l.busy
           ? 'Connecting…'
-          : l.state === 'connecting' && joinedAt != null
-            ? slow
-              ? slowConnectText(l.net, l.relay)
-              : 'Connecting to the camera phone…'
-            : l.state === 'reconnecting' || l.state === 'lost' || l.state === 'offline'
-              ? 'Paired before: reconnecting to the camera phone by itself.'
-              : null;
+          : l.peerSilent
+            ? CAMERA_SILENT_TEXT
+            : l.state === 'connecting' && joinedAt != null
+              ? slow
+                ? SLOW_CONNECT_TEXT
+                : 'Connecting to the camera phone…'
+              : l.state === 'reconnecting' || l.state === 'lost' || l.state === 'offline'
+                ? 'Paired before: reconnecting to the camera phone by itself.'
+                : null;
 
   return (
     <div className="fixed inset-0 z-[60] flex flex-col bg-bg" role="dialog" aria-label="Pair with the camera">
@@ -148,6 +156,7 @@ export function PairScreen({ initialCode, onClose }: { initialCode: string | nul
           {cam === 'live' && <div className="pointer-events-none absolute inset-[18%] rounded-xl border-2 border-white/70" />}
         </div>
         <div className="flex min-w-0 flex-1 flex-col gap-3">
+          {!paired && <UpdateBanner onUpdate={onUpdate} />}
           {!paired && (
             <>
               <p className="text-mut">Point at the QR code on the camera phone, or type its six digits.</p>
