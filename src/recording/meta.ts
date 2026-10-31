@@ -1,12 +1,14 @@
 // Camera-local records per recorded match (technical-design.md §3.5, §6.6), in OPFS under
-// matches/<id>/: recording.json (segments), log.json (the mirrored scoreboard log), video-<n>.mp4.
-import type { MatchConfig, MatchEvent } from '../engine';
+// matches/<id>/: recording.json (segments), log.json (the mirrored scoreboard log), studio.json (the Studio's own
+// events, D16), video-<n>.mp4.
+import { append, type EventBody, type MatchConfig, type MatchEvent, type Stamp } from '../engine';
 import type { ClockEstimate, PeerInfo } from '../link/source';
 import type { Segment } from './session';
 
 export const MATCHES_DIR = 'matches';
 export const RECORDING_FILE = 'recording.json';
 export const LOG_FILE = 'log.json';
+export const STUDIO_FILE = 'studio.json';
 
 export interface RecordingMeta {
   format: 'badminton-scoreboard/recording';
@@ -26,6 +28,25 @@ export interface MirrorLog {
   config: MatchConfig;
   events: MatchEvent[];
   receivedAt: Record<string, number>;
+}
+
+/**
+ * The Studio's events (tags and replay marks made while watching the recording, D16), kept apart from log.json: the
+ * camera rewrites that one from the scoreboard's log whenever the mirror changes, also after the match.
+ */
+export interface StudioLog {
+  matchId: string;
+  events: Array<EventBody & Stamp>;
+}
+
+/**
+ * The log with the Studio's events after the scoreboard's: numbered on from the last one (so an undo's target never
+ * moves), and as the newest they win over a tag or a mark the scoreboard made earlier.
+ */
+export function withStudio(log: MirrorLog | null, studio: StudioLog | null): MirrorLog | null {
+  if (!log || !studio?.events.length || studio.matchId !== log.matchId) return log;
+  const events = studio.events.reduce<MatchEvent[]>((ev, { id, at, by, ...body }) => append(ev, body as EventBody, { id, at, by }), log.events);
+  return { ...log, events };
 }
 
 /** A directory name that is safe on every file system the bundle may land on. */
