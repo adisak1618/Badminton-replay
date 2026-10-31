@@ -112,6 +112,27 @@ describe('signaling helper', () => {
     expect(await kind(client.claimRoom(r2.code))).toBe('no-room');
   });
 
+  it('a description carries what its phone says about itself; an ended session says why, and which build ended it', async () => {
+    const { client } = setup();
+    const room = await client.createRoom(SDP('o1'), { app: 'badminton-scoreboard@1.0+x', v: 3, relay: 'unknown' });
+    const sb = await client.claimRoom(room.code);
+    expect(sb.offer).toMatchObject({ gen: 1, app: 'badminton-scoreboard@1.0+x', v: 3, relay: 'unknown' });
+    await client.postAnswer(sb, { gen: 1, sdp: SDP('a1'), fresh: true, app: 'sb@2', v: 3, relay: 'failed: helper: store' });
+    expect(await client.poll(room, 1, 'camera')).toEqual({ answer: expect.objectContaining({ app: 'sb@2', v: 3, relay: 'failed: helper: store' }) });
+    // Junk is dropped, never refused: older and odd clients keep pairing.
+    await client.postOffer(room, { gen: 2, sdp: SDP('o2'), fresh: true, app: 'no spaces allowed', v: 2.5, relay: 'x'.repeat(500) });
+    const o = await client.poll(sb, 1, 'scoreboard');
+    expect(o && 'offer' in o && [o.offer.app, o.offer.v, o.offer.relay]).toEqual([undefined, undefined, undefined]);
+    await client.end(sb, { reason: 'version', app: 'sb@2', v: 2 });
+    const ended = await client.poll(room, 2, 'camera').catch((e) => e);
+    expect(ended).toMatchObject({ kind: 'ended', ended: { reason: 'version', app: 'sb@2', v: 2 } });
+    // An older client ending with no reason: "unpaired", as before.
+    const r2 = await client.createRoom(SDP('o3'));
+    const sb2 = await client.claimRoom(r2.code);
+    await client.end(sb2);
+    expect(await client.poll(r2, 1, 'camera').catch((e) => e)).toMatchObject({ kind: 'ended', ended: { reason: 'unpaired' } });
+  });
+
   it('every session call needs the secret', async () => {
     const { client } = setup();
     const room = await client.createRoom(SDP('o1'));

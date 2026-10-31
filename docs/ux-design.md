@@ -428,8 +428,8 @@ phone the same list offers the log alone.
 | Same rally tapped on both scoreboards | S3 | "Already counted on the other scoreboard" (D14) | None |
 | Screen cannot stay on | S3 | One amber line: Low Power Mode, or set Auto-Lock to Never (R-DISP-8) | Turn off Low Power Mode |
 | Link lost, no internet | S3, C3 | Chip "offline"; same behaviour; reconnects when internet returns | Restore internet |
-| Phones on different networks (no common Wi-Fi, e.g. both on mobile data) | S2, C2 | Connects through the TURN relay (D13) with no message. Only when the relay cannot carry it, after 15 s of connecting: "Not connecting: the phones are on different networks (this phone …, the other …), probably mobile data, and <why the relay did not work>" with the way out | Same Wi-Fi, or one phone's Personal Hotspot; set up the relay (deploy.md) |
-| Version mismatch | S2, C2 | "Update the app on the other phone, then pair again" (R-PAIR-7) | Reload the other phone |
+| Phones on different networks (no common Wi-Fi, e.g. both on mobile data) | S2, C2 | Connects through the TURN relay (D13) with no message. When it cannot connect, 18 s after the answer both screens stop with "Could not connect: …" and the reason from their side: the relay not set up, this phone or the other phone without the relay (the other one probably on an older build: update it), or both on the relay and still not connected; phones on different networks are named with both addresses | Update the other phone; check its internet; same Wi-Fi, or one phone's Personal Hotspot; set up the relay (deploy.md) |
+| Version mismatch | S2, C2 | "The other phone runs an older version of the app. Update it there …" or "This phone runs an older version of the app. Update it …" (R-PAIR-7), before any connection when both builds say their version to the helper | Update now (a reload keeps the old build under the service worker) |
 | Speech unavailable or muted | S3 | One-line banner "Turn off silent mode to hear the score" (assumption A9) | Flip the switch |
 
 ## 2. Flows

@@ -10,6 +10,7 @@ import { PROTOCOL_VERSION, encode, parse, type Msg, type Role } from '../protoco
 import type { ClockEstimate, LinkState } from '../link/source';
 import type { DiagKind } from './diag';
 import { HelperError, type Desc, type HelperClient, type HelperErrorKind, type PollReply, type Session } from './helper';
+import { PAIR_GIVE_UP_MS, relayTag, unreachable, type Unreachable } from './unreachable';
 import {
   GATHER_LAN_MS,
   GATHER_RELAY_MS,
@@ -60,11 +61,14 @@ const BYE_DRAIN_MS = 1000;
 /** visibilitychange, pageshow and online often fire together: one resume per this. */
 const RESUME_DEBOUNCE_MS = 500;
 
-export type PairErrorKind = HelperErrorKind | 'expired' | 'no-candidates' | 'failed';
+/** unreachable: a first pairing that never opened (unreachable.ts); withdrawn: the other phone ended it first. */
+export type PairErrorKind = HelperErrorKind | 'expired' | 'no-candidates' | 'failed' | 'unreachable' | 'withdrawn';
 
 export interface PairError {
   kind: PairErrorKind;
   detail?: string;
+  /** unreachable: why, from what this phone saw. */
+  why?: Unreachable;
 }
 
 export interface Mismatch {
@@ -193,6 +197,10 @@ export class PeerLink {
   /** The last description this phone sent and the last one it received, for the network check. */
   private localSdp: string | null = null;
   private remoteSdp: string | null = null;
+  /** The last description the other phone posted: what it said about its build, protocol and relay. */
+  private peer: Desc | null = null;
+  /** A first pairing: when its first answer was posted (scoreboard) or applied (camera); it gives up PAIR_GIVE_UP_MS later. */
+  private firstAnswerAt: number | null = null;
   private gen = 0;
   /** The newest generation the helper said it holds (a 409): the next offer goes above it. */
   private latestGen = 0;
@@ -308,7 +316,7 @@ export class PeerLink {
       this.holdCapture(await this.ensureCapture('pair'));
       const sdp = await this.makeOffer('fresh', 1);
       if (!hasCandidates(sdp)) throw new PairFailure('no-candidates');
-      const r = await this.helper.createRoom(sdp);
+      const r = await this.helper.createRoom(sdp, this.meta());
       if (epoch !== this.epoch) return;
       this.session = { session: r.session, secret: r.secret };
       this.gen = 1;
@@ -318,7 +326,7 @@ export class PeerLink {
       if ((await this.iceServers()).length) {
         if (epoch !== this.epoch) return;
         const relayed = await this.makeOffer('fresh', 2);
-        await this.helper.postOffer(this.session, { gen: 2, sdp: relayed, fresh: true, by: 'camera' });
+        await this.helper.postOffer(this.session, { gen: 2, sdp: relayed, fresh: true, by: 'camera', ...this.meta() });
         if (epoch !== this.epoch) return;
         this.gen = 2;
       }
@@ -353,6 +361,7 @@ export class PeerLink {
       const r = await this.helper.claimRoom(code);
       if (epoch !== this.epoch) return;
       this.session = { session: r.session, secret: r.secret };
+      if (this.refuses(r.offer)) return;
       this.gen = 0;
       this.down = { since: this.now(), cause: 'closed' };
       this.set({ everOpened: false });
@@ -391,7 +400,7 @@ export class PeerLink {
     const s = this.session;
     this.log('link', 'unpaired on this phone');
     this.send({ t: 'bye', reason: 'unpaired' });
-    if (s) void this.helper.end(s).catch(() => {});
+    if (s) void this.helper.end(s, { reason: 'unpaired', ...this.meta() }).catch(() => {});
     this.reset(true);
     this.saved.save(null);
     this.set({ ...INITIAL });
@@ -402,7 +411,7 @@ export class PeerLink {
     if (!this.snap.room || this.snap.everOpened) return;
     const s = this.session;
     this.log('link', `code ${this.snap.room.code} withdrawn`);
-    if (s) void this.helper.end(s).catch(() => {});
+    if (s) void this.helper.end(s, { reason: 'withdrawn', ...this.meta() }).catch(() => {});
     this.reset();
     this.saved.save(null);
     this.set({ ...INITIAL });
@@ -471,6 +480,8 @@ export class PeerLink {
     this.retryAt = 0;
     this.localSdp = null;
     this.remoteSdp = null;
+    this.peer = null;
+    this.firstAnswerAt = null;
     this.ice = null;
     this.iceRetryAt = 0;
     this.stuckSince = null;
@@ -708,6 +719,7 @@ export class PeerLink {
     const pc = reuse ? this.pc! : this.newPc(servers, false);
     if (reuse) this.configure(pc, servers, false);
     await pc.setRemoteDescription({ type: 'offer', sdp: offer.sdp });
+    this.peer = offer;
     this.remote(`offer gen ${offer.gen} ${offer.fresh ? 'new connection' : 'ICE restart'}`, offer.sdp);
     await pc.setLocalDescription(await pc.createAnswer());
     const start = this.now();
@@ -716,7 +728,8 @@ export class PeerLink {
     const sdp = pc.localDescription!.sdp;
     this.local(`answer gen ${offer.gen} ${reuse ? 'ICE restart' : 'new connection'}`, sdp, this.now() - start);
     if (first && !hasCandidates(sdp)) throw new PairFailure('no-candidates');
-    await this.helper.postAnswer(this.session!, { gen: offer.gen, sdp, fresh: !reuse });
+    await this.helper.postAnswer(this.session!, { gen: offer.gen, sdp, fresh: !reuse, ...this.meta() });
+    if (!this.snap.everOpened) this.firstAnswerAt ??= this.now();
     this.gen = offer.gen;
     this.latestGen = Math.max(this.latestGen, offer.gen);
     this.resuming = false;
@@ -727,6 +740,38 @@ export class PeerLink {
 
   private sendHello(): void {
     this.send({ t: 'hello', role: this.role, ...this.helloFields() });
+  }
+
+  /** What this phone says about itself in every description it posts (api/signal.ts PeerMeta). */
+  private meta(): { app: string; v: number; relay: string } {
+    return { app: this.helloFields().app, v: PROTOCOL_VERSION, relay: relayTag(this.snap.relay) };
+  }
+
+  /**
+   * The other phone's description says it speaks another protocol: stop before any connection, and end the
+   * session so it is told too (R-PAIR-7). A build that cannot open the channel was never told otherwise.
+   */
+  private refuses(d: Desc): boolean {
+    if (typeof d.v !== 'number' || d.v === PROTOCOL_VERSION) return false;
+    const s = this.session;
+    if (s) void this.helper.end(s, { reason: 'version', ...this.meta() }).catch(() => {});
+    this.versionMismatch(d.v, d.app ?? null);
+    return true;
+  }
+
+  /**
+   * A first pairing that has not opened PAIR_GIVE_UP_MS after its first answer, or that the other phone gave up
+   * on: say why (unreachable.ts), end the session so the other phone stops too, and offer nothing more.
+   */
+  private giveUp(endSession: boolean): void {
+    const why = unreachable(this.snap.relay, this.snap.net, this.peer);
+    const s = this.session;
+    const after = this.firstAnswerAt == null ? '' : ` ${Math.round((this.now() - this.firstAnswerAt) / 1000)} s after the first answer`;
+    this.log('error', `could not connect${after}: ${why.reason}${why.detail ? ` (${why.detail})` : ''}${why.peerOld ? '; the other phone did not say its build' : ''}`);
+    if (s && endSession) void this.helper.end(s, { reason: 'unreachable', ...this.meta() }).catch(() => {});
+    this.reset();
+    this.saved.save(null);
+    this.set({ ...INITIAL, error: { kind: 'unreachable', why } });
   }
 
   private ping(): void {
@@ -860,6 +905,7 @@ export class PeerLink {
       this.recover();
     }
     this.checkSlow(now);
+    if (!this.open && !this.snap.everOpened && this.firstAnswerAt != null && now - this.firstAnswerAt >= PAIR_GIVE_UP_MS) return this.giveUp(true);
     if (this.role === 'camera') this.tickCamera(now);
     else this.tickScoreboard(now);
     this.set({});
@@ -951,6 +997,7 @@ export class PeerLink {
       this.offline = false;
       if (r && 'offer' in r) {
         this.latestGen = Math.max(this.latestGen, r.offer.gen);
+        if (this.refuses(r.offer)) return;
         if (this.resuming && resumeReply(r.offer) === 'offer') {
           this.log('link', `resume: the camera's offer gen ${r.offer.gen} restarts the old connection; offering a fresh one instead`);
           await this.offer('fresh');
@@ -989,9 +1036,12 @@ export class PeerLink {
       if (!this.open && this.down) this.down = { ...this.down, cause: 'closed' };
       return;
     }
+    if (this.refuses(ans)) return;
     await this.pc!.setRemoteDescription({ type: 'answer', sdp: ans.sdp });
+    this.peer = ans;
     this.remote(`answer gen ${ans.gen}`, ans.sdp);
     a.answeredAt = this.now();
+    if (!this.snap.everOpened) this.firstAnswerAt ??= a.answeredAt;
     this.resuming = false;
     if (this.open) this.attempt = null;
     if (this.snap.room) this.set({ room: null });
@@ -1011,7 +1061,7 @@ export class PeerLink {
       sdp = await this.makeOffer('fresh', gen);
     }
     try {
-      await this.helper.postOffer(this.session!, { gen, sdp, fresh: kind === 'fresh', by: this.role });
+      await this.helper.postOffer(this.session!, { gen, sdp, fresh: kind === 'fresh', by: this.role, ...this.meta() });
     } catch (err) {
       // The other phone never saw this restart offer: take it back so the connection stays usable.
       if (kind === 'restart' && this.pc?.signalingState === 'have-local-offer') await this.pc.setLocalDescription({ type: 'rollback' }).catch(() => {});
@@ -1053,7 +1103,18 @@ export class PeerLink {
   private helperFailed(err: unknown): void {
     if (!(err instanceof HelperError)) return;
     if (err.kind === 'offline') this.offline = !this.open;
-    if (err.kind === 'ended') return this.ended('the other phone ended the pairing (helper)');
+    if (err.kind === 'ended') {
+      const e = err.ended;
+      if (e?.reason === 'version') return this.versionMismatch(e.v, e.app ?? null);
+      if (this.snap.everOpened) return this.ended('the other phone ended the pairing (helper)');
+      // A first pairing the other phone ended before it opened: it gave up too (say why from here), or the
+      // camera withdrew the code.
+      if (e?.reason === 'unreachable') return this.giveUp(false);
+      this.log('link', `the other phone ended the pairing before it opened (${e?.reason ?? 'unpaired'})`);
+      this.reset();
+      this.saved.save(null);
+      return this.set({ ...INITIAL, error: { kind: 'withdrawn' } });
+    }
     if (err.kind === 'no-session') {
       this.log('error', 'the helper no longer knows this pairing (expired)');
       this.reset();

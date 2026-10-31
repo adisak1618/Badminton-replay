@@ -412,12 +412,19 @@ trips (limit 5 s); once a relay candidate is in, the gathering ends after
 300 ms without another candidate rather than waiting for every server, and
 without one (UDP blocked) it waits on for TCP or TLS.
 
-When the phones are on different networks (`pairing/net.ts`) and the link is
-still not open 15 s after the answer, both pairing screens say so together
-with why the relay did not carry it: not set up, credentials could not be
-fetched (with the helper's reason), this phone gathered no relay candidate,
-the other phone offered none, or relay candidates on both sides that did not
-connect; the diagnostics log the same line.
+A first pairing that is still not open 18 s after its first answer
+(`PAIR_GIVE_UP_MS`, `pairing/unreachable.ts`, long enough for the camera's
+second attempt) gives up instead of offering new connections for ever: each
+phone says why from what it saw, names the phone to fix, and ends the session
+so the other phone stops too (2026-10-30, a scoreboard with no relay answered
+with mDNS candidates only and both screens advised one Wi-Fi). The reasons:
+the relay is not set up; this phone has no relay candidate (credentials could
+not be fetched, with the helper's reason, or its relay server never answered);
+the other phone offered none (it said why in its description, or it said
+nothing about itself: an older build); relay candidates on both sides that did
+not connect; or one network whose devices cannot reach each other. Phones on
+different networks are named with both addresses; the diagnostics log the
+same.
 
 ### 4.4 Message protocol (data channel)
 
@@ -467,7 +474,12 @@ Examples:
 - **Versioning.** `v` is bumped only for incompatible changes; additive fields
   are allowed within a version. `hello.app` carries the build id so a stale
   service-worker cache on one phone is diagnosed as "update the app"
-  (R-PAIR-7).
+  (R-PAIR-7). Every description posted to the helper also carries the build,
+  the protocol version and the phone's relay state (`app`, `v`, `relay`), so a
+  phone refuses another protocol before any connection and ends the session
+  with reason `version`, which tells the other phone; a build too old to say
+  its version is still caught by the hello, or, when it cannot open the channel
+  at all, by the give-up above.
 - **Full-state resync.** On every channel open the camera sends `state`
   with its entire match (a 3-game log is ~40 kB), or `matchId: null`. The
   scoreboard shows nothing as live ("syncing") until it has it, then resends
@@ -916,7 +928,10 @@ is untested; see roadmap.md Later.
 - No COOP/COEP headers; nothing here needs cross-origin isolation.
 - PWA: manifest with `display: standalone`, icons; Workbox precache of the
   shell; update flow `prompt` (never auto-reload while a match or recording is
-  live).
+  live). Under `prompt` the launch that finds a new build still runs the old
+  one, and an open page never looks again, so the app looks on the role screen,
+  on S2 and C2, and whenever it comes back to the front; on the role screen a
+  waiting build is taken at once, and S2 and C2 show "Update now".
 - Preview deployments give an HTTPS URL per branch, with the function and the
   store, for phone testing without local setup.
 

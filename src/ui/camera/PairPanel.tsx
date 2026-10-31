@@ -6,7 +6,9 @@ import { useEffect, useRef, useState } from 'react';
 import { pairUrl, qrSvg } from '../../pairing/qr';
 import type { SlotsSnapshot } from '../../pairing/slots';
 import { DiagChip } from '../DiagSheet';
-import { mismatchText, pairErrorText, SLOW_CONNECT_MS, slowConnectText } from '../pairText';
+import { checkForUpdate } from '../../device/update';
+import { mismatchText, pairErrorText, SLOW_CONNECT_MS, SLOW_CONNECT_TEXT } from '../pairText';
+import { UpdateBanner } from '../RoleScreen';
 import { useNow } from '../useNow';
 import { boardName } from './format';
 import { LinkChip } from './parts';
@@ -16,11 +18,14 @@ export function PairPanel({
   onNewCode,
   onUnpair,
   onClose,
+  onUpdate,
 }: {
   slots: SlotsSnapshot;
   onNewCode: () => void;
   onUnpair: (i: number) => void;
   onClose: () => void;
+  /** A newer build is waiting: pairing on the older one can fail before any version check. */
+  onUpdate: (() => void) | null;
 }) {
   const [svg, setSvg] = useState<string | null>(null);
   const [answeredAt, setAnsweredAt] = useState<number | null>(null);
@@ -47,6 +52,10 @@ export function PairPanel({
     else setAnsweredAt(null);
   }, [code, l?.state, l?.busy, l?.error]);
 
+  // Look for a newer build whenever the pairing screen opens, and again on a version mismatch.
+  const mismatch = l?.mismatch;
+  useEffect(() => checkForUpdate(), [mismatch]);
+
   const close = useRef(onClose);
   close.current = onClose;
   useEffect(() => {
@@ -66,13 +75,13 @@ export function PairPanel({
       : l.mismatch
         ? mismatchText(l.mismatch)
         : l.error
-          ? pairErrorText(l.error)
+          ? pairErrorText(l.error, 'camera')
           : l.busy
             ? 'Preparing a code…'
             : code
               ? `Waiting for ${next}… (code valid ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')})`
               : answeredAt != null && now - answeredAt > SLOW_CONNECT_MS
-                ? slowConnectText(l.net, l.relay)
+                ? SLOW_CONNECT_TEXT
                 : 'Connecting…';
 
   return (
@@ -84,6 +93,7 @@ export function PairPanel({
       )}
       <div className="flex max-w-md min-w-0 flex-col gap-2 overflow-y-auto">
         <b className="text-lg">{linked.length && !full ? 'Pair another scoreboard' : 'Pair with the scoreboard'}</b>
+        {!full && <UpdateBanner onUpdate={onUpdate} />}
         {linked.map(({ s, i }) => (
           <div key={i} className="flex items-center gap-2 text-sm" data-testid={`board-${i + 1}`}>
             <span className="min-w-0 flex-1 truncate">

@@ -11,7 +11,12 @@
 //
 // Either phone may offer a new connection (the camera to reconnect, a scoreboard coming back from a locked
 // screen); GET sessions/:id/poll gives each side what the other one posted. POST sessions/:id/end marks a
-// pairing one phone ended, so the other learns it even when the goodbye on the channel was lost.
+// pairing one phone ended, so the other learns it even when the goodbye on the channel was lost, and why: it
+// unpaired, withdrew the code, could not connect, or runs another protocol version.
+//
+// Each description may say which build and protocol version made it and whether that phone had a relay, so
+// the other phone can refuse a build it cannot talk to, or say why a link cannot open, before the data
+// channel exists (a build that cannot open the channel was never told, 2026-10-30). Older builds send none of it.
 import { Redis } from '@upstash/redis';
 
 export const ROOM_TTL_S = 600; // a room code lives 10 minutes and is deleted on first read
@@ -214,7 +219,14 @@ export async function mintTurn(cfg: TurnConfig, ttlS: number, fetchImpl: Fetch =
 
 export type Side = 'camera' | 'scoreboard';
 
-export interface Offer {
+/** What the sending phone says about itself: its build, protocol version, and relay state ('ready', 'failed: …'). */
+export interface PeerMeta {
+  app?: string;
+  v?: number;
+  relay?: string;
+}
+
+export interface Offer extends PeerMeta {
   gen: number;
   sdp: string;
   /** A description for a new RTCPeerConnection rather than an ICE restart of the current one. */
@@ -225,10 +237,17 @@ export interface Offer {
 }
 export type Answer = Offer;
 
+/** Why a phone ended a session: unpaired, withdrew its code (or showed a new one), could not connect, or the other phone's protocol is not its own. */
+export const END_REASONS = ['unpaired', 'withdrawn', 'unreachable', 'version'] as const;
+export type EndReason = (typeof END_REASONS)[number];
+
 interface Session {
   secret: string;
-  /** One phone unpaired: every later call on the session answers 410 `ended`. */
+  /** One phone ended it: every later call on the session answers 410 `ended`, with the reason and that phone's build. */
   ended?: boolean;
+  reason?: EndReason;
+  app?: string;
+  v?: number;
 }
 
 export interface HandlerOptions {
@@ -303,6 +322,15 @@ function genOf(v: unknown): number {
   return v;
 }
 
+/** The sender's build, protocol and relay state, when present and sane; anything else is dropped, never refused. */
+function metaOf(body: Record<string, unknown>): PeerMeta {
+  const m: PeerMeta = {};
+  if (typeof body.app === 'string' && body.app.length <= 100 && /^[\w.@+:-]+$/.test(body.app)) m.app = body.app;
+  if (typeof body.v === 'number' && Number.isInteger(body.v) && body.v >= 1 && body.v <= 1000) m.v = body.v;
+  if (typeof body.relay === 'string' && body.relay.length <= 160) m.relay = body.relay;
+  return m;
+}
+
 /** The path below /api/signal: from the pathname, or from the `path` query a rewrite may add. */
 function routeOf(url: URL): string[] {
   let p = url.pathname.replace(/^\/api\/signal\/?/, '');
@@ -326,7 +354,7 @@ export function createHandler(getStore: () => SignalStore | null, opts: HandlerO
     if (!raw) throw new HttpError(404, 'no-session');
     const s = JSON.parse(raw) as Session;
     if (typeof secret !== 'string' || !sameSecret(secret, s.secret)) throw new HttpError(403, 'bad-secret');
-    if (s.ended) throw new HttpError(410, 'ended');
+    if (s.ended) throw new HttpError(410, 'ended', { reason: s.reason ?? 'unpaired', ...(s.app ? { app: s.app } : {}), ...(s.v ? { v: s.v } : {}) });
     return s;
   };
 
@@ -364,7 +392,7 @@ export function createHandler(getStore: () => SignalStore | null, opts: HandlerO
       const id = hex(randomBytes(16));
       const secret = hex(randomBytes(16));
       await store.set(`sess:${id}`, JSON.stringify({ secret } satisfies Session), SESSION_TTL_S);
-      const offer: Offer = { gen: 1, sdp, fresh: true, at: now() };
+      const offer: Offer = { gen: 1, sdp, fresh: true, at: now(), ...metaOf(body) };
       await store.set(`offer:${id}`, JSON.stringify(offer), SESSION_TTL_S);
       const code = await newCode(store, id);
       return json(201, { code, session: id, secret, expiresIn: ROOM_TTL_S });
@@ -388,7 +416,7 @@ export function createHandler(getStore: () => SignalStore | null, opts: HandlerO
         await session(store, b, body.secret ?? headerSecret);
         const gen = genOf(body.gen);
         const sdp = sdpOf(c === 'answer' ? body.answer : body.offer);
-        const desc: Offer = { gen, sdp, fresh: body.fresh === true, at: now() };
+        const desc: Offer = { gen, sdp, fresh: body.fresh === true, at: now(), ...metaOf(body) };
         if (c === 'offer') desc.by = body.by === 'scoreboard' ? 'scoreboard' : 'camera';
         const current = await readDesc(store, `offer:${b}`);
         if (c === 'answer' && current?.gen !== gen) throw new HttpError(409, 'stale', { gen: current?.gen ?? 0 });
@@ -429,7 +457,9 @@ export function createHandler(getStore: () => SignalStore | null, opts: HandlerO
       if (m !== 'POST') throw new HttpError(405, 'method');
       const body = await readBody(req);
       const s = await session(store, b, body.secret ?? headerSecret);
-      await store.set(`sess:${b}`, JSON.stringify({ ...s, ended: true } satisfies Session), SESSION_TTL_S);
+      const reason = END_REASONS.find((r) => r === body.reason) ?? 'unpaired';
+      const { app, v } = metaOf(body);
+      await store.set(`sess:${b}`, JSON.stringify({ ...s, ended: true, reason, ...(app ? { app } : {}), ...(v ? { v } : {}) } satisfies Session), SESSION_TTL_S);
       await Promise.all(['offer', 'answer'].map((k) => store.take(`${k}:${b}`)));
       return json(204);
     }

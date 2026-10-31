@@ -3,10 +3,11 @@
 // offers and answers went out with no candidate at all.
 import { afterEach, describe, expect, it } from 'vitest';
 import { MemoryStore, createHandler } from '../../api/signal';
-import { slowConnectText, SLOW_CONNECT_TEXT } from '../ui/pairText';
+import { unreachableText } from '../ui/pairText';
 import { HelperClient } from './helper';
 import { gathered, hasCandidates, PeerLink } from './link';
 import { candidatesOf, describeCandidates, netCheck, netVerdict } from './net';
+import { unreachable } from './unreachable';
 
 const sdp = (...candidates: string[]) =>
   ['v=0', 'o=- 1 2 IN IP4 127.0.0.1', 's=-', 'm=application 9 UDP/DTLS/SCTP webrtc-datachannel', 'c=IN IP4 0.0.0.0', ...candidates, ''].join('\r\n');
@@ -53,12 +54,12 @@ describe('network check', () => {
     expect(netCheck(null, CAMERA)).toBeNull();
   });
 
-  it('the slow-connect text names both addresses when the networks differ', () => {
-    const text = slowConnectText(netCheck(SCOREBOARD, CAMERA));
+  it('a pairing that could not open names both addresses when the networks differ', () => {
+    const text = unreachableText(unreachable({ state: 'not-configured' }, netCheck(SCOREBOARD, CAMERA), null), 'scoreboard');
     expect(text).toContain('different networks (this phone 10.131.171.124, the other 10.195.144.160)');
     expect(text).toContain('Personal Hotspot');
-    expect(slowConnectText(netCheck(MAC, CAMERA))).toBe(SLOW_CONNECT_TEXT);
-    expect(slowConnectText(null)).toBe(SLOW_CONNECT_TEXT);
+    // On the other one's hotspot the two can see each other: not "different networks".
+    expect(unreachableText(unreachable({ state: 'not-configured' }, netCheck(MAC, CAMERA), null), 'scoreboard')).not.toContain('different networks');
   });
 });
 

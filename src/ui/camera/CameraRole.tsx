@@ -74,8 +74,8 @@ export function CameraRole({ onLeave, onUpdate }: { onLeave: () => void; onUpdat
       onToggleDemo={toggleDemo}
       onPair={pair}
       onUnpair={(i) => (i == null ? pairing.unpairAll() : pairing.unpair(i))}
-      pairNote={!pairOpen && !!ended && (ended.mismatch ? mismatchText(ended.mismatch) : pairErrorText(ended.error!))}
-      c2={pairOpen && <PairPanel slots={slots} onNewCode={() => pairing.pairNext()} onUnpair={(i) => pairing.unpair(i)} onClose={closePair} />}
+      pairNote={!pairOpen && !!ended && (ended.mismatch ? mismatchText(ended.mismatch) : pairErrorText(ended.error!, 'camera'))}
+      c2={pairOpen && <PairPanel slots={slots} onNewCode={() => pairing.pairNext()} onUnpair={(i) => pairing.unpair(i)} onClose={closePair} onUpdate={onUpdate} />}
       onRecordings={() => {
         ctrl.stopCamera();
         keepScreenOn(false);

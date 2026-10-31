@@ -23,8 +23,9 @@
 // link opened by the iPhone camera app with the viewfinder still
 // on that QR, claimed once; a version mismatch (R-PAIR-7); two phones on different networks told so, with the
 // pairing diagnostics; with the relay, two phones on different networks connecting through TURN while a shared
-// network still connects directly. Every ICE restart description must carry candidates. Exits non-zero on the
-// first failure.
+// network still connects directly; a scoreboard whose relay credentials fail, both phones saying why within
+// about 20 s and offering nothing more. Every ICE restart description must carry candidates. Exits non-zero on
+// the first failure.
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -87,7 +88,7 @@ const chip = (p: Page) => text(p, '[data-testid=link-chip]');
 // every outgoing data-channel message and window.__deaf every incoming one; window.__frozen holds the page's
 // timers; a channel marked __dead carries nothing either way, ever again, and window.__pcs[i].__dead makes a
 // connection say it failed: what an iPhone's connection is after its screen was locked; sessionStorage.__vnext makes this page
-// speak the next protocol version (4);
+// speak the next protocol version (4), on the channel and in what it posts to the helper;
 // sessionStorage.__ip replaces this page's candidates with one host candidate on that address, the way an iPhone
 // on mobile data offers only its carrier address; sessionStorage.__relay does the same but keeps the relay
 // candidates and makes the connection use only those (iceTransportPolicy 'relay'), since this Mac's own host
@@ -118,6 +119,11 @@ const HOOKS = `
     };
     const send = RTCDataChannel.prototype.send;
     const newer = sessionStorage.getItem('__vnext') === '1'; // latched at load: a page being reloaded still says goodbye in v3
+    const fetch0 = window.fetch;
+    window.fetch = function (input, init) {
+      if (newer && init && typeof init.body === 'string' && String(input).includes('/api/signal')) init = { ...init, body: init.body.replace('"v":3', '"v":4') };
+      return fetch0.call(this, input, init);
+    };
     window.__out = [];
     window.__dcs = new Set();
     RTCDataChannel.prototype.send = function (d) {
@@ -904,7 +910,9 @@ async function main() {
       return `link #pair=${c}: ${ms} ms to paired, one claim, still paired 5 s later with the QR in view`;
     });
 
-    // The camera pretends to be a newer build speaking protocol v4: the scoreboard is the one to update.
+    // The camera pretends to be a newer build speaking protocol v4: the scoreboard is the one to update. Its
+    // reloaded page says v4 in its new offer, so the scoreboard refuses it before any connection (the helper path,
+    // which also reaches a build that could never open the channel) and the camera is told through the helper.
     await step('version mismatch tells which phone to update (R-PAIR-7)', async () => {
       const board = sb3!;
       await cam.evaluate(() => sessionStorage.setItem('__vnext', '1'));
@@ -914,8 +922,10 @@ async function main() {
       const camNote = await until('camera note', async () => text(cam, '[data-testid=pair-note]'), 10_000);
       await board.screenshot({ path: path.join(OUT, '07-scoreboard-mismatch.png') });
       await cam.screenshot({ path: path.join(OUT, '08-camera-mismatch.png') });
-      if (title !== 'Update the app on this phone (reload it), then pair again.') throw new Error(`scoreboard says "${title}"`);
-      if (camNote !== 'Update the app on the other phone, then pair again.') throw new Error(`camera says "${camNote}"`);
+      if (title !== 'This phone runs an older version of the app. Update it (Update now, or close the app fully and open it again), then pair again.')
+        throw new Error(`scoreboard says "${title}"`);
+      if (camNote !== 'The other phone runs an older version of the app. Update it there (Update now in its menu, or close the app fully and open it again), then pair again.')
+        throw new Error(`camera says "${camNote}"`);
       return `scoreboard chip "update app" / "${title}"; camera "${camNote}"`;
     });
 
@@ -1039,6 +1049,50 @@ async function main() {
         const { c, ms, paths } = await relayPair('relay-tcp', true);
         return `typed ${c}: ${ms} ms to paired; camera "${paths[0]}", scoreboard "${paths[1]}"`;
       });
+
+      // Production, 2026-10-30: the scoreboard had no relay (its credentials failed, or it ran a build from before
+      // the relay) and answered with mDNS candidates only; the camera offered a new connection every 12 s for ever
+      // and both screens advised one Wi-Fi. Both now say why within about 20 s of Pair, and stop.
+      await step('a scoreboard whose relay credentials fail: both phones say why within about 20 s, and stop', async () => {
+        const camF = (await newPage(camBrowser, 'camera-norelay')).page;
+        const sbF = (await newPage(camBrowser, 'scoreboard-norelay')).page;
+        netPages.push(camF, sbF);
+        await sbF.route(/\/api\/signal\/sessions\/[0-9a-f]+\/ice$/, (r) => r.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"store"}' }));
+        await camF.goto(BASE);
+        await camF.evaluate(() => sessionStorage.setItem('__relay', '10.195.183.85'));
+        await sbF.goto(BASE);
+        await sbF.evaluate(() => sessionStorage.setItem('__ip', '3f0c9a3e-1c2d-4c1e-9d10-7d0b8f3a0c11.local')); // Chrome on a Mac: mDNS only
+        await button(camF, /CAMERA/).click();
+        await until('camera live', async () => (await camF.locator('[data-testid=rec-button]').isEnabled()) || null, 15_000);
+        await camF.locator('[data-testid=cam-pair]').click();
+        const c = await until('code', async () => {
+          const t = await text(camF, '[data-testid=pair-code]');
+          return /^\d{6}$/.test(t) && t;
+        });
+        await button(sbF, /SCOREBOARD/).click();
+        await sbF.locator('[data-testid=pair-chip]').click();
+        await sbF.locator('input[data-testid=pair-code]').fill(c);
+        const start = Date.now();
+        await sbF.locator('[data-testid=pair-submit]').click();
+        const why = async (p: Page) => {
+          const t = await text(p, '[data-testid=pair-status]');
+          return t.startsWith('Could not connect') && t;
+        };
+        const sbSays = await until('scoreboard says why', () => why(sbF), 30_000, 250);
+        const ms = Date.now() - start;
+        const camSays = await until('camera says why', () => why(camF), 10_000, 250);
+        if (ms > 25_000) throw new Error(`the scoreboard said why only after ${ms} ms`);
+        if (sbSays !== "Could not connect: this phone could not use the internet relay (helper: store). Check this phone's internet connection, then pair again.")
+          throw new Error(`scoreboard says "${sbSays}"`);
+        if (!camSays.includes('the scoreboard phone could not use the internet relay (helper: store)')) throw new Error(`camera says "${camSays}"`);
+        const offers = () => posted.filter((p) => p.page === 'camera-norelay' && p.kind === 'offer').length;
+        const n = offers();
+        await camF.waitForTimeout(15_000);
+        if (offers() !== n) throw new Error(`the camera kept offering: ${offers() - n} more offers after it gave up`);
+        await sbF.screenshot({ path: path.join(OUT, '14-scoreboard-no-relay.png') });
+        await camF.screenshot({ path: path.join(OUT, '15-camera-no-relay.png') });
+        return `typed ${c}; after ${ms} ms the scoreboard says "${sbSays}"; the camera "${camSays}"; no offer in the 15 s after`;
+      });
     }
   } catch (err) {
     for (const [name, p] of [
@@ -1052,6 +1106,8 @@ async function main() {
       ['scoreboard-relay', netPages[3]],
       ['camera-relay-tcp', netPages[4]],
       ['scoreboard-relay-tcp', netPages[5]],
+      ['camera-norelay', netPages[6]],
+      ['scoreboard-norelay', netPages[7]],
     ] as const) {
       if (!p) continue;
       await p.screenshot({ path: path.join(OUT, `fail-${name}.png`) }).catch(() => {});
@@ -1061,7 +1117,7 @@ async function main() {
     throw err;
   } finally {
     // Each page's pairing diagnostics, as Copy would give them.
-    const pages = [['camera', cam], ['scoreboard', sbPage], ['scoreboard-2', sb2], ['scoreboard-3', sb3], ['scoreboard-b', sbB], ['camera-net', netPages[0]], ['scoreboard-net', netPages[1]], ['camera-relay', netPages[2]], ['scoreboard-relay', netPages[3]], ['camera-relay-tcp', netPages[4]], ['scoreboard-relay-tcp', netPages[5]]] as const;
+    const pages = [['camera', cam], ['scoreboard', sbPage], ['scoreboard-2', sb2], ['scoreboard-3', sb3], ['scoreboard-b', sbB], ['camera-net', netPages[0]], ['scoreboard-net', netPages[1]], ['camera-relay', netPages[2]], ['scoreboard-relay', netPages[3]], ['camera-relay-tcp', netPages[4]], ['scoreboard-relay-tcp', netPages[5]], ['camera-norelay', netPages[6]], ['scoreboard-norelay', netPages[7]]] as const;
     for (const [name, p] of pages) {
       const logs = await p
         ?.evaluate(() => ['camera', 'scoreboard'].map((r) => localStorage.getItem(`bs.diag.${r}`)).filter(Boolean).map((j) => JSON.parse(j!).entries))

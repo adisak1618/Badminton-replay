@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { configFromSetup, reduce, type MatchSetup } from '../engine';
+import { checkForUpdate, setRegistration } from '../device/update';
 import { keepScreenOn } from '../device/wakeLock';
 import { store } from '../match/live';
 import { clearCurrent, loadCurrent } from '../match/persist';
@@ -34,7 +35,14 @@ export function App() {
   const {
     needRefresh: [needRefresh],
     updateServiceWorker,
-  } = useRegisterSW();
+  } = useRegisterSW({ onRegisteredSW: (_url, r) => setRegistration(r) });
+
+  // Look for a newer build whenever the app comes back to the front (an open page never looked again before).
+  useEffect(() => {
+    const look = () => document.visibilityState === 'visible' && checkForUpdate();
+    document.addEventListener('visibilitychange', look);
+    return () => document.removeEventListener('visibilitychange', look);
+  }, []);
 
   useEffect(() => {
     let live = true;
@@ -108,6 +116,14 @@ export function App() {
 
   const update = needRefresh ? () => void updateServiceWorker(true) : null;
 
+  // On the role screen nothing is live: look for a newer build, and take it at once when there is one, so the
+  // first launch after a deploy does not run the old build (it did, every time: 2026-10-31 audit, BUG-2).
+  useEffect(() => {
+    if (screen !== 'role') return;
+    if (needRefresh) void updateServiceWorker(true);
+    else checkForUpdate();
+  }, [screen, needRefresh]);
+
   // The pairing diagnostics say when this phone still runs the older build next to a waiting update.
   useEffect(() => {
     setUpdateWaiting(needRefresh);
@@ -115,7 +131,7 @@ export function App() {
   }, [needRefresh]);
 
   const openPair = () => setPair(null);
-  const overlay = pair !== false && <PairScreen initialCode={pair} onClose={() => setPair(false)} />;
+  const overlay = pair !== false && <PairScreen initialCode={pair} onUpdate={update} onClose={() => setPair(false)} />;
   const withPair = (main: ReactNode) => (
     <>
       {main}
