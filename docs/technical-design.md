@@ -854,7 +854,7 @@ Stored as `matches/<matchId>/recording.json`, updated on every segment change.
   top. An imported file (`recording.source: 'imported'`, D17) or a segment
   with no panel boxes has nothing burned in: the painter draws everything.
 - **Pipeline** (`pipeline.ts`): Mediabunny (WebCodecs; the parts in `mb.ts`,
-  loaded only when a render starts, 84 kB gzipped) decodes the segment, the
+  loaded only when a render starts, 85 kB gzipped) decodes the segment, the
   painter draws each output frame on an `OffscreenCanvas`, `CanvasSource`
   encodes H.264 at the recording's bitrate (6 Mbit/s at 1080p) with a
   keyframe every 2 s, and the AAC packets are copied, not re-encoded. Live
