@@ -203,12 +203,112 @@ async function ui(browser: Browser): Promise<void> {
   await ctx.close();
 }
 
+/**
+ * The Studio (C6) on a seeded recording: give point 1 a replay, move its start 2 s later with "]", ×0.75 with "2",
+ * preview it, change its tag with "T", then Make video. The Studio's events must land in studio.json and the made video
+ * must grow by exactly that replay.
+ */
+async function studio(browser: Browser): Promise<void> {
+  const ctx = await browser.newContext({ viewport: { width: 844, height: 390 }, deviceScaleFactor: 2 });
+  const page = await ctx.newPage();
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  const chunks: Buffer[] = [];
+  await page.exposeFunction('saveChunk', (_: string, b64: string) => void chunks.push(Buffer.from(b64, 'base64')));
+  await page.goto(`${base}/e2e/render.html`);
+  await page.waitForFunction(() => (window as unknown as { __ready?: boolean }).__ready === true, null, { timeout: 60_000 });
+  await page.evaluate((x) => (window as unknown as { __seed: (c: object) => Promise<void> }).__seed(x), {
+    id: 'studio-proof', name: 'studio', clipUrl: `/@fs${path.join(OUT, 'chrome-burned-src.mp4')}`, every: 9000, replayEvery: 3, imported: false,
+  });
+  await page.goto(`${base}/`);
+  await page.getByRole('button', { name: /Recordings \(1\)/ }).click();
+  await page.locator('[data-testid=studio-open]').click();
+  await page.waitForSelector('[data-testid=studio-points] [data-testid=studio-point-1]');
+  const marked = async () => (await page.locator('[data-testid=studio-marked]').textContent())?.trim();
+  if ((await marked()) !== '★ 3 replays') throw new Error(`studio: starts with ${await marked()}`);
+  await page.locator('[data-testid=studio-point-1]').click();
+  await page.locator('[data-testid=studio-star]').click();
+  await page.keyboard.press(']');
+  await page.keyboard.press(']');
+  await page.keyboard.press('2');
+  const start = await page.locator('[data-testid=studio-start]').textContent();
+  if ((await marked()) !== '★ 4 replays' || start !== '−4.0 s') throw new Error(`studio: after the edits ${await marked()}, start ${start}`);
+  if ((await page.locator('[data-testid="studio-speed-0.75"]').getAttribute('aria-pressed')) !== 'true') throw new Error('studio: ×0.75 not on');
+  await page.keyboard.press('p');
+  await page.waitForTimeout(1200);
+  const v = await page.locator('[data-testid=studio-video]').evaluate((el: HTMLVideoElement) => ({ rate: el.playbackRate, paused: el.paused, t: el.currentTime }));
+  if (v.rate !== 0.75 || v.paused || v.t <= 0) throw new Error(`studio: preview ${JSON.stringify(v)} ${await page.locator('[role=status]').allTextContents()}`);
+  await page.screenshot({ path: path.join(OUT, 'studio-1-edit.png') });
+  await page.keyboard.press('t');
+  await page.locator('[data-testid=tag-who-A1]').click();
+  await page.screenshot({ path: path.join(OUT, 'studio-2-tag.png') });
+  await page.locator('[data-testid=tag-skip]').click();
+  const tag = await page.locator('[data-testid=studio-tag]').textContent();
+  const saved = await page.evaluate(async () => {
+    const r = await navigator.storage.getDirectory();
+    const d = await (await r.getDirectoryHandle('matches')).getDirectoryHandle('studio-proof');
+    for (let i = 0; i < 50; i++) {
+      try {
+        const j = JSON.parse(await (await (await d.getFileHandle('studio.json')).getFile()).text()) as { events: Array<{ type: string; start?: number; end?: number; speed?: number }> };
+        if (j.events.some((e) => e.type === 'tag')) return j.events;
+      } catch {
+        // not written yet
+      }
+      await new Promise((ok) => setTimeout(ok, 100));
+    }
+    return null;
+  });
+  const types = saved?.map((e) => e.type).join(',');
+  if (types !== 'replay,replay,replay,replay,tag') throw new Error(`studio: studio.json holds ${types}`);
+  const last = saved!.filter((e) => e.type === 'replay').pop()!;
+  if (last.start !== -4000 || last.end !== -1000 || last.speed !== 0.75) throw new Error(`studio: the last mark is ${JSON.stringify(last)}`);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: path.join(OUT, 'studio-3-large.png') });
+  await page.setViewportSize({ width: 844, height: 390 });
+  await page.locator('[data-testid=studio-render]').click();
+  await page.locator('[data-testid=render-start]').click();
+  await page.waitForSelector('[data-testid=render-share]', { timeout: 600_000 });
+  await page.evaluate(async () => {
+    const r = await navigator.storage.getDirectory();
+    const d = await (await (await r.getDirectoryHandle('matches')).getDirectoryHandle('studio-proof')).getDirectoryHandle('render');
+    let f: File | null = null;
+    for await (const [n, h] of (d as unknown as { entries(): AsyncIterable<[string, FileSystemFileHandle]> }).entries()) if (n.endsWith('.mp4')) f = await h.getFile();
+    const step = 8 << 20;
+    for (let i = 0; i < f!.size; i += step) {
+      const b = new Uint8Array(await f!.slice(i, i + step).arrayBuffer());
+      let s = '';
+      for (let j = 0; j < b.length; j += 0x8000) s += String.fromCharCode(...b.subarray(j, j + 0x8000));
+      await (window as unknown as { saveChunk: (n: string, b: string, l: boolean) => Promise<void> }).saveChunk('studio', btoa(s), i + step >= f!.size);
+    }
+  });
+  const out = path.join(OUT, 'chrome-studio.mp4');
+  fs.writeFileSync(out, Buffer.concat(chunks));
+  const dur = Number(probe(out).format.duration) * 1000;
+  // The scenario's three replays (the proof's "burned" render of the same clip) plus point 1's: 3 s at ×0.75 = 4 s, and
+  // the 0.25 s dissolve back.
+  const want = Number(probe(path.join(OUT, 'chrome-burned.mp4')).format.duration) * 1000 + 4000 + 250;
+  if (Math.abs(dur - want) > 150) throw new Error(`studio: the made video is ${dur} ms, expected ${want}`);
+  if (errors.length) throw new Error(errors.join('\n'));
+  console.log(`chrome studio: ★ point 1, start ${start}, ×0.75, preview at ${v.rate}x, tag "${tag?.trim()}", studio.json ${types}; the made video ${(dur / 1000).toFixed(2)} s (expected ${(want / 1000).toFixed(2)} s)`);
+  await ctx.close();
+}
+
 try {
-  if (!process.env.ONLY_FULL) {
+  if (process.env.ONLY_STUDIO) {
+    // Again on the outputs of an earlier run in OUT (chrome-burned-src.mp4, chrome-burned.mp4).
+    const chrome = await chromium.launch({ executablePath: CHROME, headless: true });
+    try {
+      await studio(chrome);
+    } finally {
+      await chrome.close();
+    }
+  } else if (!process.env.ONLY_FULL) {
     const chrome = await chromium.launch({ executablePath: CHROME, headless: true });
     try {
       await proof('chrome', chrome);
       await ui(chrome);
+      await studio(chrome);
     } finally {
       await chrome.close();
     }

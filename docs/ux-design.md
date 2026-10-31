@@ -422,7 +422,8 @@ Share opens the system share sheet with the segment file(s) and `match.json`
 (R-EXP-1, R-EXP-2). If the browser cannot share files, the row shows
 "Download" instead. Delete is a two-step confirm (R-EXP-3). On the scoreboard
 phone the same list offers the log alone. A match with a score log also has
-"Replays video (n)" (D16, n = the points marked ★), which opens C5.
+"Studio" (C6) and "Replays video (n)" (D16, n = the points marked ★), which
+opens C5.
 
 ### C5 Replays video (D16)
 
@@ -446,6 +447,38 @@ at the first part not finished ("n of m parts already made"); a lack of space
 says how much is needed and free. Done: "Share video" (the share sheet with
 one file per segment, `…-video-<n>-replays.mp4`) and "Delete it". Changing
 the marks or the options makes a new video rather than mixing parts.
+
+### C6 Studio (D16)
+
+```
++---------------------------------------------------------------+
+| ‹ Studio · A vs B                      ★ 4 replays [Make video]|
+| +---------------------------------+ GAME 1                    |
+| |                                 | ★ #1 1–0 A Nan · winner 0:04|
+| |       the recording             | ☆ #2 1–1 B Sax · winner 0:13|
+| |                                 | ★ #3 2–1 A Golf · winner 0:22|
+| +---------------------------------+ ...                       |
+| [−2 s] [▶] [+2 s] [====o==========] 0:04 / 1:30               |
+| [★ Replay] #1 · 1–0  follow video            [🏷 Nan · winner] |
+| Start [−] −4.0 s [+] here  End [−] −1.0 s [+] here            |
+| [×0.5] [×0.75] [×1] [▶ Preview] Reset  3.0 s → 4.3 s          |
+| Space play · ←→ 2 s · ↑↓ point · R ★ · T tag · [ ] start ...  |
++---------------------------------------------------------------+
+```
+
+The recording with its rally list, after the match (a recording whose match
+is known). A row jumps the video to that point's replay window (or 6 s before
+its tap) and selects it; with nothing selected the editor follows the point
+the playhead has just passed. The editor gives or takes the point's replay
+(★, like the rally list), moves the window's start and end by 1 s or to the
+playhead ("here"), within 30 s before the tap to 5 s after and at least 1 s
+long, sets ×0.5 / ×0.75 / ×1, previews the window at that speed and resets it
+to the default. "🏷" opens the tag popup (S3d, from the list: nothing closes
+by itself) when the match asks why points were won. Every change is saved at
+once; "Make video" opens C5 with them. Keys (shown on screens taller than a
+phone in landscape): Space play, ← → 2 s (Shift 10 s), ↑ ↓ previous / next
+point, R ★, T tag, [ ] start ∓1 s, , . end ∓1 s, I O start / end at the
+playhead, 1 2 3 speed, S next speed, P preview, Esc follow the video.
 
 ### E1 Error, offline and reconnect states
 
