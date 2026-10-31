@@ -422,6 +422,7 @@ phone the same list offers the log alone.
 | No internet while pairing | S2, C2 | "No internet: cannot pair. Scoring and recording still work on each phone." Retry button (R-PAIR-1) | Turn on data or hotspot |
 | Storage low | C1, C3 | Amber "N min left"; at zero: recording stops cleanly, file kept (R-REC-3) | Export and delete |
 | Capture interrupted (call, lock, app switch) | C3 | "Recording stopped: camera interrupted. Segment 1 saved (12:34)." Button: "Resume (segment 2)" (R-REC-5) | One tap |
+| Short network stall (under 6 s), link still up | S3 | Chip "sending…" while a tap has waited 1.5 s for the camera; back to "link ok" when the camera confirms (the camera trailed by seconds with "link ok" on both before) | None needed |
 | Link lost, internet available | S3, C3 | Chip "reconnecting · N s" after 6 s; scoreboard keeps scoring (its taps are sent when the link returns); camera keeps recording with the overlay frozen and marked "stale"; link returns by itself (R-PAIR-8), then the camera catches up and the scoreboard shows the camera's match (R-PAIR-4) | None needed; "Leave" in S5 if the camera is gone for good |
 | Scoreboard screen was off | S3 | Back within a few seconds of the screen coming on ("syncing…" then "link ok", §4.5 of the technical design) | None needed |
 | Camera or scoreboard unpaired the other | S3, C1 | The scoreboard shows "Pair camera" within a second, no REC state; the camera frees that slot (R-PAIR-11) | Pair again |

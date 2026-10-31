@@ -1,11 +1,13 @@
 // The scoreboard's view of the camera phone: the link chip with the camera's REC state (R-DISP-9) and whether
 // another scoreboard is linked too (D14) for the S3 top bar, and the remote REC rows for S5 (D11, R-PAIR-6).
 import { useState, useSyncExternalStore } from 'react';
-import type { LinkState, RecReport } from '../link/source';
+import type { RecReport } from '../link/source';
+import { store } from '../match/live';
 import { scoreboardPairing } from '../pairing/live';
 import { LinkChip } from './camera/parts';
 import { mismatchText } from './pairText';
 import { elapsed } from './format';
+import { chipText } from './linkChip';
 import { useNow } from './useNow';
 
 export function useCameraLink() {
@@ -42,22 +44,15 @@ function RecBadge({ rec, now, live }: { rec: (RecReport & { at: number }) | null
   );
 }
 
-/**
- * The chip's words: "syncing" until the camera's whole match has arrived after an open, and while the link is
- * down the seconds since the camera last sent anything, so a score shown then is never taken for a live one.
- */
-export function chipText(state: LinkState, synced: boolean, syncedAt: number | null, now: number): string | undefined {
-  if (state === 'paired') return synced ? undefined : 'syncing…';
-  if ((state === 'reconnecting' || state === 'lost' || state === 'offline') && syncedAt != null)
-    return `${state === 'reconnecting' ? 'reconnecting' : state === 'lost' ? 'link lost' : 'offline'} · ${Math.max(0, Math.round((now - syncedAt) / 1000))} s`;
-  return undefined;
-}
+export { chipText } from './linkChip';
 
 /** S3 top bar: "pair camera" when unpaired, else the link chip and the camera's REC state. */
 export function CameraStatus({ onPair }: { onPair: () => void }) {
   const { l, b } = useCameraLink();
+  useSyncExternalStore(store.subscribe, store.getSnapshot); // the taps the camera has not confirmed yet
+  const oldest = store.pending()[0]?.input.at ?? null;
   const down = l.state === 'reconnecting' || l.state === 'lost' || l.state === 'offline';
-  const now = useNow(1000, b.rec?.state === 'recording' || down);
+  const now = useNow(1000, b.rec?.state === 'recording' || down || oldest != null);
   if (l.state === 'unpaired' && !l.mismatch)
     return (
       <button className="btn btn-ghost min-h-9 rounded-full px-3 py-1 text-sm" onClick={onPair} data-testid="pair-chip">
@@ -71,7 +66,7 @@ export function CameraStatus({ onPair }: { onPair: () => void }) {
           update app
         </span>
       ) : (
-        <LinkChip link={l.state} demo={false} text={chipText(l.state, b.synced, b.syncedAt ?? l.downSince, now)} />
+        <LinkChip link={l.state} demo={false} text={chipText(l.state, b.synced, b.syncedAt ?? l.downSince, now, oldest)} />
       )}
       {b.others > 0 && l.state === 'paired' && (
         <span className="text-mut" data-testid="others" title="Another scoreboard is linked to the same camera">
