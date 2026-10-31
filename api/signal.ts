@@ -20,7 +20,9 @@
 import { Redis } from '@upstash/redis';
 
 export const ROOM_TTL_S = 600; // a room code lives 10 minutes and is deleted on first read
-export const SESSION_TTL_S = 6 * 3600; // refreshed on every write, so a match never outlives its session
+export const SESSION_TTL_S = 6 * 3600; // refreshed on every write and, at most every TOUCH_EVERY_S, by a poll
+/** A poll keeps its session alive this often: an open link on one Wi-Fi writes nothing after pairing. */
+export const TOUCH_EVERY_S = 600;
 export const CLAIM_LIMIT_PER_MIN = 20; // GET rooms/:code per IP: a six-digit code cannot be brute-forced in 10 min
 export const CREATE_LIMIT_PER_MIN = 10; // POST rooms per IP: keeps the store from being flooded
 export const MAX_BODY_BYTES = 16_384;
@@ -441,6 +443,8 @@ export function createHandler(getStore: () => SignalStore | null, opts: HandlerO
       await session(store, b, headerSecret);
       const side = url.searchParams.get('role');
       if (side !== 'camera' && side !== 'scoreboard') throw new HttpError(400, 'bad-role');
+      // A phone still polling is still paired: keep the session alive (one write per TOUCH_EVERY_S).
+      if (await store.set(`touch:${b}`, '1', TOUCH_EVERY_S, true)) await touch(store, b);
       const gen = Number(url.searchParams.get('gen') ?? 0);
       const offer = await readDesc(store, `offer:${b}`);
       const mine = (offer?.by ?? 'camera') === side;

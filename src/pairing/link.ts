@@ -236,6 +236,11 @@ export class PeerLink {
   private epoch = 0;
   /** The page came back and its link was found dead: the scoreboard offers a fresh connection (§4.5). */
   private resuming = false;
+  /**
+   * The helper answered that it no longer knows this session while the link was open: the link is kept (it needs
+   * no helper), the idle polls stop, and the pairing ends only if the link goes down and needs the helper.
+   */
+  private sessionLost = false;
   /** A resume probe: the ping sent at `since` must be answered within PROBE_MS. */
   private probe: { since: number } | null = null;
   private lastResumeAt = 0;
@@ -486,6 +491,7 @@ export class PeerLink {
     this.remoteSdp = null;
     this.peer = null;
     this.firstAnswerAt = null;
+    this.sessionLost = false;
     this.ice = null;
     this.iceRetryAt = 0;
     this.stuckSince = null;
@@ -980,6 +986,7 @@ export class PeerLink {
     // Its own offer answered but the link never opened: leave reconnecting to the camera's offers.
     if (a && a.answeredAt != null && !this.open && now - a.answeredAt >= ATTEMPT_TIMEOUT_MS) this.attempt = null;
     if (now < this.nextPollAt) return;
+    if (this.sessionLost && this.open) return; // nothing to look for: the helper forgot the session
     void this.poll();
   }
 
@@ -1132,6 +1139,13 @@ export class PeerLink {
       return this.set({ ...INITIAL, error: { kind: 'withdrawn' } });
     }
     if (err.kind === 'no-session') {
+      // An open link does not need the helper: keep it (it was torn down on both phones, and the camera dropped
+      // its match, when a test helper restarted or a session outlived its TTL: 2026-10-31 audit, BUG-3).
+      if (this.isOpen()) {
+        if (!this.sessionLost) this.log('error', 'the helper no longer knows this pairing; the open link is kept');
+        this.sessionLost = true;
+        return;
+      }
       this.log('error', 'the helper no longer knows this pairing (expired)');
       this.reset();
       this.saved.save(null);

@@ -1,12 +1,13 @@
 // The signaling helper (api/signal.ts) against the in-memory store: one-shot codes, generations, secrets,
 // TTL expiry, rate limits, size caps, and that nothing but descriptors and secrets is ever stored (R-PAIR-9).
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   CLAIM_LIMIT_PER_MIN,
   MAX_BODY_BYTES,
   MemoryStore,
   ROOM_TTL_S,
   SESSION_TTL_S,
+  TOUCH_EVERY_S,
   createHandler,
   redisCredentials,
   storeFromEnv,
@@ -143,7 +144,7 @@ describe('signaling helper', () => {
     expect(await kind(client.poll({ session: 'f'.repeat(32), secret: room.secret }, 0, 'scoreboard'))).toBe('no-session');
   });
 
-  it('room codes expire after 10 minutes, sessions 6 h after their last write', async () => {
+  it('room codes expire after 10 minutes, sessions 6 h after their last write or poll', async () => {
     const { client, clock, store } = setup();
     const room = await client.createRoom(SDP('o1'));
     clock.advance(ROOM_TTL_S * 1000 + 1);
@@ -154,11 +155,26 @@ describe('signaling helper', () => {
     clock.advance(SESSION_TTL_S * 1000 - 60_000);
     await client.postOffer(r2, { gen: 2, sdp: SDP('o3'), fresh: true }); // a write refreshes the whole session
     clock.advance(SESSION_TTL_S * 1000 - 60_000);
-    expect(await client.poll(r2, 1, 'scoreboard')).toEqual({ offer: expect.objectContaining({ gen: 2 }) });
-    clock.advance(120_000);
+    expect(await client.poll(r2, 1, 'scoreboard')).toEqual({ offer: expect.objectContaining({ gen: 2 }) }); // so does a poll
+    clock.advance(SESSION_TTL_S * 1000 - 60_000);
+    expect(await client.poll(r2, 2, 'scoreboard')).toBeNull();
+    clock.advance(SESSION_TTL_S * 1000 + 1); // nobody wrote or polled for 6 h
     expect(await kind(client.poll(r2, 0, 'scoreboard'))).toBe('no-session');
     clock.advance(61_000); // the rate-limit counters are gone too
     expect(store.keys()).toEqual([]);
+  });
+
+  it('an open link on one Wi-Fi writes nothing after pairing: its scoreboard’s idle polls keep the session for 12 h, one refresh per 10 min', async () => {
+    const { client, clock, store } = setup();
+    const room = await client.createRoom(SDP('o1'));
+    const sb = await client.claimRoom(room.code);
+    await client.postAnswer(sb, { gen: 1, sdp: SDP('a1'), fresh: true });
+    const expire = vi.spyOn(store, 'expire');
+    for (let i = 0; i < (12 * 3600) / 15; i++) {
+      clock.advance(15_000);
+      expect(await client.poll(sb, 1, 'scoreboard')).toBeNull();
+    }
+    expect(expire.mock.calls.length).toBeLessThanOrEqual(3 * ((12 * 3600) / TOUCH_EVERY_S + 1)); // sess, offer, answer
   });
 
   it('rate-limits claims per IP so a code cannot be brute-forced', async () => {

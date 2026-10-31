@@ -23,7 +23,8 @@
 // link opened by the iPhone camera app with the viewfinder still
 // on that QR, claimed once; a version mismatch (R-PAIR-7); two phones on different networks told so, with the
 // pairing diagnostics; with the relay, two phones on different networks connecting through TURN while a shared
-// network still connects directly; a scoreboard whose relay credentials fail, both phones saying why within
+// network still connects directly; the helper forgetting a session whose link is open (the link stays); a
+// scoreboard whose relay credentials fail, both phones saying why within
 // about 20 s and offering nothing more. Every ICE restart description must carry candidates. Exits non-zero on
 // the first failure.
 import { execFileSync, spawn } from 'node:child_process';
@@ -1043,6 +1044,29 @@ async function main() {
         await tap(sbRelay, 'left');
         await until('camera shows 1–0', () => cameraShows(camRelay, sbRelay), 5000);
         return `typed ${c}: ${ms} ms to paired; camera "${paths[0]}", scoreboard "${paths[1]}"; ${sent.length} descriptions, each with its relay candidate; ${minted.length} credential requests so far, TTL 3600 s; chip "${chipText}"; a point reached the camera`;
+      });
+
+      // A helper that forgot the session (its TTL passed, or a memory-store helper restarted) must not cut a link
+      // that is open: it did, on both phones within 2 s, and the camera dropped its match (2026-10-31 audit, BUG-3).
+      await step('the helper forgets the session while the link is open: the link stays, and a tap still reaches the camera', async () => {
+        const [camRelay, sbRelay] = [netPages[2], netPages[3]];
+        const gone = /\/api\/signal\/sessions\/[0-9a-f]+\/(poll|offer|answer|ice)/;
+        const hits: string[] = [];
+        for (const p of [camRelay, sbRelay])
+          await p.route(gone, (r) => {
+            hits.push(r.request().url());
+            return r.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"no-session"}' });
+          });
+        await sbRelay.waitForTimeout(20_000); // the scoreboard's idle poll comes every 15 s
+        if (!hits.length) throw new Error('no helper call in 20 s: the 404 was never seen');
+        const chips = [await chip(camRelay), await chip(sbRelay)];
+        if (chips.some((c) => c !== 'link ok')) throw new Error(`chips ${JSON.stringify(chips)} after the helper forgot the session`);
+        const before = (await cameraLog(camRelay)).length;
+        await tap(sbRelay, 'right');
+        await until('the camera has the point', async () => (await cameraLog(camRelay)).length > before && cameraShows(camRelay, sbRelay), 5000);
+        const kept = await diagLatest(sbRelay, 'scoreboard', 'error', (l) => l.includes('the open link is kept'));
+        for (const p of [camRelay, sbRelay]) await p.unroute(gone);
+        return `${hits.length} helper calls answered 404; both chips "link ok"; a point reached the camera; scoreboard log "${kept}"`;
       });
 
       await step('with UDP to the relay blocked, TURN over TCP carries the link', async () => {
