@@ -95,9 +95,12 @@ export class HelperClient {
     return (await this.call('POST', '/rooms', { offer: sdp, ...meta })).json;
   }
 
-  /** Scoreboard: take the room (one-shot) and get the session and the camera's offer. */
-  async claimRoom(code: string): Promise<Session & { offer: Desc }> {
-    return (await this.call('GET', `/rooms/${encodeURIComponent(code)}`)).json;
+  /**
+   * Scoreboard: take the room (one-shot) and get the session and the camera's offer. With `claim`, the same
+   * claim may be asked again for a minute and gets the same session (a claim whose reply never came).
+   */
+  async claimRoom(code: string, claim?: string): Promise<Session & { offer: Desc }> {
+    return (await this.call('GET', `/rooms/${encodeURIComponent(code)}${claim ? `?claim=${claim}` : ''}`)).json;
   }
 
   async postOffer(s: Session, d: Desc): Promise<void> {

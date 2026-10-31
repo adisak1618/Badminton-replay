@@ -897,7 +897,10 @@ async function main() {
       const linked = await newPage(sb3Browser, 'scoreboard-3');
       sb3 = linked.page;
       const claims: string[] = [];
-      sb3.on('request', (r) => /\/api\/signal\/rooms\/\d+$/.test(r.url()) && claims.push(r.url().slice(-6)));
+      sb3.on('request', (r) => {
+        const m = /\/api\/signal\/rooms\/(\d+)/.exec(r.url());
+        if (m) claims.push(m[1]);
+      });
       const start = Date.now();
       await sb3.goto(`${BASE}/#pair=${c}`);
       await until('paired', async () => (await sb3!.locator('[data-testid=pair-done]').count()) > 0, 30_000);
@@ -1043,6 +1046,30 @@ async function main() {
       await until('paired', async () => (await sbC.locator('[data-testid=pair-done]').count()) > 0, 15_000);
       await until('camera link ok', async () => (await chip(camC)) === 'link ok', 10_000);
       return `code ${c}; after ${ms} ms the scoreboard says "${says}" and keeps waiting; linked ${Date.now() - back} ms after the camera page came back`;
+    });
+
+    // The helper completes the claim (the code is used) but its reply comes after the page's 4 s limit: the page
+    // said "No internet" and Pair again said "That code was not found" (2026-10-31 audit, BUG-5). It now asks again
+    // with the same claim and gets the same session.
+    await step('a claim whose reply comes after the page’s 4 s limit still pairs: the code is not burned', async () => {
+      const { camC, sbC, c } = await codePair('slow-claim');
+      let delayed = 0;
+      await sbC.route(/\/api\/signal\/rooms\/\d+/, async (r) => {
+        if (delayed++) return r.continue();
+        const res = await r.fetch(); // the helper has the claim now
+        await new Promise((ok) => setTimeout(ok, 5000));
+        await r.fulfill({ response: res }).catch(() => {}); // the page gave up on it at 4 s
+      });
+      const start = Date.now();
+      await sbC.locator('[data-testid=pair-submit]').click();
+      await until('paired', async () => (await sbC.locator('[data-testid=pair-done]').count()) > 0, 20_000);
+      await until('camera link ok', async () => (await chip(camC)) === 'link ok', 10_000);
+      // The log is saved a second after its last line.
+      await until('the second claim in the scoreboard log', () =>
+        sbC.evaluate(() =>
+          (JSON.parse(localStorage.getItem('bs.diag.scoreboard') ?? '{}').entries ?? []).some((e: { text: string }) => e.text.includes('asking again with the same claim')),
+        ), 5000, 250);
+      return `code ${c}: paired ${Date.now() - start} ms after Pair, ${delayed} claims, the second with the same claim id`;
     });
 
     if (!RELAY) log(`  relay steps skipped: ${HELPER ? 'HELPER is set' : 'E2E_RELAY=0'}`);

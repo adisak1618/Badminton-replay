@@ -101,5 +101,6 @@ describe('pairing diagnostics', () => {
 
   it('helper paths', () => {
     expect(helperPath('/api/signal/sessions/b39230cb7f65070a9a008cfec05a2de5/offer?gen=2')).toBe('/sessions/b39230…/offer?gen=2');
+    expect(helperPath('/api/signal/rooms/368325?claim=a1b2c3d4e5f60718')).toBe('/rooms/368325');
   });
 });

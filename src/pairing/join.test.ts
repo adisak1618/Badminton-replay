@@ -34,7 +34,8 @@ function setup() {
   const handler = createHandler(() => store);
   const claims: string[] = [];
   const fetchImpl = async (url: string, init?: RequestInit) => {
-    if (/\/rooms\/\d+$/.test(url)) claims.push(url.slice(-6));
+    const m = /\/rooms\/(\d+)/.exec(url);
+    if (m) claims.push(m[1]);
     return handler(new Request(`https://app.test${url}`, init));
   };
   const helper = new HelperClient('/api/signal', fetchImpl);
@@ -85,4 +86,42 @@ describe('scoreboard join', () => {
     expect(link.paired).toBe(true);
     expect(link.getSnapshot().error).toBeNull();
   });
+
+  it('a claim whose reply came after the page gave up (4 s): the page asks again with the same claim and pairs', async () => {
+    // Real timers: the page's limit is AbortSignal.timeout. The helper takes 5 s to answer the first claim, and
+    // completes it (the code is used) after the page has given up on it (2026-10-31 audit, BUG-5).
+    const store = new MemoryStore();
+    const handler = createHandler(() => store);
+    let slow = 1;
+    const claims: string[] = [];
+    const helper = new HelperClient('/api/signal', async (url, init) => {
+      if (/\/rooms\/\d+/.test(url)) claims.push(url);
+      if (!slow || !/\/rooms\/\d+/.test(url)) return handler(new Request(`https://app.test${url}`, init));
+      slow--;
+      const { signal, ...rest } = init ?? {};
+      const work = new Promise<void>((r) => setTimeout(r, 5000)).then(() => handler(new Request(`https://app.test${url}`, rest)));
+      return new Promise<Response>((res, rej) => {
+        signal?.addEventListener('abort', () => rej(signal.reason));
+        work.then(res, rej);
+      });
+    });
+    const room = await helper.createRoom(SDP('offer'));
+    const link = new PeerLink({
+      role: 'scoreboard',
+      helper,
+      hello: () => ({ deviceId: 'sb', app: 'test@1' }),
+      createPc: () => new FakePc() as unknown as RTCPeerConnection,
+      saved: { load: () => null, save: () => {} },
+    });
+    links.push(link);
+    await link.join(room.code);
+    // The retry went out at once with the same claim, before the helper had finished the first: one more try.
+    if (!link.paired) {
+      await new Promise((r) => setTimeout(r, 1500));
+      await link.join(room.code);
+    }
+    expect(link.paired).toBe(true);
+    expect(link.getSnapshot().error).toBeNull();
+    expect(new Set(claims.map((u) => new URL(u, 'https://x').searchParams.get('claim'))).size).toBe(1);
+  }, 20_000);
 });

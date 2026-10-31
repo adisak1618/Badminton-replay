@@ -20,6 +20,8 @@
 import { Redis } from '@upstash/redis';
 
 export const ROOM_TTL_S = 600; // a room code lives 10 minutes and is deleted on first read
+/** A claim the page gave up on (its 4 s timeout) can be asked again with the same claim id for this long. */
+export const CLAIMED_TTL_S = 60;
 export const SESSION_TTL_S = 6 * 3600; // refreshed on every write and, at most every TOUCH_EVERY_S, by a poll
 /** A poll keeps its session alive this often: an open link on one Wi-Fi writes nothing after pairing. */
 export const TOUCH_EVERY_S = 600;
@@ -263,6 +265,7 @@ export interface HandlerOptions {
 
 const CODE = /^\d{6}$/;
 const ID = /^[0-9a-f]{32}$/;
+const CLAIM = /^[0-9a-f]{8,64}$/;
 
 class HttpError extends Error {
   status: number;
@@ -404,7 +407,15 @@ export function createHandler(getStore: () => SignalStore | null, opts: HandlerO
       if (m !== 'GET') throw new HttpError(405, 'method');
       await limit(store, 'claim', req, CLAIM_LIMIT_PER_MIN);
       if (!CODE.test(b)) throw new HttpError(404, 'no-room');
-      const id = await store.take(`room:${b}`);
+      // One-shot, except for the claim that took it: a page whose claim timed out while the helper completed it
+      // asks again with the same claim id and gets the same session (the code was burned before: 2026-10-31 audit).
+      const claim = url.searchParams.get('claim');
+      let id = await store.take(`room:${b}`);
+      if (id && claim && CLAIM.test(claim)) await store.set(`claimed:${b}`, JSON.stringify({ id, claim }), CLAIMED_TTL_S);
+      if (!id && claim && CLAIM.test(claim)) {
+        const prev = JSON.parse((await store.get(`claimed:${b}`)) ?? 'null') as { id: string; claim: string } | null;
+        if (prev?.claim === claim) id = prev.id;
+      }
       if (!id) throw new HttpError(404, 'no-room');
       const raw = await store.get(`sess:${id}`);
       const offer = await readDesc(store, `offer:${id}`);

@@ -204,6 +204,8 @@ export class PeerLink {
   private session: Session | null = null;
   /** Scoreboard: the room code the current pairing was claimed with. */
   private joined: string | null = null;
+  /** Scoreboard: this phone's claim id for a code, the same for every try at that code (api/signal.ts CLAIMED_TTL_S). */
+  private claimFor: { code: string; id: string } | null = null;
   /** The last description this phone sent and the last one it received, for the network check. */
   private localSdp: string | null = null;
   private remoteSdp: string | null = null;
@@ -383,7 +385,16 @@ export class PeerLink {
     this.log('link', `joining with code ${code}`);
     try {
       this.holdCapture(await this.ensureCapture('pair'));
-      const r = await this.helper.claimRoom(code);
+      if (this.claimFor?.code !== code) this.claimFor = { code, id: claimId() };
+      let r: Awaited<ReturnType<HelperClient['claimRoom']>>;
+      try {
+        r = await this.helper.claimRoom(code, this.claimFor.id);
+      } catch (err) {
+        // No reply in time: the helper may have taken the code all the same. The same claim gets that session.
+        if (!(err instanceof HelperError) || err.kind !== 'offline' || epoch !== this.epoch) throw err;
+        this.log('link', 'the claim got no reply in time; asking again with the same claim');
+        r = await this.helper.claimRoom(code, this.claimFor.id);
+      }
       if (epoch !== this.epoch) return;
       this.session = { session: r.session, secret: r.secret };
       if (this.refuses(r.offer)) return;
@@ -1213,6 +1224,10 @@ export class PeerLink {
       this.set({ ...INITIAL, error: { kind: 'expired' } });
     }
   }
+}
+
+function claimId(): string {
+  return [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 class PairFailure extends Error {

@@ -309,7 +309,11 @@ e.g. after a reload).
 - **Room code:** six random digits, collision-checked, valid 10 minutes, deleted
   on first read. Shown as a QR of `https://<app>/#pair=482107` (the code only;
   the session secret comes back from `GET rooms/:code`) and as digits for
-  typing (R-PAIR-1). A code dies with the page that shows it: the camera
+  typing (R-PAIR-1). The scoreboard sends a random claim id with its claim and
+  the helper answers the same claim id again for 60 s, so a claim whose reply
+  came after the page's 4 s limit (the helper had taken the code all the same)
+  is asked again at once and pairs, rather than "No internet" followed by "That
+  code was not found" (2026-10-31 audit). A code dies with the page that shows it: the camera
   withdraws it on `pagehide` (a beacon to `end`, reason `withdrawn`), or at its
   next launch when the page was killed (the shown session is kept in
   localStorage until a scoreboard links), and a new code withdraws the one it

@@ -2,6 +2,7 @@
 // TTL expiry, rate limits, size caps, and that nothing but descriptors and secrets is ever stored (R-PAIR-9).
 import { describe, expect, it, vi } from 'vitest';
 import {
+  CLAIMED_TTL_S,
   CLAIM_LIMIT_PER_MIN,
   MAX_BODY_BYTES,
   MemoryStore,
@@ -143,6 +144,17 @@ describe('signaling helper', () => {
     expect(await client.poll(room, 1, 'camera')).toEqual({ answer: expect.objectContaining({ gen: 1 }) });
     expect(await client.poll(sb, 1, 'scoreboard', true)).toEqual({ seen: true });
     expect(await client.poll(sb, 1, 'scoreboard')).toBeNull(); // only when asked: older builds see nothing new
+  });
+
+  it('a claim may be asked again with the same claim id for a minute (its reply was lost), and only with it', async () => {
+    const { client, clock } = setup();
+    const room = await client.createRoom(SDP('o1'));
+    const first = await client.claimRoom(room.code, 'a1b2c3d4e5f60718');
+    expect(await client.claimRoom(room.code, 'a1b2c3d4e5f60718')).toEqual(first);
+    expect(await kind(client.claimRoom(room.code))).toBe('no-room'); // still one-shot for anyone else
+    expect(await kind(client.claimRoom(room.code, 'ffffffffffffffff'))).toBe('no-room');
+    clock.advance(CLAIMED_TTL_S * 1000 + 1);
+    expect(await kind(client.claimRoom(room.code, 'a1b2c3d4e5f60718'))).toBe('no-room');
   });
 
   it('every session call needs the secret', async () => {
