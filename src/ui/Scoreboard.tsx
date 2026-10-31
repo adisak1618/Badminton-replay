@@ -371,164 +371,164 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
       </header>
 
       <VideoSplit pane={video?.pane}>
-      <div className={`pad-safe-bottom relative flex min-h-0 flex-1 ${video ? 'min-w-0' : ''}`}>
-        {(['left', 'right'] as const).map((zone) => (
-          <TeamZone
-            key={`${zone}-${teamOf(zone)}`}
-            zone={zone}
-            team={teamOf(zone)}
-            config={config}
-            s={s}
-            flashKey={flash?.zone === zone ? flash.key : null}
-            handlers={zoneHandlers(zone)}
-            compact={!!video}
-          />
-        ))}
-        <div className="pointer-events-none absolute top-0 bottom-0 left-1/2 w-px bg-line" />
+        <div className={`pad-safe-bottom relative flex min-h-0 flex-1 ${video ? 'min-w-0' : ''}`}>
+          {(['left', 'right'] as const).map((zone) => (
+            <TeamZone
+              key={`${zone}-${teamOf(zone)}`}
+              zone={zone}
+              team={teamOf(zone)}
+              config={config}
+              s={s}
+              flashKey={flash?.zone === zone ? flash.key : null}
+              handlers={zoneHandlers(zone)}
+              compact={!!video}
+            />
+          ))}
+          <div className="pointer-events-none absolute top-0 bottom-0 left-1/2 w-px bg-line" />
 
-        {s.phase === 'playing' && !resumed && (
-          // Floating Undo on the centre line. The 96 px disc around the 64 px button is a dead zone: touches on
-          // or right around it belong to Undo and never reach a tap zone. Swipe-down stays the shortcut (D6).
-          <div className="absolute top-1/2 left-1/2 z-10 flex size-24 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full">
-            <button
-              className="flex size-16 flex-col items-center justify-center rounded-full border border-line bg-btn text-fg shadow-[0_2px_12px_rgb(0_0_0/0.6)] active:brightness-125 disabled:opacity-40"
-              aria-label={redoVisible ? 'Redo' : 'Undo'}
-              onClick={redoVisible ? redo : undo}
-              disabled={!redoVisible && !store.canUndo()}
-            >
-              <span className="text-2xl leading-none">{redoVisible ? '↷' : '↶'}</span>
-              <span className="text-[11px] font-semibold">{redoVisible ? 'Redo' : 'Undo'}</span>
-            </button>
-          </div>
-        )}
-        {s.phase === 'interval' && (
-          <IntervalOverlay
-            config={config}
-            s={s}
-            now={now}
-            onDismiss={dismissInterval}
-            onUndo={undo}
-            tagPoints={reasons ? { untagged: untaggedCount, onOpen: () => setListOpen(true) } : null}
-          />
-        )}
-        {s.phase === 'gameOver' && (
-          <GameOverOverlay
-            config={config}
-            s={s}
-            now={now}
-            onUndo={undo}
-            onStart={(serverIdx, receiverIdx) => {
-              wake();
-              emit({ type: 'game.start', game: s.game + 1, serverIdx, receiverIdx });
-            }}
-            card={stats && <StatsCard config={config} stats={stats} game={s.game} onList={() => setListOpen(true)} summary={summary} />}
-          />
-        )}
-        {s.phase === 'matchOver' && (
-          <MatchOverOverlay
-            config={config}
-            s={s}
-            start={matchStart}
-            end={events[events.length - 1].at}
-            onUndo={undo}
-            onNewMatch={onNewMatch}
-            onStopRec={
-              camera.b.rec?.state === 'recording' && camera.l.state === 'paired' ? () => camera.board.command('rec.stop') : null
-            }
-            card={stats && <StatsCard config={config} stats={stats} game={0} onList={() => setListOpen(true)} summary={summary} />}
-          />
-        )}
-        {resumed && (
-          <button className="absolute inset-0 z-30 bg-bg/20" onClick={continueResumed} aria-label="Continue the match" />
-        )}
-        {(duplicate || offered || replayOffered) && (
-          // Above the game-over and match-over cards (z-20): the point that ends a game is often the one to replay.
-          <div className="pointer-events-none absolute top-3 left-1/2 z-[31] flex w-max max-w-[95%] -translate-x-1/2 flex-wrap items-center justify-center gap-2">
-            {duplicate && (
-              <div className="rounded-full bg-pan2 px-4 py-2 font-semibold text-amber shadow-[0_2px_12px_rgb(0_0_0/0.6)]" role="status" data-testid="duplicate-cue">
-                Already counted on the other scoreboard
-              </div>
-            )}
-            {offered && (
+          {s.phase === 'playing' && !resumed && (
+            // Floating Undo on the centre line. The 96 px disc around the 64 px button is a dead zone: touches on
+            // or right around it belong to Undo and never reach a tap zone. Swipe-down stays the shortcut (D6).
+            <div className="absolute top-1/2 left-1/2 z-10 flex size-24 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full">
               <button
-                className="btn pointer-events-auto rounded-full border border-amber/60 bg-pan2 px-4 font-semibold text-amber shadow-[0_2px_12px_rgb(0_0_0/0.6)]"
-                onClick={() => {
-                  setOffer(null);
-                  setTagging({ id: offered.id, live: true });
-                }}
-                data-testid="tag-offer"
+                className="flex size-16 flex-col items-center justify-center rounded-full border border-line bg-btn text-fg shadow-[0_2px_12px_rgb(0_0_0/0.6)] active:brightness-125 disabled:opacity-40"
+                aria-label={redoVisible ? 'Redo' : 'Undo'}
+                onClick={redoVisible ? redo : undo}
+                disabled={!redoVisible && !store.canUndo()}
               >
-                🏷 Tap to tag point {offered.n}
+                <span className="text-2xl leading-none">{redoVisible ? '↷' : '↶'}</span>
+                <span className="text-[11px] font-semibold">{redoVisible ? 'Redo' : 'Undo'}</span>
               </button>
-            )}
-            {replayOffered && (
-              <span className="pointer-events-auto">
-                <ReplayPill on={!!replayOffered.replay} onToggle={() => toggleReplay(replayOffered)} label={`point ${replayOffered.n}`} testid="replay-pill" />
-              </span>
-            )}
-          </div>
-        )}
-        {listOpen && (
-          <RallyList
-            config={config}
-            rallies={all}
-            leftTeam={L}
-            reasons={reasons}
-            onReplay={toggleReplay}
-            onOpen={(r, hit) => setTagging({ id: r.id, live: false, hit })}
-            onStep={() => {
-              const n = nextUntagged(0);
-              if (n) setTagging({ id: n.id, live: false, step: true });
-            }}
-            onClose={() => setListOpen(false)}
-          />
-        )}
-        {tagging && tagRally && (
-          <TagSheet
-            key={tagging.id}
-            config={config}
-            rally={tagRally}
-            leftTeam={L}
-            live={tagging.live}
-            closeAfterMs={prefs.tagCloseS * 1000}
-            initialHit={tagging.hit}
-            onTag={(t) => store.emit(t)}
-            replay={tagging.live ? { on: !!tagRally.replay, onToggle: () => toggleReplay(tagRally) } : undefined}
-            onClear={() => {
-              store.emit({ type: 'tag.clear', point: tagRally.id });
-              setTagging(null);
-            }}
-            onClose={closeTag}
-            onUndo={
-              tagging.live
-                ? () => {
-                    setTagging(null);
-                    undo();
-                  }
-                : undefined
-            }
-            next={
-              tagging.step
-                ? (() => {
-                    const n = nextUntagged(tagRally.n);
-                    return n ? () => setTagging({ id: n.id, live: false, step: true }) : null;
-                  })()
-                : null
-            }
-          />
-        )}
-        {wakeLine && (
-          <div className="pointer-events-none absolute bottom-1 left-1/2 z-20 w-max max-w-[90%] -translate-x-1/2 text-center text-xs text-amber" data-testid="wake-hint">
-            {wakeLine}
-          </div>
-        )}
-        {video && !video.ready && (
-          // D17: nothing counts until the file is open again (the player says how).
-          <div className="absolute inset-0 z-[29] flex items-center justify-center bg-bg/70 p-4 text-center text-lg font-semibold text-mut" data-testid="video-closed">
-            Open the video first
-          </div>
-        )}
-      </div>
+            </div>
+          )}
+          {s.phase === 'interval' && (
+            <IntervalOverlay
+              config={config}
+              s={s}
+              now={t}
+              onDismiss={dismissInterval}
+              onUndo={undo}
+              tagPoints={reasons ? { untagged: untaggedCount, onOpen: () => setListOpen(true) } : null}
+            />
+          )}
+          {s.phase === 'gameOver' && (
+            <GameOverOverlay
+              config={config}
+              s={s}
+              now={t}
+              onUndo={undo}
+              onStart={(serverIdx, receiverIdx) => {
+                wake();
+                emit({ type: 'game.start', game: s.game + 1, serverIdx, receiverIdx });
+              }}
+              card={stats && <StatsCard config={config} stats={stats} game={s.game} onList={() => setListOpen(true)} summary={summary} />}
+            />
+          )}
+          {s.phase === 'matchOver' && (
+            <MatchOverOverlay
+              config={config}
+              s={s}
+              start={matchStart}
+              end={events[events.length - 1].at}
+              onUndo={undo}
+              onNewMatch={onNewMatch}
+              onStopRec={
+                camera.b.rec?.state === 'recording' && camera.l.state === 'paired' ? () => camera.board.command('rec.stop') : null
+              }
+              card={stats && <StatsCard config={config} stats={stats} game={0} onList={() => setListOpen(true)} summary={summary} />}
+            />
+          )}
+          {resumed && (
+            <button className="absolute inset-0 z-30 bg-bg/20" onClick={continueResumed} aria-label="Continue the match" />
+          )}
+          {(duplicate || offered || replayOffered) && (
+            // Above the game-over and match-over cards (z-20): the point that ends a game is often the one to replay.
+            <div className="pointer-events-none absolute top-3 left-1/2 z-[31] flex w-max max-w-[95%] -translate-x-1/2 flex-wrap items-center justify-center gap-2">
+              {duplicate && (
+                <div className="rounded-full bg-pan2 px-4 py-2 font-semibold text-amber shadow-[0_2px_12px_rgb(0_0_0/0.6)]" role="status" data-testid="duplicate-cue">
+                  Already counted on the other scoreboard
+                </div>
+              )}
+              {offered && (
+                <button
+                  className="btn pointer-events-auto rounded-full border border-amber/60 bg-pan2 px-4 font-semibold text-amber shadow-[0_2px_12px_rgb(0_0_0/0.6)]"
+                  onClick={() => {
+                    setOffer(null);
+                    setTagging({ id: offered.id, live: true });
+                  }}
+                  data-testid="tag-offer"
+                >
+                  🏷 Tap to tag point {offered.n}
+                </button>
+              )}
+              {replayOffered && (
+                <span className="pointer-events-auto">
+                  <ReplayPill on={!!replayOffered.replay} onToggle={() => toggleReplay(replayOffered)} label={`point ${replayOffered.n}`} testid="replay-pill" />
+                </span>
+              )}
+            </div>
+          )}
+          {listOpen && (
+            <RallyList
+              config={config}
+              rallies={all}
+              leftTeam={L}
+              reasons={reasons}
+              onReplay={toggleReplay}
+              onOpen={(r, hit) => setTagging({ id: r.id, live: false, hit })}
+              onStep={() => {
+                const n = nextUntagged(0);
+                if (n) setTagging({ id: n.id, live: false, step: true });
+              }}
+              onClose={() => setListOpen(false)}
+            />
+          )}
+          {tagging && tagRally && (
+            <TagSheet
+              key={tagging.id}
+              config={config}
+              rally={tagRally}
+              leftTeam={L}
+              live={tagging.live}
+              closeAfterMs={prefs.tagCloseS * 1000}
+              initialHit={tagging.hit}
+              onTag={(t) => store.emit(t)}
+              replay={tagging.live ? { on: !!tagRally.replay, onToggle: () => toggleReplay(tagRally) } : undefined}
+              onClear={() => {
+                store.emit({ type: 'tag.clear', point: tagRally.id });
+                setTagging(null);
+              }}
+              onClose={closeTag}
+              onUndo={
+                tagging.live
+                  ? () => {
+                      setTagging(null);
+                      undo();
+                    }
+                  : undefined
+              }
+              next={
+                tagging.step
+                  ? (() => {
+                      const n = nextUntagged(tagRally.n);
+                      return n ? () => setTagging({ id: n.id, live: false, step: true }) : null;
+                    })()
+                  : null
+              }
+            />
+          )}
+          {wakeLine && (
+            <div className="pointer-events-none absolute bottom-1 left-1/2 z-20 w-max max-w-[90%] -translate-x-1/2 text-center text-xs text-amber" data-testid="wake-hint">
+              {wakeLine}
+            </div>
+          )}
+          {video && !video.ready && (
+            // D17: nothing counts until the file is open again (the player says how).
+            <div className="absolute inset-0 z-[29] flex items-center justify-center bg-bg/70 p-4 text-center text-lg font-semibold text-mut" data-testid="video-closed">
+              Open the video first
+            </div>
+          )}
+        </div>
       </VideoSplit>
 
       {sheet === 'menu' && (

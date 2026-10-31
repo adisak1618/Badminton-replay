@@ -63,7 +63,12 @@ export function App() {
       .then((m) => {
         if (!live) return;
         const unfinished = !!m && reduce(m.config, m.events).phase !== 'matchOver';
-        if (camera) {
+        if (unfinished && m.video) {
+          // A saved video being scored (D17) comes back whatever role this phone had before; its file is picked again.
+          store.load(m);
+          setResumed(true);
+          setScreen('board');
+        } else if (camera) {
           if (unfinished) store.load(m); // the camera's "Demo score" carries on with this phone's own match
           setScreen('camera');
         } else if (unfinished) {

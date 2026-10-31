@@ -75,7 +75,12 @@ export function RoleScreen({
       </div>
       <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm text-mut">
         <span>Last time: {lastRole === 'camera' ? 'Camera' : lastRole === 'scoreboard' ? 'Scoreboard' : '-'}</span>
-        {support.message && <span className="text-amber">{support.message}</span>}
+        {support.message && (
+          <span className="text-amber">
+            {support.message}
+            {onVideo && !support.ios && ' Scoring a saved video (VIDEO) works in this browser too.'}
+          </span>
+        )}
         {support.ios && !support.standalone && (
           <span>Tip: Share, then "Add to Home Screen" so it runs offline and keeps the screen on.</span>
         )}
