@@ -3,7 +3,7 @@
 // as it is wanted, and again on every visibility change and every tap (the lock is released whenever the page
 // is hidden, and WebKit may refuse it without a user gesture or in Low Power Mode). Its status is shown, so
 // the user knows when the screen may lock after all.
-export type WakeReason = 'match' | 'paired' | 'pairing' | 'recording';
+export type WakeReason = 'match' | 'paired' | 'pairing' | 'recording' | 'render';
 /** held; refused (the request failed: Low Power Mode, no gesture yet); unavailable (no API: iOS before 16.4, or 18.4 in a Home Screen app); off (not wanted). */
 export type WakeStatus = 'held' | 'refused' | 'unavailable' | 'off';
 

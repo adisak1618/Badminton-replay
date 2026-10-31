@@ -14,10 +14,12 @@
     "icons": "pwa-assets-generator",
     "serve:local": "node server/local.ts",
     "e2e": "node e2e/pairing.ts",
-    "frames": "node e2e/frames.ts"
+    "frames": "node e2e/frames.ts",
+    "render-proof": "node e2e/render.ts"
   },
   "dependencies": {
     "@upstash/redis": "^1.40.0",
+    "mediabunny": "1.64.0",
     "qrcode": "^1.5.4",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
