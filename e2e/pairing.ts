@@ -30,7 +30,8 @@
 // scoreboard whose relay credentials fail, both phones saying why within
 // about 20 s and offering nothing more. Every ICE restart description must carry candidates. Exits non-zero on
 // the first failure. First of all, on its own page: scoring a saved video (D17: the file picked on the role screen,
-// a key tap's place on the file in match.json, a reload asking for the file and coming back to the same place, a
+// a key tap's place on the file in match.json, the board showing the score at an earlier moment when the video is
+// sought back and refusing to score there, a reload asking for the file and coming back to the same place, a
 // different file pointed out).
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -389,7 +390,7 @@ async function main() {
   const netPages: Page[] = [];
   const codePages: Page[] = [];
   try {
-    await step('scoring a saved video: a key tap at 4.5 s is at 4 500 ms in match.json; a reload asks for the file and comes back there (D17)', async () => {
+    await step('scoring a saved video: a key tap at 4.5 s is at 4 500 ms in match.json; sought back, the board shows that moment\'s score and does not score; a reload asks for the file and comes back there (D17)', async () => {
       const clip = path.join(OUT, 'video-score.mp4');
       execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30', '-t', '12', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', clip]);
       const other = path.join(OUT, 'video-other.mp4');
@@ -411,12 +412,21 @@ async function main() {
       await v.keyboard.press('a');
       await until('the popup', async () => (await v.locator('[data-testid=tag-later]').count()) > 0, 3000);
       await v.locator('[data-testid=tag-later]').click();
+      // R-VID-8: sought back before the point, the board shows the score there and refuses to score; Latest ▸ comes back.
+      await seekTo(2);
+      await until('the past score', async () => (await text(v, '[data-testid=score-A]')) === '0' && (await v.locator('[data-testid=video-past]').count()) > 0, 3000);
+      await v.keyboard.press('a');
+      await v.waitForTimeout(500);
+      if ((await text(v, '[data-testid=score-A]')) !== '0' || (await v.locator('[data-testid=tag-later]').count())) throw new Error('a key scored from a past moment');
+      await v.locator('[data-testid=video-latest]').click();
+      await until('the latest score', async () => (await text(v, '[data-testid=score-A]')) === '1' && (await v.locator('[data-testid=video-past]').count()) === 0, 3000);
       await v.evaluate(() => Object.defineProperty(navigator, 'canShare', { value: undefined, configurable: true }));
       await button(v, 'Menu').click();
       const [download] = await Promise.all([v.waitForEvent('download'), v.locator('[data-testid=menu-export]').click()]);
       const b = JSON.parse(fs.readFileSync(await download.path(), 'utf8'));
       const point = b.events.find((e: { type: string }) => e.type === 'point');
       const seg = b.recording?.segments?.[0];
+      if (b.events.filter((e: { type: string }) => e.type === 'point').length !== 1) throw new Error('the refused key left a point in the log');
       if (b.version !== 1 || b.recording?.source !== 'imported' || point?.tRec?.ms !== 4500 || point?.tRec?.segment !== 1)
         throw new Error(`match.json: ${JSON.stringify({ version: b.version, recording: b.recording, point })}`);
       if (seg.file !== 'video-score.mp4' || seg.width !== 640 || seg.height !== 360 || Math.abs(seg.endedAt - seg.firstFrameAt - 12_000) > 100 || b.devices.camera)

@@ -329,6 +329,16 @@ Portrait (iPhone upright): the player full width on top, the board below.
   point, E swap ends, ? the list. Score keys do nothing while a popup, list or
   sheet is open; player keys always work.
 
+- Seeking back (R-VID-8): when the video stands before the latest change of
+  the score, the zones and the top bar show the match at that moment (score,
+  serve, courts, game) with an amber frame round the board and a banner at its
+  top: "Score at 12:03 on the video · Latest ▸". The interval, game-over and
+  match-over overlays of the latest state are hidden meanwhile. A tap or a
+  score key there is refused and the banner reads "Go back to the latest to
+  change the score"; "Latest ▸" seeks to just after the latest change, and
+  playing on past it gets there too. Undo, the popup, the rally list and replay
+  marks work as usual.
+
 ### S3v-r Open the video again (D17)
 
 After a reload or a crash the board comes back with the player saying "Open

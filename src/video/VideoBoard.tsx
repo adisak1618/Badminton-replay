@@ -2,7 +2,8 @@
 // a seek bar with a tick per point, play/pause, ±5 s and ±1 s, speed and sound. The match's log runs on the video's
 // clock (video/source.ts), so every tap lands where the video stood. The player pauses while the why-was-this-point-won
 // popup is open (setting). After a reload the file has to be picked again (iOS keeps no handle to it); a different
-// name or size is pointed out before it is used.
+// name or size is pointed out before it is used. Sought back before the latest change of the score, the board shows
+// the match as it stood at that moment (video/timeline.ts, R-VID-8).
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { rallies, type MatchConfig, type MatchEvent, type MatchState } from '../engine';
 import type { Prefs } from '../match/prefs';
@@ -11,6 +12,7 @@ import { Scoreboard, type VideoMode } from '../ui/Scoreboard';
 import { elapsed } from '../ui/format';
 import { SEEK_S, SHORTCUTS, SPEED_OF, SPEEDS, type Speed, type VideoAction } from './keys';
 import { TAP_OFFSET, fileMs, fpsFromSteps, sameFile, videoClock, type VideoSource } from './source';
+import { Timeline } from './timeline';
 
 /** While playing, the position is saved this often (and on every pause and seek). */
 const SAVE_EVERY_MS = 3000;
@@ -367,7 +369,15 @@ export function VideoBoard({ store, config, events, state, video: v, file, onFil
     </>
   );
 
-  const mode: VideoMode = { pane, clock, ready, onPopup, onKey, menuRows };
+  // R-VID-8: the match at the video's position. The clock is read live (not the last timeupdate), so a point just
+  // tapped is never taken for a later one; a position is a binary search in the memoized timeline.
+  const timeline = useMemo(() => new Timeline(config, events), [config, events]);
+  const moment = ready ? timeline.at(clock()) : null;
+  const past = moment?.past ? { state: moment.state, label: elapsed(pos * 1000) } : null;
+  // Just past the latest change (+1 ms against a seek that lands a hair early): its own tap counts again.
+  const onLatest = () => seekTo((fileMs(t0, timeline.latestAt) + v.tapOffsetMs + 1) / 1000);
+
+  const mode: VideoMode = { pane, clock, ready, onPopup, onKey, menuRows, past, onLatest };
   return (
     <Scoreboard
       store={store}

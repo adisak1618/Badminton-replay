@@ -294,6 +294,18 @@ fixed 2.
   durations are measured in video time, which is what they mean there). A
   picked file cannot be kept (iOS gives no handle), so after a reload the file
   is picked again and checked by name and size.
+- **The board at the video's position (R-VID-8).** `video/timeline.ts` works
+  out, once per log, the state after the match start and after each live
+  (not voided) score-changing event (`UNDOABLE`), in log order; the state at
+  the video's clock is a binary search over those times (a log whose times go
+  back, scored before this rule, falls back to replaying the events up to that
+  time). Undos come from the whole log, as in the overlay's `stateAt`. The
+  board is "past" when the clock is before the latest of those events; then
+  every score-changing event is refused in the UI (`Scoreboard`'s `emit`), so a
+  match scored with this build keeps its score events in order on the file.
+  Tags, replay marks, undo and redo may still be made; their `at` is the
+  video's time, which only matters for marks shown in a video, and those name
+  their point.
 
 ## 4. Pairing, signaling and reconnect
 

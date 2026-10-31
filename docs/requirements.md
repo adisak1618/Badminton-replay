@@ -571,6 +571,21 @@ camera); everything else about scoring is the live match's.
   `tRec` and every replay's `rec` on the file. The video is never copied.
   *Accept:* every `tRec` matches the video time at the tap; a live match
   exports exactly as before.
+- **R-VID-8 The score at the video's moment.** Captain, 2026-10-31, on PR
+  15: "ช่วยทำให้เวลากรอ video กลับไปกลับมา scoreboard
+  แสดงคะแนนในตอนช่วงเวลาที่ video เล่นอยู่ด้วยสิ". When the video stands before the
+  latest change of the score (sought, scrubbed or played back), the board shows
+  the match as it stood there: the events up to that time on the file, undos
+  taken from the whole log (an undone point never shows), the same rule as the
+  overlay's. A banner says "Score at m:ss on the video" with "Latest ▸", which
+  seeks to just after the latest change. From a past moment the score cannot
+  change: a tap, A / B, E, a long press, Correct score, Swap ends and End match
+  are refused with "Go back to the latest to change the score", so every score
+  event stays in order on the file; undo and redo still take back the latest
+  scoring action, and tags and replay marks still work (they name their point,
+  so their time does not matter). *Accept:* with points at 0:10 and 0:20,
+  seeking to 0:15 shows 1–0 and the banner, a tap there scores nothing, playing
+  past 0:20 shows the latest score again, and "Latest ▸" does the same at once.
 - **R-VID-7 Later.** Pairing in this mode, the camera, rendering replays from
   the file, continuing from an existing `match.json`, Thai labels, trimming or
   re-encoding the video, keyboard picks inside the popup.

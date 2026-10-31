@@ -70,7 +70,19 @@ export interface VideoMode {
   onKey: (a: VideoAction) => void;
   /** The menu's rows for the video (they replace the camera rows). */
   menuRows: (row: string, close: () => void) => ReactNode;
+  /**
+   * R-VID-8: the video stands before the latest change of the score, so the board shows the match as it was there
+   * (`label`: the video time); null at or after the latest. The score cannot change from a past moment.
+   */
+  past: { state: MatchState; label: string } | null;
+  /** Seek the video to the latest change of the score. */
+  onLatest: () => void;
 }
+
+/** Events that mark a point and never change the score: they may be made while the board shows a past moment. */
+const MARKS: ReadonlySet<string> = new Set(['tag', 'tag.clear', 'replay', 'replay.clear', 'summary.close']);
+/** How long "back to the latest to score" stays after a refused tap. */
+const PAST_HINT_MS = 2500;
 
 interface Props {
   store: MatchStore;
@@ -161,11 +173,22 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
   const L = s.leftTeam;
   const R = other(L);
   const teamOf = (z: Zone): Team => (z === 'left' ? L : R);
+  // D17, R-VID-8: what the zones and the top bar show: the match at the video's position when that is in the past.
+  const past = video?.past ?? null;
+  const view = past?.state ?? s;
+  const viewTeam = (z: Zone): Team => (z === 'left' ? view.leftTeam : other(view.leftTeam));
+  const [pastHint, setPastHint] = useState(0);
+  const refusePast = () => setPastHint(Date.now());
   const matchStart = events[0]?.at ?? t;
   const live = s.phase === 'playing' || s.phase === 'interval';
   const redoVisible = undoAt > 0 && now - undoAt < REDO_WINDOW_MS && store.canRedo();
 
   const emit = (body: EventBody): Change | null => {
+    // The score never changes from a past moment of the video: the event would land before the latest on its clock.
+    if (past && !MARKS.has(body.type)) {
+      refusePast();
+      return null;
+    }
     const c = store.emit(body);
     announce(c, prefs);
     return c;
@@ -228,7 +251,7 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
       id,
       setTimeout(() => {
         timers.current.delete(id);
-        if (recognizer.current.longPress(id, performance.now())) setSheet('correct');
+        if (recognizer.current.longPress(id, performance.now())) openCorrect();
       }, GESTURE.longPressMs),
     );
   };
@@ -240,7 +263,13 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
     if (g.kind === 'swipeDown') return undo();
     if (g.kind === 'point' && s.phase === 'playing') score(g.zone);
   };
+  const openCorrect = () => {
+    if (!past) return setSheet('correct');
+    setSheet('none');
+    refusePast();
+  };
   const score = (zone: Zone) => {
+    if (past) return refusePast();
     setFlash({ zone, key: Date.now() });
     setUndoAt(0);
     const c = emit({ type: 'point', team: teamOf(zone) });
@@ -325,7 +354,8 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
   };
 
   const duplicate = camera.b.duplicateAt != null && now - camera.b.duplicateAt < DUPLICATE_CUE_MS;
-  const gameInfo = `Game ${s.game} · ${config.teams.A.name} ${s.games.A}–${s.games.B} ${config.teams.B.name} · ${FORMAT_LABEL[config.format]}`;
+  const gameInfo = `Game ${view.game} · ${config.teams.A.name} ${view.games.A}–${view.games.B} ${config.teams.B.name} · ${FORMAT_LABEL[config.format]}`;
+  const pastHinted = past && now - pastHint < PAST_HINT_MS;
   const speechWarning = prefs.voice && (!speechAvailable() || !hasVoice(prefs.lang));
 
   return (
@@ -371,14 +401,14 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
       </header>
 
       <VideoSplit pane={video?.pane}>
-        <div className={`pad-safe-bottom relative flex min-h-0 flex-1 ${video ? 'min-w-0' : ''}`}>
+        <div className={`pad-safe-bottom relative flex min-h-0 flex-1 ${video ? 'min-w-0' : ''} ${past ? 'outline-2 -outline-offset-2 outline-amber/60' : ''}`} data-past={past ? '' : undefined}>
           {(['left', 'right'] as const).map((zone) => (
             <TeamZone
-              key={`${zone}-${teamOf(zone)}`}
+              key={`${zone}-${viewTeam(zone)}`}
               zone={zone}
-              team={teamOf(zone)}
+              team={viewTeam(zone)}
               config={config}
-              s={s}
+              s={view}
               flashKey={flash?.zone === zone ? flash.key : null}
               handlers={zoneHandlers(zone)}
               compact={!!video}
@@ -401,7 +431,7 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
               </button>
             </div>
           )}
-          {s.phase === 'interval' && (
+          {!past && s.phase === 'interval' && (
             <IntervalOverlay
               config={config}
               s={s}
@@ -411,7 +441,7 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
               tagPoints={reasons ? { untagged: untaggedCount, onOpen: () => setListOpen(true) } : null}
             />
           )}
-          {s.phase === 'gameOver' && (
+          {!past && s.phase === 'gameOver' && (
             <GameOverOverlay
               config={config}
               s={s}
@@ -424,7 +454,7 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
               card={stats && <StatsCard config={config} stats={stats} game={s.game} onList={() => setListOpen(true)} summary={summary} />}
             />
           )}
-          {s.phase === 'matchOver' && (
+          {!past && s.phase === 'matchOver' && (
             <MatchOverOverlay
               config={config}
               s={s}
@@ -441,9 +471,22 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
           {resumed && (
             <button className="absolute inset-0 z-30 bg-bg/20" onClick={continueResumed} aria-label="Continue the match" />
           )}
-          {(duplicate || offered || replayOffered) && (
+          {(duplicate || offered || replayOffered || past) && (
             // Above the game-over and match-over cards (z-20): the point that ends a game is often the one to replay.
             <div className="pointer-events-none absolute top-3 left-1/2 z-[31] flex w-max max-w-[95%] -translate-x-1/2 flex-wrap items-center justify-center gap-2">
+              {past && video && (
+                // R-VID-8: the board is showing a past moment of the video; one tap goes back to the latest.
+                <div
+                  className={`pointer-events-auto flex items-center gap-2 rounded-full border bg-pan2 py-1 pr-1 pl-4 text-sm shadow-[0_2px_12px_rgb(0_0_0/0.6)] ${pastHinted ? 'border-amber text-amber' : 'border-amber/50 text-fg'}`}
+                  role="status"
+                  data-testid="video-past"
+                >
+                  <span>{pastHinted ? 'Go back to the latest to change the score' : `Score at ${past.label} on the video`}</span>
+                  <button className="btn btn-pri min-h-9 rounded-full px-3 text-sm" onClick={video.onLatest} data-testid="video-latest">
+                    Latest ▸
+                  </button>
+                </div>
+              )}
               {duplicate && (
                 <div className="rounded-full bg-pan2 px-4 py-2 font-semibold text-amber shadow-[0_2px_12px_rgb(0_0_0/0.6)]" role="status" data-testid="duplicate-cue">
                   Already counted on the other scoreboard
@@ -538,7 +581,7 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
           prefs={prefs}
           setPrefs={setPrefs}
           onClose={() => setSheet('none')}
-          onCorrect={() => setSheet('correct')}
+          onCorrect={openCorrect}
           onSwapEnds={() => {
             emit({ type: 'sides.swap' });
             setSheet('none');
