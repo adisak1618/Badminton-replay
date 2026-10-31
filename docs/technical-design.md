@@ -563,9 +563,10 @@ and ICE restart takes fresh ones once the cached ones are that old, through
 `setConfiguration` for a restart. A relayed link would be cut by the relay
 when its credentials expire, so the camera restarts ICE on an open relayed
 link 10 minutes before; the scoreboard's answer to it carries new credentials
-too. A failed fetch is retried after 30 s ("not configured" after 10
-minutes); until then the phone gathers with the credentials it still has, or
-with none.
+too. A failed fetch is retried after 10 s ("not configured" after 10
+minutes), and a new pairing, which gives up 18 s after its first answer, tries
+it once more at once; until then the phone gathers with the credentials it
+still has, or with none.
 
 Clock offset (R-PAIR-5): the camera phone maps scoreboard timestamps onto its
 own clock with NTP-style round trips from the regular pings:

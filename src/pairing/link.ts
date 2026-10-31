@@ -51,8 +51,12 @@ const TICK_MS = 250;
 export const SLOW_CONNECT_MS = 15_000;
 /** How often an open link reads which candidate pair carries it (it can change after an ICE restart). */
 const PATH_EVERY_MS = 10_000;
-/** After a failed credential fetch, and after "not configured", ask the helper again only this much later. */
-const ICE_RETRY_FAILED_MS = 30_000;
+/**
+ * After a failed credential fetch, and after "not configured", ask the helper again only this much later. A first
+ * pairing gives up PAIR_GIVE_UP_MS after its first answer, so the answer to the camera's second attempt (10 s
+ * after the first) must be able to ask again.
+ */
+const ICE_RETRY_FAILED_MS = 10_000;
 const ICE_RETRY_UNCONFIGURED_MS = 10 * 60_000;
 /** Renew the camera's code shortly before the helper forgets the room. */
 const ROOM_RENEW_BEFORE_MS = 20_000;
@@ -323,7 +327,7 @@ export class PeerLink {
       this.latestGen = 1;
       // The room needs a session before TURN credentials can be had; with them, a new offer carrying relay
       // candidates replaces the local-network one before the code is shown (the claim gets the latest offer).
-      if ((await this.iceServers()).length) {
+      if ((await this.iceServersForPairing()).length) {
         if (epoch !== this.epoch) return;
         const relayed = await this.makeOffer('fresh', 2);
         await this.helper.postOffer(this.session, { gen: 2, sdp: relayed, fresh: true, by: 'camera', ...this.meta() });
@@ -659,6 +663,18 @@ export class PeerLink {
     return servers;
   }
 
+  /**
+   * A new pairing's credentials: a fetch the helper refused is tried once more at once (the pairing gives up 18 s
+   * after its first answer). One that got no reply in time is not: that would hold the answer up another 4 s, and
+   * the 10 s retry still serves the answer to the camera's second attempt.
+   */
+  private async iceServersForPairing(): Promise<RTCIceServer[]> {
+    const servers = await this.iceServers();
+    if (servers.length || this.snap.relay.state !== 'failed' || this.snap.relay.detail?.startsWith('offline')) return servers;
+    this.iceRetryAt = 0;
+    return this.iceServers();
+  }
+
   /** An ICE restart gathers with the connection's configuration: give it new credentials first. */
   private configure(pc: RTCPeerConnection, servers: RTCIceServer[], strict: boolean): void {
     if (servers === this.pcServers || typeof pc.setConfiguration !== 'function') return;
@@ -715,7 +731,7 @@ export class PeerLink {
       this.pc.signalingState === 'stable' &&
       this.dc?.readyState === 'open';
     if (!first && !this.open) this.holdCapture(await this.ensureCapture('reconnect'));
-    const servers = await this.iceServers();
+    const servers = first ? await this.iceServersForPairing() : await this.iceServers();
     const pc = reuse ? this.pc! : this.newPc(servers, false);
     if (reuse) this.configure(pc, servers, false);
     await pc.setRemoteDescription({ type: 'offer', sdp: offer.sdp });

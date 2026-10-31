@@ -143,6 +143,26 @@ describe('a first pairing that cannot open says why and stops', () => {
     expect(pairErrorText(err, 'camera')).toContain('the scoreboard phone cannot use the internet relay; it probably runs an older version of the app.');
   });
 
+  it('a credential fetch that fails once is tried again at once: the answer carries the relay', async () => {
+    vi.useFakeTimers({ now: 1_800_000_000_000 });
+    let fail = 1;
+    const store = new MemoryStore(() => Date.now());
+    const handler = createHandler(() => store, { now: () => Date.now(), turn: () => TURN, fetch: turnApi });
+    const answers: Array<Record<string, unknown>> = [];
+    const sbHelper = new HelperClient('/api/signal', async (url, init) => {
+      if (/\/ice$/.test(url) && fail-- > 0) return new Response(JSON.stringify({ error: 'store' }), { status: 503 });
+      if (/\/answer$/.test(url) && typeof init?.body === 'string') answers.push(JSON.parse(init.body));
+      return handler(new Request(`https://app.test${url}`, init));
+    });
+    const camHelper = new HelperClient('/api/signal', async (url, init) => handler(new Request(`https://app.test${url}`, init)));
+    const cam = link('camera', camHelper, RELAY_OFFER);
+    await cam.pair();
+    const sb = link('scoreboard', sbHelper, RELAY_ANSWER);
+    await sb.join(cam.getSnapshot().room!.code);
+    expect(answers[0]).toMatchObject({ relay: 'ready' });
+    expect(sb.getSnapshot().relay.state).toBe('ready');
+  });
+
   it('a pairing that opens later than the first attempt still opens: nothing gives up before PAIR_GIVE_UP_MS', async () => {
     vi.useFakeTimers({ now: 1_800_000_000_000 });
     const { client } = setup();
