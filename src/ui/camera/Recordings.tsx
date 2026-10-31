@@ -12,6 +12,7 @@ import { WriterClient } from '../../recording/writerClient';
 import { elapsed } from '../format';
 import { bytes, when } from './format';
 import { RenderSheet } from './RenderSheet';
+import { Studio } from './Studio';
 import { thisDevice } from './live';
 
 interface Row {
@@ -98,6 +99,7 @@ export function Recordings({ onBack }: { onBack: () => void }) {
   const [note, setNote] = useState<string | null>(null);
   const [shareFailed, setShareFailed] = useState(false);
   const [rendering, setRendering] = useState<Row | null>(null);
+  const [studio, setStudio] = useState<Row | null>(null);
 
   const load = useCallback(async () => {
     const [list, st] = await Promise.all([listRecordings(thisDevice()).catch(() => []), storageFigures()]);
@@ -133,6 +135,18 @@ export function Recordings({ onBack }: { onBack: () => void }) {
     const after = await load();
     setNote(`Deleted ${row.title}. Storage used ${bytes(before?.usage)} → ${bytes(after.usage)}.`);
   };
+
+  if (studio)
+    return (
+      <Studio
+        rec={studio.rec}
+        title={studio.title}
+        onClose={() => {
+          setStudio(null);
+          void load();
+        }}
+      />
+    );
 
   return (
     <main className="pad-safe-x flex h-full flex-col gap-2 overflow-y-auto py-2">
@@ -182,6 +196,12 @@ export function Recordings({ onBack }: { onBack: () => void }) {
                     // The clip alone, in case the sheet offers "Save Video" only for media (assumption A5).
                     <button className="btn" onClick={() => share(row, row.videos)}>
                       Clip only
+                    </button>
+                  )}
+                  {row.bundle.config && row.rec.log && (
+                    // D16: watch the match, give any point a replay and adjust it, tag while watching (Studio).
+                    <button className="btn" onClick={() => setStudio(row)} data-testid="studio-open">
+                      Studio
                     </button>
                   )}
                   {row.bundle.config && (
