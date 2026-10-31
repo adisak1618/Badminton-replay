@@ -9,7 +9,7 @@ import { codeFromText, grabFrame, qrReader } from '../pairing/qr';
 import { useCameraLink } from './CameraLink';
 import { DiagChip } from './DiagSheet';
 import { useNow } from './useNow';
-import { SLOW_CONNECT_MS, SLOW_CONNECT_TEXT, mismatchText, pairErrorText } from './pairText';
+import { CAMERA_SILENT_TEXT, SLOW_CONNECT_MS, SLOW_CONNECT_TEXT, mismatchText, pairErrorText } from './pairText';
 import { UpdateBanner } from './RoleScreen';
 
 type Cam = 'starting' | 'live' | 'denied' | 'off';
@@ -121,13 +121,15 @@ export function PairScreen({ initialCode, onUpdate, onClose }: { initialCode: st
         ? null
         : l.busy
           ? 'Connecting…'
-          : l.state === 'connecting' && joinedAt != null
-            ? slow
-              ? SLOW_CONNECT_TEXT
-              : 'Connecting to the camera phone…'
-            : l.state === 'reconnecting' || l.state === 'lost' || l.state === 'offline'
-              ? 'Paired before: reconnecting to the camera phone by itself.'
-              : null;
+          : l.peerSilent
+            ? CAMERA_SILENT_TEXT
+            : l.state === 'connecting' && joinedAt != null
+              ? slow
+                ? SLOW_CONNECT_TEXT
+                : 'Connecting to the camera phone…'
+              : l.state === 'reconnecting' || l.state === 'lost' || l.state === 'offline'
+                ? 'Paired before: reconnecting to the camera phone by itself.'
+                : null;
 
   return (
     <div className="fixed inset-0 z-[60] flex flex-col bg-bg" role="dialog" aria-label="Pair with the camera">

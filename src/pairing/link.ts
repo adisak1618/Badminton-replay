@@ -10,7 +10,7 @@ import { PROTOCOL_VERSION, encode, parse, type Msg, type Role } from '../protoco
 import type { ClockEstimate, LinkState } from '../link/source';
 import type { DiagKind } from './diag';
 import { HelperError, type Desc, type HelperClient, type HelperErrorKind, type PollReply, type Session } from './helper';
-import { PAIR_GIVE_UP_MS, relayTag, unreachable, type Unreachable } from './unreachable';
+import { PAIR_GIVE_UP_MS, PEER_SILENT_MS, relayTag, unreachable, type Unreachable } from './unreachable';
 import {
   GATHER_LAN_MS,
   GATHER_RELAY_MS,
@@ -44,7 +44,7 @@ import {
   type Down,
   type DownCause,
 } from './reconnect';
-import { loadPairing, savePairing, type SavedPairing } from './saved';
+import { loadPairing, loadShown, savePairing, saveShown, type SavedPairing } from './saved';
 
 const TICK_MS = 250;
 /** Not open this long after the answer: the pairing screens say why (pairText.ts) and the log records it. */
@@ -104,6 +104,8 @@ export interface LinkSnapshot {
   path: PathType;
   /** Since when the link has been down (the last pong when pongs stopped); null while open or unpaired. */
   downSince: number | null;
+  /** Scoreboard, first pairing: the camera has not fetched the answer PEER_SILENT_MS after it was posted. */
+  peerSilent: boolean;
 }
 
 export type HelloFields = { deviceId: string; app: string; ua?: string; matchId?: string; lastSeq?: number };
@@ -122,6 +124,8 @@ export interface PeerLinkDeps {
   ensureCapture?: (why: 'pair' | 'reconnect') => Promise<(() => void) | void>;
   /** Persisted pairing; defaults to localStorage. */
   saved?: { load(): SavedPairing | null; save(p: SavedPairing | null): void };
+  /** Camera: the session of the code on show, withdrawn at the next launch if the page died with it (saved.ts). */
+  shown?: { load(): Session | null; save(s: Session | null): void };
   /** The pairing diagnostics log (diag.ts). */
   log?: (kind: DiagKind, text: string) => void;
 }
@@ -139,6 +143,7 @@ const INITIAL: LinkSnapshot = {
   relay: RELAY_UNKNOWN,
   path: 'none',
   downSince: null,
+  peerSilent: false,
 };
 
 export function hasCandidates(sdp: string): boolean {
@@ -191,6 +196,7 @@ export class PeerLink {
   private readonly now: () => number;
   private readonly ensureCapture: NonNullable<PeerLinkDeps['ensureCapture']>;
   private readonly saved: NonNullable<PeerLinkDeps['saved']>;
+  private readonly shown: NonNullable<PeerLinkDeps['shown']>;
   private readonly log: NonNullable<PeerLinkDeps['log']>;
 
   private snap: LinkSnapshot = INITIAL;
@@ -203,8 +209,13 @@ export class PeerLink {
   private remoteSdp: string | null = null;
   /** The last description the other phone posted: what it said about its build, protocol and relay. */
   private peer: Desc | null = null;
-  /** A first pairing: when its first answer was posted (scoreboard) or applied (camera); it gives up PAIR_GIVE_UP_MS later. */
+  /** A first pairing: when its first answer was posted (scoreboard) or applied (camera); the camera gives up PAIR_GIVE_UP_MS later. */
   private firstAnswerAt: number | null = null;
+  /** Scoreboard, first pairing: when the camera was first seen running (it fetched the answer, or offered); it gives up PAIR_GIVE_UP_MS later. */
+  private peerSeenAt: number | null = null;
+  private lastPollAt = 0;
+  /** Camera: its code on show was withdrawn on pagehide; a page restored from the back-forward cache shows a new one. */
+  private withdrewCode = false;
   private gen = 0;
   /** The newest generation the helper said it holds (a 409): the next offer goes above it. */
   private latestGen = 0;
@@ -259,6 +270,7 @@ export class PeerLink {
     this.now = deps.now ?? Date.now;
     this.ensureCapture = deps.ensureCapture ?? (async () => {});
     this.saved = deps.saved ?? { load: () => loadPairing(deps.role), save: (p) => savePairing(deps.role, p) };
+    this.shown = deps.shown ?? { load: () => loadShown(deps.role), save: (s) => saveShown(deps.role, s) };
     this.log = deps.log ?? (() => {});
   }
 
@@ -318,7 +330,10 @@ export class PeerLink {
   /** Camera: open a room and show its code (C2). */
   async pair(): Promise<void> {
     if (this.role !== 'camera') throw new Error('only the camera opens a room');
+    // A new code replaces the one on show: withdraw that one, so a scoreboard that typed it is told.
+    const old = this.snap.room && !this.snap.everOpened ? this.session : null;
     const epoch = this.reset();
+    if (old) void this.helper.end(old, { reason: 'withdrawn', ...this.meta() }).catch(() => {});
     this.setBusy(true);
     this.set({ error: null, mismatch: null, room: null, net: null });
     try {
@@ -346,6 +361,7 @@ export class PeerLink {
       this.nextPollAt = this.now() + POLL_FAST_MS;
       this.offline = false;
       this.set({ room: { code: r.code, expiresAt: this.now() + r.expiresIn * 1000 }, everOpened: false });
+      this.shown.save(this.session);
       this.log('link', `showing code ${r.code}`);
       this.startTimer();
     } catch (err) {
@@ -388,6 +404,13 @@ export class PeerLink {
 
   /** Pick up the saved pairing after a reload, with no user action; false when there is none. */
   rejoin(): boolean {
+    const left = this.session ? null : this.shown.load();
+    if (left) {
+      // The page that showed this code went away without withdrawing it (killed rather than unloaded).
+      this.log('link', `withdrawing the code a previous page left on show (session ${left.session.slice(0, 6)}…)`);
+      void this.helper.end(left, { reason: 'withdrawn', ...this.meta() }).catch(() => {});
+      this.shown.save(null);
+    }
     const p = this.saved.load();
     if (!p || this.session) return false;
     this.session = { session: p.session, secret: p.secret };
@@ -438,8 +461,17 @@ export class PeerLink {
     this.lastResumeAt = now;
     this.nextPollAt = Math.min(this.nextPollAt, now);
     // Not while still pairing. A helper call that was in flight when the page was suspended does not stop it:
-    // its answer is judged by what this decides (an attempt it belonged to is dropped).
-    if (!this.snap.everOpened) return void this.set({});
+    // its answer is judged by what this decides (an attempt it belonged to is dropped). A first pairing's clocks
+    // start again: the page was away, not the network.
+    if (!this.snap.everOpened) {
+      if (this.firstAnswerAt != null) this.firstAnswerAt = now;
+      if (this.peerSeenAt != null) this.peerSeenAt = now;
+      if (this.withdrewCode && this.snap.room) {
+        this.withdrewCode = false;
+        void this.pair(); // its code was withdrawn when the page was hidden away: show a new one
+      }
+      return void this.set({});
+    }
     const facts = {
       channelOpen: this.open && this.dc?.readyState === 'open',
       connectionState: this.pc?.connectionState ?? ('none' as const),
@@ -469,6 +501,12 @@ export class PeerLink {
   /** The page is going away: tell the other phone so it reconnects at once instead of waiting for pongs. */
   leave(): void {
     this.send({ t: 'bye', reason: 'leaving' });
+    // A code on show dies with the page: withdraw it, so a scoreboard that types it is told so.
+    if (this.session && this.snap.room && !this.snap.everOpened) {
+      this.helper.endBeacon?.(this.session, { reason: 'withdrawn', ...this.meta() });
+      this.shown.save(null);
+      this.withdrewCode = true;
+    }
   }
 
   // ---- internals ----
@@ -491,7 +529,10 @@ export class PeerLink {
     this.remoteSdp = null;
     this.peer = null;
     this.firstAnswerAt = null;
+    this.peerSeenAt = null;
+    this.withdrewCode = false;
     this.sessionLost = false;
+    this.shown.save(null);
     this.ice = null;
     this.iceRetryAt = 0;
     this.stuckSince = null;
@@ -858,9 +899,17 @@ export class PeerLink {
     }
   }
 
+  /** Scoreboard, first pairing: the camera's page is running; the give-up clock starts. */
+  private peerSeen(how: string): void {
+    if (this.peerSeenAt != null || this.role !== 'scoreboard') return;
+    this.peerSeenAt = this.now();
+    if (this.snap.peerSilent) this.log('link', `the camera answers again (it ${how})`);
+  }
+
   /** The link carries both ways again (a hello, or a pong while down). Returns whether it was open before. */
   private markOpen(): boolean {
     const wasOpen = this.open;
+    if (!wasOpen && !this.snap.everOpened) this.shown.save(null); // the code on show has done its job
     this.lastPongAt = this.now();
     this.open = true;
     this.down = null;
@@ -927,7 +976,12 @@ export class PeerLink {
       this.recover();
     }
     this.checkSlow(now);
-    if (!this.open && !this.snap.everOpened && this.firstAnswerAt != null && now - this.firstAnswerAt >= PAIR_GIVE_UP_MS) return this.giveUp(true);
+    // The camera's clock starts at its first answer; the scoreboard's once the camera is seen running.
+    const since = this.role === 'camera' ? this.firstAnswerAt : this.peerSeenAt;
+    if (!this.open && !this.snap.everOpened && since != null && now - since >= PAIR_GIVE_UP_MS) return this.giveUp(true);
+    const silent = this.role === 'scoreboard' && !this.open && !this.snap.everOpened && this.firstAnswerAt != null && this.peerSeenAt == null && now - this.firstAnswerAt >= PEER_SILENT_MS;
+    if (silent && !this.snap.peerSilent) this.log('link', `the camera has not fetched the answer ${Math.round((now - this.firstAnswerAt!) / 1000)} s after it was posted: its app is not running`);
+    if (silent !== this.snap.peerSilent) this.set({ peerSilent: silent });
     if (this.role === 'camera') this.tickCamera(now);
     else this.tickScoreboard(now);
     this.set({});
@@ -962,6 +1016,8 @@ export class PeerLink {
     }
     const room = this.snap.room;
     if (!this.open && room && now >= room.expiresAt - ROOM_RENEW_BEFORE_MS && !this.attempt?.answeredAt) {
+      // An answer may be waiting (the page was suspended past the renewal): look before replacing the code.
+      if (now - this.lastPollAt > 3000) return void this.poll();
       void this.pair(); // nobody took the code: show a new one
       return;
     }
@@ -1014,13 +1070,18 @@ export class PeerLink {
     const a = this.attempt;
     let soon = false;
     this.busy = true;
+    this.lastPollAt = this.now();
+    // Scoreboard, first pairing: ask whether the camera has fetched the answer, i.e. whether its page runs at all.
+    const askSeen = this.role === 'scoreboard' && !this.snap.everOpened && this.firstAnswerAt != null && this.peerSeenAt == null;
     try {
-      const r: PollReply = await this.helper.poll(this.session!, this.gen, this.role);
+      const r: PollReply = await this.helper.poll(this.session!, this.gen, this.role, askSeen);
       if (epoch !== this.epoch) return;
       this.offline = false;
-      if (r && 'offer' in r) {
+      if (r && 'seen' in r) this.peerSeen('fetched the answer');
+      else if (r && 'offer' in r) {
         this.latestGen = Math.max(this.latestGen, r.offer.gen);
         if (this.refuses(r.offer)) return;
+        if (!this.snap.everOpened) this.peerSeen('offered a new connection');
         if (this.resuming && resumeReply(r.offer) === 'offer') {
           this.log('link', `resume: the camera's offer gen ${r.offer.gen} restarts the old connection; offering a fresh one instead`);
           await this.offer('fresh');

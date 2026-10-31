@@ -22,7 +22,9 @@
 // with point reasons off recording no tag), the camera unpairing both (D14); a typed code; the QR's
 // link opened by the iPhone camera app with the viewfinder still
 // on that QR, claimed once; a version mismatch (R-PAIR-7); two phones on different networks told so, with the
-// pairing diagnostics; with the relay, two phones on different networks connecting through TURN while a shared
+// pairing diagnostics; a camera page reloaded after showing its code (withdrawn), or in the background when it is
+// typed (the scoreboard says the camera is not answering, and links when it is back); with the relay, two phones
+// on different networks connecting through TURN while a shared
 // network still connects directly; the helper forgetting a session whose link is open (the link stays); a
 // scoreboard whose relay credentials fail, both phones saying why within
 // about 20 s and offering nothing more. Every ICE restart description must carry candidates. Exits non-zero on
@@ -374,6 +376,7 @@ async function main() {
   let sbB = null as Page | null;
   let sbPage: Page | null = null;
   const netPages: Page[] = [];
+  const codePages: Page[] = [];
   try {
     await step('camera role opens with a live preview', async () => {
       await cam.goto(BASE);
@@ -985,6 +988,61 @@ async function main() {
       await sbNet.screenshot({ path: path.join(OUT, '10-scoreboard-different-networks.png') });
       await camNet.screenshot({ path: path.join(OUT, '11-camera-different-networks.png') });
       return `typed ${c}; after ${ms} ms the scoreboard says "${sbSays}"; camera "${camSays}"; chip "${chipText}"`;
+    });
+
+    /** A camera page showing a code, and a scoreboard page on its pairing screen (one network: they connect directly). */
+    const codePair = async (name: string) => {
+      const camC = (await newPage(camBrowser, `camera-${name}`)).page;
+      const sbC = (await newPage(camBrowser, `scoreboard-${name}`)).page;
+      codePages.push(camC, sbC);
+      await camC.goto(BASE);
+      await button(camC, /CAMERA/).click();
+      await until('camera live', async () => (await camC.locator('[data-testid=rec-button]').isEnabled()) || null, 15_000);
+      await camC.locator('[data-testid=cam-pair]').click();
+      const c = await until('code', async () => {
+        const t = await text(camC, '[data-testid=pair-code]');
+        return /^\d{6}$/.test(t) && t;
+      });
+      await sbC.goto(BASE);
+      await button(sbC, /SCOREBOARD/).click();
+      await sbC.locator('[data-testid=pair-chip]').click();
+      await sbC.locator('input[data-testid=pair-code]').fill(c);
+      return { camC, sbC, c };
+    };
+
+    // The camera page reloaded (or the home-screen app relaunched) after showing its code: the scoreboard waited
+    // for ever on a page that was gone and then blamed the networks (2026-10-31 audit, BUG-4). The page withdraws
+    // its code as it goes, so typing it says so at once.
+    await step('a camera page reloaded after showing its code: the code is withdrawn, typing it says so', async () => {
+      const { camC, sbC, c } = await codePair('reload');
+      await camC.reload();
+      await sbC.locator('[data-testid=pair-submit]').click();
+      const says = await until('the scoreboard says why', async () => {
+        const t = await text(sbC, '[data-testid=pair-status]');
+        return t.startsWith('That code was not found') && t;
+      }, 10_000, 250);
+      return `code ${c}, camera page reloaded; the scoreboard says "${says}"`;
+    });
+
+    // The camera's app in the background when its code is typed: it cannot answer until it is back. The scoreboard
+    // says so and waits, instead of "different networks … the relay did not connect"; it links once the camera is
+    // back.
+    await step('a camera page in the background when its code is typed: the scoreboard says it is not answering, and links once it is back', async () => {
+      const { camC, sbC, c } = await codePair('hidden');
+      await camC.evaluate(() => Object.assign(window as any, { __frozen: true, __drop: true, __deaf: true }));
+      const start = Date.now();
+      await sbC.locator('[data-testid=pair-submit]').click();
+      const says = await until('the scoreboard says the camera is not answering', async () => {
+        const t = await text(sbC, '[data-testid=pair-status]');
+        return t.startsWith('The camera phone is not answering') && t;
+      }, 20_000, 250);
+      const ms = Date.now() - start;
+      await sbC.waitForTimeout(10_000);
+      if ((await text(sbC, '[data-testid=pair-status]')) !== says) throw new Error(`the scoreboard changed its line: "${await text(sbC, '[data-testid=pair-status]')}"`);
+      const back = await screenOn(camC);
+      await until('paired', async () => (await sbC.locator('[data-testid=pair-done]').count()) > 0, 15_000);
+      await until('camera link ok', async () => (await chip(camC)) === 'link ok', 10_000);
+      return `code ${c}; after ${ms} ms the scoreboard says "${says}" and keeps waiting; linked ${Date.now() - back} ms after the camera page came back`;
     });
 
     if (!RELAY) log(`  relay steps skipped: ${HELPER ? 'HELPER is set' : 'E2E_RELAY=0'}`);

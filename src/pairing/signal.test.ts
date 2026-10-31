@@ -134,6 +134,17 @@ describe('signaling helper', () => {
     expect(await client.poll(r2, 1, 'camera').catch((e) => e)).toMatchObject({ kind: 'ended', ended: { reason: 'unpaired' } });
   });
 
+  it('the phone that answered can ask whether the other one fetched its answer (is that page running?)', async () => {
+    const { client } = setup();
+    const room = await client.createRoom(SDP('o1'));
+    const sb = await client.claimRoom(room.code);
+    await client.postAnswer(sb, { gen: 1, sdp: SDP('a1'), fresh: true });
+    expect(await client.poll(sb, 1, 'scoreboard', true)).toBeNull(); // the camera has not looked yet
+    expect(await client.poll(room, 1, 'camera')).toEqual({ answer: expect.objectContaining({ gen: 1 }) });
+    expect(await client.poll(sb, 1, 'scoreboard', true)).toEqual({ seen: true });
+    expect(await client.poll(sb, 1, 'scoreboard')).toBeNull(); // only when asked: older builds see nothing new
+  });
+
   it('every session call needs the secret', async () => {
     const { client } = setup();
     const room = await client.createRoom(SDP('o1'));

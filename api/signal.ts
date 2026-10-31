@@ -433,6 +433,7 @@ export function createHandler(getStore: () => SignalStore | null, opts: HandlerO
         const desc = await readDesc(store, `${c}:${b}`);
         // An answer is fetched for exactly its offer's generation; an offer when it is newer than the last seen.
         const ready = desc && (c === 'answer' ? desc.gen === gen : desc.gen > gen);
+        if (ready && c === 'answer') await store.set(`seen:${b}`, String(gen), SESSION_TTL_S);
         return ready ? json(200, { [c]: desc }) : json(204);
       }
       throw new HttpError(405, 'method');
@@ -452,8 +453,15 @@ export function createHandler(getStore: () => SignalStore | null, opts: HandlerO
       if (offer && !mine && offer.gen > gen) return json(200, { offer });
       if (offer && mine && offer.gen === gen) {
         const answer = await readDesc(store, `answer:${b}`);
-        if (answer?.gen === gen) return json(200, { answer });
+        if (answer?.gen === gen) {
+          await store.set(`seen:${b}`, String(gen), SESSION_TTL_S); // the answering phone may ask (below)
+          return json(200, { answer });
+        }
       }
+      // The phone that answered asks whether the other one has fetched its answer: whether that phone's page is
+      // running at all (a camera reloaded or in the background after showing its code, 2026-10-31 audit).
+      if (offer && !mine && offer.gen === gen && url.searchParams.get('seen') === '1' && Number(await store.get(`seen:${b}`)) === gen)
+        return json(200, { seen: true });
       return json(204);
     }
 

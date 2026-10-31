@@ -4,8 +4,11 @@ import type { EndReason, Offer, PeerMeta, Side, TurnServer } from '../../api/sig
 
 export type Desc = Pick<Offer, 'gen' | 'sdp' | 'fresh' | 'by' | 'app' | 'v' | 'relay'>;
 
-/** What the other phone posted for this one: its newer offer, or the answer to this phone's offer. */
-export type PollReply = { offer: Desc } | { answer: Desc } | null;
+/**
+ * What the other phone posted for this one: its newer offer, or the answer to this phone's offer; or, asked with
+ * `seen`, that it has fetched this phone's answer.
+ */
+export type PollReply = { offer: Desc } | { answer: Desc } | { seen: true } | null;
 
 export type HelperErrorKind =
   | 'offline' // no internet, or the helper cannot be reached
@@ -101,10 +104,28 @@ export class HelperClient {
     await this.call('POST', `/sessions/${s.session}/offer`, { secret: s.secret, gen: d.gen, offer: d.sdp, fresh: d.fresh, by: d.by, app: d.app, v: d.v, relay: d.relay });
   }
 
-  /** The other phone's offer newer than `gen`, or the answer to this phone's offer `gen`, or null. */
-  async poll(s: Session, gen: number, side: Side): Promise<PollReply> {
-    const r = await this.call('GET', `/sessions/${s.session}/poll?gen=${gen}&role=${side}`, undefined, s.secret);
-    return r.json?.offer ? { offer: r.json.offer } : r.json?.answer ? { answer: r.json.answer } : null;
+  /**
+   * The other phone's offer newer than `gen`, or the answer to this phone's offer `gen`, or null. With `seen`,
+   * also whether the other phone has fetched this phone's answer to `gen`.
+   */
+  async poll(s: Session, gen: number, side: Side, seen = false): Promise<PollReply> {
+    const r = await this.call('GET', `/sessions/${s.session}/poll?gen=${gen}&role=${side}${seen ? '&seen=1' : ''}`, undefined, s.secret);
+    return r.json?.offer ? { offer: r.json.offer } : r.json?.answer ? { answer: r.json.answer } : r.json?.seen ? { seen: true } : null;
+  }
+
+  /**
+   * end() for a page that is going away (pagehide): sendBeacon outlives the page, a fetch may not. Used for a code
+   * on show, so a scoreboard that types it is told the code is gone instead of waiting for a page that is not there.
+   */
+  endBeacon(s: Session, why: { reason?: EndReason } & PeerMeta = {}): void {
+    const body = JSON.stringify({ secret: s.secret, reason: why.reason, app: why.app, v: why.v });
+    const url = `${this.base}/sessions/${s.session}/end`;
+    try {
+      if (navigator.sendBeacon?.(url, new Blob([body], { type: 'application/json' }))) return;
+    } catch {
+      // no beacon here: try a keepalive fetch
+    }
+    void this.fetchImpl(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }).catch(() => {});
   }
 
   /** This phone ended the session: the other one learns it, and why, at its next poll, whatever became of the goodbye. */

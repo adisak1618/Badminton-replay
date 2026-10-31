@@ -43,6 +43,10 @@ export function mismatchText(m: Mismatch): string {
 /** Shown on the pairing screens while a first pairing has not opened SLOW_CONNECT_MS after the answer. */
 export const SLOW_CONNECT_TEXT = 'Still connecting…';
 
+/** S2: the camera has not fetched this phone's answer (unreachable.ts PEER_SILENT_MS): its app is not running. */
+export const CAMERA_SILENT_TEXT =
+  'The camera phone is not answering. Open the app on the camera phone and keep its screen on; if it shows a new code, type that one.';
+
 /**
  * Why a first pairing could not open (unreachable.ts), from this phone's side. Phones on different networks are
  * named with their two addresses, as before; the reason names the phone to fix.

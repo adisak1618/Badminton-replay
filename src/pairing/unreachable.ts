@@ -9,6 +9,12 @@ import type { NetCheck, NetVerdict } from './net';
 
 /** From the first answer to giving up: long enough for the camera's second attempt (10 s after the answer). */
 export const PAIR_GIVE_UP_MS = 18_000;
+/**
+ * A scoreboard whose answer the camera has not fetched this long after it was posted says the camera phone is not
+ * answering (its page reloaded or is in the background) and waits, rather than blaming the network. Its own give-up
+ * clock starts only once the camera has fetched the answer.
+ */
+export const PEER_SILENT_MS = 10_000;
 
 /**
  * - no-relay: the helper has no TURN key, and the phones do not share a network;
