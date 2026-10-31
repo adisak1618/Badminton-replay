@@ -5,6 +5,9 @@
 // own inputs that the camera has not answered yet applied on top (`pending`), so a tap shows at once and
 // scoring never waits for the link (R-PAIR-3). Each input is sent to the camera through the sink; the camera's
 // events confirm it, its result settles one it did not count. Unpaired, the store keeps its own log.
+//
+// A match scored from a saved video (D17) is a match of this phone alone whose events are stamped by the video's
+// clock (`setClock`), and it carries what it knows about the file (`video`).
 import {
   append,
   applyInput,
@@ -20,6 +23,7 @@ import {
   type MatchState,
 } from '../engine';
 import type { MatchLog } from '../link/source';
+import type { VideoSource } from '../video/source';
 import type { PendingInput, StoredMatch } from './persist';
 
 export interface Snapshot {
@@ -51,6 +55,8 @@ export class MatchStore {
   /** Paired: the camera's log (null while it holds none) and this phone's unanswered inputs. */
   private remote: { confirmed: MatchLog | null; pending: PendingInput[] } | null = null;
   private sink: RemoteSink | null = null;
+  /** D17: the clock events are stamped with while a video match is on screen; null = this phone's wall clock. */
+  private clock: (() => number) | null = null;
   onSaveError: (err: unknown) => void = (err) => console.warn('saving the match failed', err);
   /** A tap the camera had already counted from the other scoreboard (paired only). */
   onDuplicate: () => void = () => {};
@@ -78,26 +84,48 @@ export class MatchStore {
     return this.writes;
   }
 
+  /** D17: stamp events with this clock (the video's time on the log's clock) instead of the wall clock; null to stop. */
+  setClock(fn: (() => number) | null): void {
+    this.clock = fn;
+  }
+
+  private time(): number {
+    return this.clock ? this.clock() : this.now();
+  }
+
   /** Resolves when every queued write has finished. */
   flushed(): Promise<void> {
     return this.writes;
   }
 
-  start(config: MatchConfig): Change {
+  /** A new match; `video` makes it a match scored from that saved file (D17), never sent to a camera. */
+  start(config: MatchConfig, video?: VideoSource): Change {
     const at = this.now();
     const matchId = `m-${at}-${randomId().slice(0, 4)}`;
-    if (this.remote) {
+    if (this.remote && !video) {
       const body = { type: 'match.start', config } as const;
       this.input(matchId, body, at);
       const state = this.snap.state!;
       return { prev: state, next: state, event: this.snap.match!.events[0], config };
     }
     const events = append([], { type: 'match.start', config }, { at, by: this.device(), id: randomId() });
-    const m: StoredMatch = { matchId, config, events, createdAt: at, updatedAt: at };
+    const m: StoredMatch = { matchId, config, events, createdAt: at, updatedAt: at, ...(video ? { video } : {}) };
+    this.remote = null;
     this.set(m);
     void this.persist(m);
     const state = this.snap.state!;
     return { prev: state, next: state, event: events[0], config };
+  }
+
+  /** D17: what the video match knows about its file changed (metadata read, offset, position); saved with it. */
+  setVideo(patch: Partial<VideoSource>): void {
+    const m = this.snap.match;
+    if (!m?.video || this.remote) return;
+    const video = { ...m.video, ...patch };
+    if ((Object.keys(patch) as Array<keyof VideoSource>).every((k) => m.video![k] === video[k])) return;
+    const next: StoredMatch = { ...m, video };
+    this.set(next);
+    void this.persist(next);
   }
 
   load(m: StoredMatch): void {
@@ -119,7 +147,7 @@ export class MatchStore {
   emit(body: EventBody): Change | null {
     const { match, state } = this.snap;
     if (!match || !state) return null;
-    const at = this.now();
+    const at = this.time();
     if (this.remote) {
       const result = this.input(match.matchId, toInput(body), at);
       if (result === 'duplicate') this.onDuplicate();

@@ -216,6 +216,11 @@
   letter-spacing: -0.02em;
 }
 
+/* D17: beside a video the zone is a size container; the digits fit it (two digits are about 1.1 em wide). */
+.digits-compact {
+  font-size: min(42cqh, 70cqw);
+}
+
 .zone {
   touch-action: none; /* the browser never interprets a swipe on the zones */
 }

@@ -1,7 +1,8 @@
 // S5 menu: full-height rows of at least 56 px. Ending or replacing a live match asks once more. The camera
 // rows pair, unpair, and start or stop the camera phone's recording (D11). With point reasons on (D15): the
-// rally list, whether this phone asks, and how soon an untagged popup closes. The match's own match.json.
-import { useState } from 'react';
+// rally list, whether this phone asks, and how soon an untagged popup closes. The match's own match.json. Scoring a
+// saved video (D17): the video's rows instead of the camera and pairing rows.
+import { useState, type ReactNode } from 'react';
 import type { MatchConfig, MatchState } from '../engine';
 import { TAG_CLOSE_OPTIONS, type Prefs } from '../match/prefs';
 import { CameraMenuRows } from './CameraLink';
@@ -21,6 +22,7 @@ export function Menu({
   reasons,
   onRallyList,
   onExport,
+  videoRows,
 }: {
   config: MatchConfig;
   s: MatchState;
@@ -37,6 +39,8 @@ export function Menu({
   reasons: boolean;
   onRallyList: () => void;
   onExport: () => void;
+  /** D17: the rows of a match scored from a video, given the row class; no camera rows then. */
+  videoRows?: (row: string) => ReactNode;
 }) {
   const [confirm, setConfirm] = useState<'end' | 'new' | null>(null);
   const [diag, setDiag] = useState(false);
@@ -50,7 +54,7 @@ export function Menu({
         aria-label="Menu"
         onClick={(e) => e.stopPropagation()}
       >
-        <CameraMenuRows row={row} onPair={onPair} />
+        {videoRows ? videoRows(row) : <CameraMenuRows row={row} onPair={onPair} />}
         <button className={row} onClick={onCorrect}>
           Correct score
         </button>
@@ -112,9 +116,11 @@ export function Menu({
             Update the app {over ? '' : '(reloads)'}
           </button>
         )}
-        <button className={row} onClick={() => setDiag(true)}>
-          Pairing diagnostics
-        </button>
+        {!videoRows && (
+          <button className={row} onClick={() => setDiag(true)}>
+            Pairing diagnostics
+          </button>
+        )}
         <button className={`${row} btn-ghost bg-transparent`} onClick={onClose}>
           Close
         </button>

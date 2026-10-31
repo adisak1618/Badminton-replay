@@ -233,7 +233,7 @@ export function TagSheet({
         </div>
       )}
       <div
-        className="sheet slide-up mx-2 mt-auto mb-2 flex flex-col gap-2 p-3"
+        className="sheet slide-up mx-2 mt-auto mb-2 flex min-h-0 flex-col gap-2 overflow-y-auto p-3"
         role="dialog"
         aria-label="Why was this point won"
         onClick={(e) => e.stopPropagation()}

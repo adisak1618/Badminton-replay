@@ -279,6 +279,21 @@ fixed 2.
   network time, so the difference is far below what a countdown shows.
 - The camera also writes its log plus recording metadata (§6.6) to the
   match's OPFS directory while recording.
+- **A saved video scored on this phone (D17).** The match is an unpaired
+  match with one more field, `video` (`video/source.ts`): the picked file's
+  name, size, type and lastModified, the duration, size in pixels and frame
+  rate once read (`requestVideoFrameCallback` steps, snapped to the nearest
+  standard rate), the match's tap offset and the last playback position
+  (saved every 3 s while playing, on pause and after a seek). Its log runs on
+  the video's clock: the store's clock (`MatchStore.setClock`) is
+  `T0 + max(0, round(video.currentTime × 1000 − tapOffsetMs))`, where T0 is
+  the `match.start`'s `at`, so `at − T0` is the event's place on the file in
+  ms. `at` is therefore not wall-clock time in such a match: it goes back when
+  the scorer seeks back and taps, `seq` stays the order of scoring, and the
+  engine is untouched (the D16 window, the interval countdown and the
+  durations are measured in video time, which is what they mean there). A
+  picked file cannot be kept (iOS gives no handle), so after a reload the file
+  is picked again and checked by name and size.
 
 ## 4. Pairing, signaling and reconnect
 
@@ -875,6 +890,37 @@ interface MatchBundle {
                     rec: { segment: number; fromMs: number; toMs: number } | null }>;
 }
 ```
+
+**A saved video scored in the app (D17).** The same `buildBundle` with the
+file as the recording, through the scoreboard's export (R-VID-6). Additive,
+still version 1:
+
+```ts
+recording: {
+  source: 'imported';      // absent for a recording made by the camera
+  tapOffsetMs: number;     // the match's tap offset at export (taps after a change carry the new one)
+  segments: [{             // exactly one
+    index: 1; file: string;            // the picked file's own name
+    mimeType: string;                   // File.type, else from the extension
+    width: number; height: number;      // videoWidth / videoHeight, 0 if never read
+    fps: number;                        // measured while playing; 0 = the browser could not tell
+    startedAt: T0; firstFrameAt: T0; startLatencyMs: 0;   // T0 = the match.start event's `at`
+    endedAt: number;                    // T0 + the duration in ms
+    bytes: number;                      // File.size
+    endReason: null;
+    overlay: { box: {x:0,y:0,w:0,h:0}; boxes: []; corner: 'tl'; size: 'medium'; delayMs: 0;
+               mirrored: false; theme: 'none'; logo: null };   // nothing burned in
+  }];
+};
+devices: { scoreboard };   // no camera
+clock: { offsetMs: 0, samples: 0, medianRttMs: 0 };   // one phone, one clock
+```
+
+With that segment the formula below gives `tRec.ms = at − T0`, the video time
+of the tap less the offset (never below 0), and a replay's `rec` is its window
+on the file. `leftOnCamera` equals `after.leftTeam`. A consumer such as the AI
+tracker reads `tRec` (ms from the file's t = 0), never `at`, and `seq` for
+the order of scoring; in an imported match `at` can go backwards (§3.5).
 
 `after` and `leftOnCamera` are redundant with `events` + `config` (the log
 stays the source of truth) but let a later renderer stay a renderer.
