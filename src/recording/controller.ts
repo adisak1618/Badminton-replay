@@ -123,6 +123,8 @@ export class CameraController {
   private tableSized: { table: StatsTable; u: number; fonts: number; size: { w: number; h: number } } | null = null;
   /** Bumped when the browser's fonts change, so the table is measured again with what will draw it. */
   private fontsEpoch = 0;
+  /** The recorder was told to start: the next frame the compositor draws is the file's first (D16). */
+  private firstFramePending = false;
 
   constructor(
     settings: CameraSettings,
@@ -142,6 +144,11 @@ export class CameraController {
       logo: null,
     };
     this.compositor = new Compositor((now) => {
+      if (this.firstFramePending && isActive(this.snap.session.phase)) {
+        this.firstFramePending = false;
+        this.dispatch({ type: 'firstFrame', at: now });
+        this.saveMeta();
+      }
       const m = this.mirror.getSnapshot();
       const s = this.snap.settings;
       const seg = current(this.snap.session);
@@ -557,6 +564,7 @@ export class CameraController {
     };
     recorder.onerror = () => this.stopRec('error', MESSAGES.recorder);
     recorder.onstop = () => void this.finishSegment();
+    this.firstFramePending = true;
     recorder.start(TIMESLICE_MS);
     keepScreenOn(true);
   }

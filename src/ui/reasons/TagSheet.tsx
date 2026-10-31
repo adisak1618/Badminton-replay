@@ -5,6 +5,7 @@
 // Every choice is saved the moment it is made (a chip appends a newer tag), so closing never loses one.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { SHOTS, other, sameRef, type MatchConfig, type PlayerRef, type Rally, type Shot, type TagBody, type Team } from '../../engine';
+import { ReplayPill } from '../ReplayPill';
 import { useNow } from '../useNow';
 import { HOW_LABEL, SHOT_LABEL, nameOf, tagText } from './labels';
 
@@ -25,6 +26,7 @@ export function TagSheet({
   onUndo,
   next,
   initialHit,
+  replay,
 }: {
   config: MatchConfig;
   rally: Rally;
@@ -43,6 +45,8 @@ export function TagSheet({
   next?: (() => void) | null;
   /** A name already tapped in the rally list: step 1 is done. */
   initialHit?: PlayerRef;
+  /** D16, right after the tap: "☆ Replay" beside "↶ Undo point" marks this point for a replay. */
+  replay?: { on: boolean; onToggle: () => void };
 }) {
   const [stage, setStage] = useState<Stage>({ k: 'who' });
   const [deadline, setDeadline] = useState<number | null>(() => (live && closeAfterMs > 0 && !rally.tag ? Date.now() + closeAfterMs : null));
@@ -212,17 +216,20 @@ export function TagSheet({
   const touched = !!tag && (tag.shot || tag.assist || tag.forcedBy);
   return (
     <div className="absolute inset-0 z-[35] flex flex-col bg-black/60" onClick={() => close('outside')} data-testid="tag-backdrop">
-      {onUndo && (
-        <div className="flex h-12 shrink-0 items-center justify-center">
-          <button
-            className="btn min-h-10 rounded-full border border-line bg-btn px-4 text-sm shadow-[0_2px_12px_rgb(0_0_0/0.6)]"
-            onClick={(e) => {
-              e.stopPropagation();
-              onUndo();
-            }}
-          >
-            ↶ Undo point
-          </button>
+      {(onUndo || replay) && (
+        <div className="flex h-12 shrink-0 items-center justify-center gap-2">
+          {onUndo && (
+            <button
+              className="btn min-h-10 rounded-full border border-line bg-btn px-4 text-sm shadow-[0_2px_12px_rgb(0_0_0/0.6)]"
+              onClick={(e) => {
+                e.stopPropagation();
+                onUndo();
+              }}
+            >
+              ↶ Undo point
+            </button>
+          )}
+          {replay && <ReplayPill on={replay.on} onToggle={replay.onToggle} testid="tag-replay" />}
         </div>
       )}
       <div

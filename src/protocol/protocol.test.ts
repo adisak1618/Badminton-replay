@@ -55,6 +55,9 @@ describe('message guards', () => {
     add({ type: 'tag', point: 'p', how: 'forced', hit: { team: 'B', idx: 0 }, forcedBy: { team: 'A', idx: 1 }, assist: { team: 'A', idx: 0 }, shot: 'smash' });
     add({ type: 'tag', point: 'p', how: 'winner', hit: { team: 'A', idx: 0 } });
     add({ type: 'tag.clear', point: 'p' });
+    add({ type: 'replay', point: 'p' });
+    add({ type: 'replay', point: 'p', start: -9000, end: 0, speed: 0.75 });
+    add({ type: 'replay.clear', point: 'p' });
     for (const e of events) expect(isMatchEvent(JSON.parse(JSON.stringify(e))), e.type).toBe(true);
   });
 
@@ -68,6 +71,11 @@ describe('message guards', () => {
       '{"v":3,"t":"event","matchId":"m","event":{"seq":1,"id":"x","at":1,"by":"s","type":"tag","point":"p","how":"winner","hit":{"team":"C","idx":0}}}',
       '{"v":3,"t":"event","matchId":"m","event":{"seq":1,"id":"x","at":1,"by":"s","type":"tag","point":"p","how":"winner","hit":{"team":"A","idx":0},"shot":"lob"}}',
       '{"v":3,"t":"event","matchId":"m","event":{"seq":1,"id":"x","at":1,"by":"s","type":7}}',
+      '{"v":3,"t":"event","matchId":"m","event":{"seq":1,"id":"x","at":1,"by":"s","type":"replay"}}',
+      '{"v":3,"t":"event","matchId":"m","event":{"seq":1,"id":"x","at":1,"by":"s","type":"replay","point":"p","speed":2}}',
+      '{"v":3,"t":"event","matchId":"m","event":{"seq":1,"id":"x","at":1,"by":"s","type":"replay","point":"p","start":"-6000"}}',
+      '{"v":3,"t":"event","matchId":"m","event":{"seq":1,"id":"x","at":1,"by":"s","type":"replay","point":"p","start":-1000,"end":-6000}}',
+      '{"v":3,"t":"input","matchId":"m","input":{"id":"x","at":1,"by":"s","body":{"type":"replay.clear"}}}',
       '{"v":3,"t":"event","event":{"seq":1,"id":"x","at":1,"by":"s","type":"point","team":"A"}}',
       '{"v":3,"t":"input","matchId":"m","input":{"id":"x","at":1,"by":"s","body":{"type":"undo","target":3}}}',
       '{"v":3,"t":"input","matchId":"m","input":{"id":"x","at":1,"body":{"type":"point","team":"A"}}}',

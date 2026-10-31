@@ -185,3 +185,47 @@ describe('point reasons in match.json (D15)', () => {
     expect(b.stats!.match.teams.B).toMatchObject({ won: 1, oppUnforced: 1 });
   });
 });
+
+describe('replays and the first frame in match.json (D16)', () => {
+  /** Rallies 30 s apart from the scoreboard's 1,000,000 ms, as a real match spreads them. */
+  function spread(m: Match): Match {
+    m.events = m.events.map((e, i) => ({ ...e, at: 1_000_000 + i * 30_000 }));
+    return m;
+  }
+
+  it('times events from the first composited frame when the segment has one', () => {
+    const s = { ...seg(1, 1000, null), firstFrameAt: 812 };
+    expect(tRecFor(2000, 0, [s])).toEqual({ segment: 1, ms: 1188 });
+    expect(tRecFor(2000, 0, [{ ...s, startLatencyMs: 120 }])).toEqual({ segment: 1, ms: 1188 }); // the measured frame wins
+  });
+
+  it('each marked point with its window on the log clock and on the recording', () => {
+    const m = new Match(doublesConfig()).rallies('AB');
+    m.push({ type: 'replay', point: 'e3' });
+    spread(m); // e2 at 1,030,000, e3 at 1,060,000, the mark at 1,090,000
+    const { meta, log } = recorded(m, [{ ...seg(1, 1_000_000, null), firstFrameAt: 999_800 }], 500);
+    const b = buildBundle({ meta, log, app: 'test', now: 5 });
+    expect(b.replays).toEqual([
+      { point: 'e3', n: 2, game: 1, at: 1_060_000, from: 1_054_000, to: 1_059_000, speed: 0.5, adjusted: false, rec: { segment: 1, fromMs: 54_700, toMs: 59_700 } },
+    ]);
+    expect(b.events.find((e) => e.id === 'e3')!.tRec).toEqual({ segment: 1, ms: 60_700 });
+  });
+
+  it('a window that began before the recording starts at the segment start; none recording, no place on it', () => {
+    const m = new Match(doublesConfig()).rallies('A');
+    m.push({ type: 'replay', point: 'e2' });
+    spread(m); // e2 at 1,030,000: window 1,024,000 to 1,029,000
+    const late = buildBundle({ ...recorded(m, [seg(1, 1_026_000, null)]), app: 'test', now: 5 });
+    expect(late.replays![0].rec).toEqual({ segment: 1, fromMs: 0, toMs: 3000 });
+    const none = buildBundle({ ...recorded(m, [seg(1, 1_040_000, null)]), app: 'test', now: 5 });
+    expect(none.replays![0].rec).toBeNull();
+  });
+
+  it('no mark, no replays block; the scoreboard’s own export lists marks with no place on a video', () => {
+    const m = new Match(doublesConfig()).rallies('AB');
+    expect('replays' in buildBundle({ ...recorded(m, [seg(1, 1_000_000, null)]), app: 'test', now: 5 })).toBe(false);
+    m.push({ type: 'replay', point: 'e2', speed: 1 });
+    const b = buildLogBundle({ matchId: 'm9', config: m.cfg, events: m.events, scoreboard: { id: 'sb-1', ua: 'ua' }, app: 'test', now: 7 });
+    expect(b.replays).toEqual([expect.objectContaining({ point: 'e2', speed: 1, adjusted: true, rec: null })]);
+  });
+});

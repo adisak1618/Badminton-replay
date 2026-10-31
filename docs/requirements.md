@@ -103,6 +103,23 @@ of the docs assume these.
   over, `stats` in `match.json` (R-TAG). Live display and stats in the video
   are the next slice: a small Thai table that stays on screen (R-TAG-7),
   chosen on the round-2 design board (data/badminton-reasons-video-design-r2).
+- **D16 Point replays, made after the match.** Captain, 2026-10-28: "feature
+  reply หรือภาพช้า … เวลากดคะแนนแล้ว ให้กดเลือก แต้มนี้ให้มี reply เลย เราก็จะเอา
+  video จากวินาทีที่กด request re-play สำหรับแต้มนี้ มา - 1วิ และเอาภาพก่อนหน้า
+  10 วิก่อนมา slow 2 เท่า … ควร burn ลง video real-time เลยมั๊ยหรือควรทำทีหลัง"
+  and, 2026-10-30, tagging points after the match while watching the video and
+  burning the stats in afterwards, through one post-match video pass. On the
+  research board (data/badminton-replay-research): "Q1=later; Q2=shared;
+  Q3=phone-first; Q4=mediabunny; Q5=inline; Q6=tap5; Q7=card; Q8=frozen;
+  Q9=pill; Q10=live-sound; Q11=REPLAY; Q12=leadin+blend+adjust+keys+inset;
+  note: ระยะเวลาของ replay และจุดเริ่มจุดจบรวมถึง speed ขอปรับได้ในแต่ละ shot
+  และกดเพิ่ม reply สำหรับแต้มอื่นที่ไม่ได้กด mark ไว้ก่อนได้" and "เริ่มทำงานได้
+  เลย". Consequence: during play a point is only marked (R-REP-1 to 3); the
+  replays and the late tags' stats are made after the match by one pass on the
+  camera phone that inserts each replay inline (5 s ending 1 s before the
+  point's score tap, half speed, BWF card-spin transition, score panel frozen
+  with a REPLAY ×0.5 badge, the real sound after the point), every shot
+  adjustable and any point markable later (R-REP-4, next slices).
 - The captain also asked to see a rough UI before implementation starts:
   [mockup/index.html](mockup/index.html), described in ux-design.md §6.
 
@@ -451,6 +468,41 @@ D15. Off records nothing and shows nothing: scoring only, as before D15.
   count of that player goes up by one within a second of the tag, and the game
   after starts at zero; no combination of panel corner, logo corner and size
   overlaps the table.
+
+### Point replays (R-REP)
+
+D16. Marking never scores, never changes the live video, and works whether or
+not the match asks why points were won.
+
+- **R-REP-1 Mark after a point.** After each point "☆ Replay" marks it for a
+  replay; another tap takes the mark back (★ Replay ✓). It sits beside "↶ Undo
+  point" above the why-was-this-point-won popup; without the popup (point
+  reasons off, "Ask why" off on this phone, the other scoreboard's point, or the
+  popup closed) it shows on its own under the top bar for 8 s after the point,
+  above the game-over and match-over cards. *Accept:* one tap marks the point
+  just scored; the camera's log holds the mark within a second; the other
+  scoreboard shows it.
+- **R-REP-2 Mark later.** The rally list (menu, and everywhere it opened for
+  D15) has a star on every row, with point reasons on or off: any point can be
+  marked or unmarked at any time, also after the match. Undo takes back scoring,
+  never a mark; an undone point loses its mark and a redo brings it back.
+- **R-REP-3 Window.** A replay shows the 5 s that end 1 s before that point's
+  score tap, at half speed: the point's own tap, so a mark made late shows the
+  same moments. A window whose start was not set never reaches back into the
+  rally before (it starts 1 s after that rally's tap at the earliest). A mark
+  may carry its own start, end (from 30 s before to 5 s after the tap, at
+  least 1 s long) and speed (×0.5, ×0.75, ×1): the newest mark of a point wins.
+- **R-REP-4 In match.json.** `match.json` carries the marks in `events` and a
+  derived `replays` list: each marked point's window on the log's clock and on
+  the recording (segment, ms from its first frame). Each segment records the
+  camera time of its first composited frame, the file's t = 0 (`firstFrameAt`),
+  and event times on the recording count from it. *Accept:* a match with no
+  mark exports exactly as before (no `replays`); the scoreboard's own export
+  lists the marks without a place on a video.
+- **R-REP-5 Later slices.** The post-match pass that inserts the replays and
+  burns the stats of tags added after the match, and the Studio screen to tag
+  while watching and adjust each shot, follow in their own PRs
+  (data/badminton-replay-research/report.md section 11).
 
 ### Export (R-EXP)
 

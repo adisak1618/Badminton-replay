@@ -1,7 +1,21 @@
 // match.json, the export bundle's log (technical-design.md §8; R-EXP-1, R-BURN-1): config, every event with
 // its time on the recording, the derived state after it, and which team was on the camera's left. With point
-// reasons on (D15) also `stats`, derived from the tags in `events` like `after` is from the points.
-import { matchStats, other, reasonsOn, reduce, type MatchConfig, type MatchEvent, type MatchState, type MatchStats, type Team } from '../engine';
+// reasons on (D15) also `stats`, derived from the tags in `events` like `after` is from the points; with replay
+// marks (D16) also `replays`, each window on the log's clock and on the recording.
+import {
+  matchStats,
+  other,
+  rallies,
+  reasonsOn,
+  reduce,
+  replayWindows,
+  type MatchConfig,
+  type MatchEvent,
+  type MatchState,
+  type MatchStats,
+  type ReplayWindow,
+  type Team,
+} from '../engine';
 import type { ClockEstimate, PeerInfo } from '../link/source';
 import type { MirrorLog, RecordingMeta } from './meta';
 import type { Segment } from './session';
@@ -27,7 +41,12 @@ export interface MatchBundle {
   result: { winner: Team | null; games: Record<Team, number>; completed: Array<Record<Team, number>> };
   /** D15: why points were won, per game and for the match; absent when the match did not ask. */
   stats?: MatchStats;
+  /** D16: the points marked for a replay, in rally order; absent when none was. */
+  replays?: BundleReplay[];
 }
+
+/** A replay's window (engine/replays.ts) and where it falls in the recording: segment and ms from its start. */
+export type BundleReplay = ReplayWindow & { rec: { segment: number; fromMs: number; toMs: number } | null };
 
 /** The segment recording at camera time `t`, if any. */
 export function segmentAt(segments: readonly Segment[], t: number): Segment | null {
@@ -35,11 +54,32 @@ export function segmentAt(segments: readonly Segment[], t: number): Segment | nu
   return null;
 }
 
-/** §8: tRec.ms = (event.at + clock.offsetMs) − segment.startedAt − segment.startLatencyMs. */
+/** Camera time of the segment file's t = 0: its first composited frame (D16), else the recorder's start + A8 latency. */
+export const segmentZero = (seg: Segment): number => seg.firstFrameAt ?? seg.startedAt + seg.startLatencyMs;
+
+/** §8: tRec.ms = (event.at + clock.offsetMs) − the segment's t = 0 (`segmentZero`). */
 export function tRecFor(at: number, offsetMs: number, segments: readonly Segment[]): { segment: number; ms: number } | null {
   const t = at + offsetMs;
   const seg = segmentAt(segments, t);
-  return seg ? { segment: seg.index, ms: Math.round(t - seg.startedAt - seg.startLatencyMs) } : null;
+  return seg ? { segment: seg.index, ms: Math.round(t - segmentZero(seg)) } : null;
+}
+
+/**
+ * Where a replay window falls in the recording: the segment recording at its end (the point's moments before the tap),
+ * its start clamped to that segment's t = 0 when the window began before the recording did; null when nothing was
+ * recording then.
+ */
+export function replayRec(w: ReplayWindow, offsetMs: number, segments: readonly Segment[]): BundleReplay['rec'] {
+  const seg = segmentAt(segments, w.to + offsetMs);
+  if (!seg) return null;
+  const zero = segmentZero(seg);
+  return { segment: seg.index, fromMs: Math.max(0, Math.round(w.from + offsetMs - zero)), toMs: Math.round(w.to + offsetMs - zero) };
+}
+
+/** The `replays` field: present only when some point is marked. */
+function replaysOf(cfg: MatchConfig, events: readonly MatchEvent[], rec: ((w: ReplayWindow) => BundleReplay['rec']) | null): Pick<MatchBundle, 'replays'> {
+  const ws = replayWindows(rallies(cfg, events));
+  return ws.length ? { replays: ws.map((w) => ({ ...w, rec: rec ? rec(w) : null })) } : {};
 }
 
 /** Mirroring in force at camera time `t`: the segment recording then, else the latest one started before, else the first. */
@@ -78,6 +118,7 @@ export function buildBundle(input: { meta: RecordingMeta; log: MirrorLog | null;
   const final = cfg && log ? reduce(cfg, log.events) : null;
   const scoreboard = meta.scoreboard ?? { id: log?.events[0]?.by ?? 'unknown', ua: '' };
   const stats = cfg && log && reasonsOn(cfg) ? { stats: matchStats(cfg, log.events) } : {};
+  const replays = cfg && log ? replaysOf(cfg, log.events, (w) => replayRec(w, clock.offsetMs, meta.segments)) : {};
   return {
     format: 'badminton-scoreboard/match',
     version: 1,
@@ -93,6 +134,7 @@ export function buildBundle(input: { meta: RecordingMeta; log: MirrorLog | null;
       ? { winner: final.winner, games: final.games, completed: final.completed }
       : { winner: null, games: { A: 0, B: 0 }, completed: [] },
     ...stats,
+    ...replays,
   };
 }
 
@@ -118,5 +160,6 @@ export function buildLogBundle(input: { matchId: string; config: MatchConfig; ev
     events,
     result: { winner: final.winner, games: final.games, completed: final.completed },
     ...(reasonsOn(cfg) ? { stats: matchStats(cfg, log) } : {}),
+    ...replaysOf(cfg, log, null),
   };
 }
