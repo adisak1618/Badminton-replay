@@ -338,7 +338,8 @@ const TURN_CONTAINER = `pairing-e2e-turn-${PORT}`;
 /**
  * coturn on TURN_PORT (UDP and TCP), long-term credentials, relaying on the container's address. (Relaying on
  * its loopback with --allow-loopback-peers left the first connection of each pairing without a single check
- * delivered; the camera's second one, 10 s later, worked.)
+ * delivered; the camera's second one, 10 s later, worked.) Every page with credentials allocates relay ports, so
+ * the range is wide: 41 ports ran out before the last relay step once the pairing steps grew.
  */
 function startCoturn(): void {
   execFileSync('docker', [
@@ -346,7 +347,7 @@ function startCoturn(): void {
     '-p', `127.0.0.1:${TURN_PORT}:3478/udp`, '-p', `127.0.0.1:${TURN_PORT}:3478/tcp`,
     'coturn/coturn:4.7.0',
     '-n', '--log-file=stdout', '--fingerprint', '--lt-cred-mech', '--realm=e2e', `--user=${TURN_USER}:${TURN_PASS}`,
-    '--listening-port=3478', '--min-port=49160', '--max-port=49200',
+    '--listening-port=3478', '--min-port=49160', '--max-port=49660',
     '--no-tls', '--no-dtls', '--no-cli',
   ], { stdio: ['ignore', 'pipe', 'pipe'] });
 }
