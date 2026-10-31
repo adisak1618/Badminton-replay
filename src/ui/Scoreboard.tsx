@@ -1,8 +1,10 @@
 // S3 scoreboard: two tap zones, top bar, Undo band, and the S3a-S3c overlays, S4 correction and S5 menu. With
 // point reasons on (D15): the why-was-this-point-won popup after a tap that counted on this phone (S3d), the
 // rally list to tag later (S3e), and the stats card at game over and match over. Always (D16): "☆ Replay" after each
-// point, in the popup or on its own for a few seconds, and the rally list's stars.
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent } from 'react';
+// point, in the popup or on its own for a few seconds, and the rally list's stars. Scoring a saved video (D17): the
+// player pane beside the board (`video`), a compact board, the match's times on the video's clock, the player pausing
+// for the popup, and keyboard shortcuts.
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import {
   matchStats,
   other,
@@ -40,6 +42,7 @@ import { RallyList } from './reasons/RallyList';
 import { StatsCard, type SummaryControl } from './reasons/StatsCard';
 import { TagSheet } from './reasons/TagSheet';
 import { ReplayPill } from './ReplayPill';
+import { isVideoAction, keyAction, typingIn, type VideoAction } from '../video/keys';
 
 const REDO_WINDOW_MS = 5000;
 /** After a tap that counted, the popup rises once the flash and the new score have shown (D15). */
@@ -53,6 +56,22 @@ const REPLAY_PILL_MS = 8000;
 const NO_RALLIES: Rally[] = [];
 const SHUTTLE = '\u{1F3F8}';
 
+/** D17: the board beside a saved video being scored (video/VideoBoard.tsx). */
+export interface VideoMode {
+  /** The player: beside the board in landscape, above it in portrait; the board's overlays never cover it. */
+  pane: ReactNode;
+  /** The log's clock on the video: the match's own times (interval countdown, elapsed play) run on it. */
+  clock: () => number;
+  /** The file is open: taps and score keys count only then. */
+  ready: boolean;
+  /** The why-was-this-point-won popup opened or closed (the player pauses for it). */
+  onPopup: (open: boolean) => void;
+  /** A key for the player: play, seek, speed, sound, the shortcut list. */
+  onKey: (a: VideoAction) => void;
+  /** The menu's rows for the video (they replace the camera rows). */
+  menuRows: (row: string, close: () => void) => ReactNode;
+}
+
 interface Props {
   store: MatchStore;
   config: MatchConfig;
@@ -65,9 +84,10 @@ interface Props {
   onNewMatch: () => void;
   onUpdate: (() => void) | null;
   onPair: () => void;
+  video?: VideoMode;
 }
 
-export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, resumed, onContinue, onNewMatch, onUpdate, onPair }: Props) {
+export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, resumed, onContinue, onNewMatch, onUpdate, onPair, video }: Props) {
   const camera = useCameraLink();
   const wakeLine = wakeHint(useSyncExternalStore(subscribeWake, wakeStatus));
   const [sheet, setSheet] = useState<'none' | 'menu' | 'correct'>('none');
@@ -76,6 +96,8 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
   const recognizer = useRef(new GestureRecognizer());
   const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
   const now = useNow(500);
+  // The match's own clock: the wall clock live, the video's time on the log's clock when scoring a video (D17).
+  const t = video ? video.clock() : now;
 
   // ---- point reasons (D15) ----
   const reasons = reasonsOn(config);
@@ -139,7 +161,7 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
   const L = s.leftTeam;
   const R = other(L);
   const teamOf = (z: Zone): Team => (z === 'left' ? L : R);
-  const matchStart = events[0]?.at ?? now;
+  const matchStart = events[0]?.at ?? t;
   const live = s.phase === 'playing' || s.phase === 'interval';
   const redoVisible = undoAt > 0 && now - undoAt < REDO_WINDOW_MS && store.canRedo();
 
@@ -161,7 +183,7 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
 
   // The mid-game interval closes by itself when its countdown ends (S3a).
   useEffect(() => {
-    if (s.phase !== 'interval' || s.phaseSince == null) return;
+    if (video || s.phase !== 'interval' || s.phaseSince == null) return;
     const since = s.phaseSince;
     const left = since + config.intervalMs.midGame - Date.now();
     const id = setTimeout(() => {
@@ -170,6 +192,11 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
     }, Math.max(0, left));
     return () => clearTimeout(id);
   }, [s.phase, s.phaseSince, config.intervalMs.midGame, store, prefs]);
+  // Scoring a video, the countdown is the video's: it closes once the video has played on past it (D17).
+  useEffect(() => {
+    if (!video || s.phase !== 'interval' || s.phaseSince == null || t < s.phaseSince + config.intervalMs.midGame) return;
+    announce(store.emit({ type: 'interval.end' }), prefs);
+  }, [video ? t : 0, s.phase, s.phaseSince]);
 
   const undo = () => {
     clearTimeout(openTimer.current);
@@ -209,20 +236,68 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
   const onUp = (e: ReactPointerEvent) => {
     clearTimer(e.pointerId);
     const g = recognizer.current.up(e.pointerId, e.clientX, e.clientY, performance.now());
-    if (!g || resumed) return;
+    if (!g || resumed || (video && !video.ready)) return;
     if (g.kind === 'swipeDown') return undo();
-    if (g.kind === 'point' && s.phase === 'playing') {
-      setFlash({ zone: g.zone, key: Date.now() });
-      setUndoAt(0);
-      const c = emit({ type: 'point', team: teamOf(g.zone) });
-      // The popup opens on the phone whose tap counted (a duplicate returns no change).
-      if (c?.event.type === 'point' && reasons && prefs.askReasons) {
-        const id = c.event.id;
-        clearTimeout(openTimer.current);
-        openTimer.current = setTimeout(() => setTagging({ id, live: true }), TAG_OPEN_DELAY_MS);
-      }
+    if (g.kind === 'point' && s.phase === 'playing') score(g.zone);
+  };
+  const score = (zone: Zone) => {
+    setFlash({ zone, key: Date.now() });
+    setUndoAt(0);
+    const c = emit({ type: 'point', team: teamOf(zone) });
+    // The popup opens on the phone whose tap counted (a duplicate returns no change).
+    if (c?.event.type === 'point' && reasons && prefs.askReasons) {
+      const id = c.event.id;
+      clearTimeout(openTimer.current);
+      openTimer.current = setTimeout(() => setTagging({ id, live: true }), TAG_OPEN_DELAY_MS);
     }
   };
+
+  // ---- scoring a saved video (D17) ----
+  const popupOpen = !!(tagging && tagRally);
+  const onPopup = useRef(video?.onPopup);
+  onPopup.current = video?.onPopup;
+  useEffect(() => {
+    onPopup.current?.(popupOpen);
+  }, [popupOpen]);
+  // Keys (R-VID-4): the player's always work; the score keys do what a tap would, never under a sheet or the list.
+  const onKey = useRef<(e: KeyboardEvent) => void>(undefined);
+  onKey.current = (e: KeyboardEvent) => {
+    if (!video || typingIn(e.target)) return;
+    const a = keyAction(e);
+    if (!a) return;
+    e.preventDefault();
+    if (isVideoAction(a)) return video.onKey(a);
+    if (sheet !== 'none' || listOpen || resumed || !video.ready) return;
+    const last = all[all.length - 1];
+    switch (a) {
+      case 'left':
+      case 'right':
+        // A key scores during the interval too (the break on the video is often shorter than the countdown).
+        if (!tagging && (s.phase === 'playing' || s.phase === 'interval')) score(a);
+        return;
+      case 'undo':
+        setTagging(null);
+        return undo();
+      case 'redo':
+        if (!tagging && store.canRedo()) redo();
+        return;
+      case 'replay':
+        if (last) toggleReplay(last);
+        return;
+      case 'tag':
+        if (reasons && last && !tagging) setTagging({ id: last.id, live: false });
+        return;
+      case 'ends':
+        if (!tagging) emit({ type: 'sides.swap' });
+        return;
+    }
+  };
+  useEffect(() => {
+    if (!video) return;
+    const h = (e: KeyboardEvent) => onKey.current?.(e);
+    addEventListener('keydown', h);
+    return () => removeEventListener('keydown', h);
+  }, [!!video]);
   const onCancel = (e: ReactPointerEvent) => {
     clearTimer(e.pointerId);
     recognizer.current.cancel(e.pointerId);
@@ -255,14 +330,17 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
 
   return (
     <main className="relative flex h-full flex-col bg-bg">
-      {/* Portrait: the "rotate" screen replaces the board; the match state is kept (R-DISP-7). */}
-      <div className="fixed inset-0 z-50 hidden flex-col items-center justify-center gap-3 bg-bg p-6 text-center portrait:flex">
-        <div className="text-5xl">⟲</div>
-        <div className="text-2xl font-semibold">Rotate your phone to landscape</div>
-        <div className="text-mut">
-          {config.teams[L].name} {s.score[L]} – {s.score[R]} {config.teams[R].name} · game {s.game}
+      {/* Portrait: the "rotate" screen replaces the board; the match state is kept (R-DISP-7). Not when scoring a
+          video: the player stacks above the board instead (D17). */}
+      {!video && (
+        <div className="fixed inset-0 z-50 hidden flex-col items-center justify-center gap-3 bg-bg p-6 text-center portrait:flex">
+          <div className="text-5xl">⟲</div>
+          <div className="text-2xl font-semibold">Rotate your phone to landscape</div>
+          <div className="text-mut">
+            {config.teams[L].name} {s.score[L]} – {s.score[R]} {config.teams[R].name} · game {s.game}
+          </div>
         </div>
-      </div>
+      )}
 
       <header className="pad-safe-x flex h-14 shrink-0 items-center justify-between gap-3 border-b border-line text-sm text-mut">
         <span className="flex min-w-0 items-center gap-3">
@@ -273,7 +351,7 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
         </span>
         <span className="flex shrink-0 items-center gap-2">
           {resumed && (
-            <button className="btn btn-pri min-h-10 rounded-full px-4 text-sm" onClick={continueResumed}>
+            <button className={`btn btn-pri min-h-10 rounded-full px-4 text-sm ${video ? 'hidden' : ''}`} onClick={continueResumed}>
               Match resumed · tap anywhere to continue
             </button>
           )}
@@ -285,12 +363,15 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
               🏷 {untaggedCount} untagged
             </button>
           )}
-          <CameraStatus onPair={onPair} />
-          <span className="rounded-full bg-pan2 px-3 py-1 tabular-nums">{elapsed(now - matchStart)}</span>
+          {!video && <CameraStatus onPair={onPair} />}
+          <span className="rounded-full bg-pan2 px-3 py-1 tabular-nums" title={video ? 'play time on the video since the match started' : undefined}>
+            {elapsed(t - matchStart)}
+          </span>
         </span>
       </header>
 
-      <div className="pad-safe-bottom relative flex min-h-0 flex-1">
+      <VideoSplit pane={video?.pane}>
+      <div className={`pad-safe-bottom relative flex min-h-0 flex-1 ${video ? 'min-w-0' : ''}`}>
         {(['left', 'right'] as const).map((zone) => (
           <TeamZone
             key={`${zone}-${teamOf(zone)}`}
@@ -300,6 +381,7 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
             s={s}
             flashKey={flash?.zone === zone ? flash.key : null}
             handlers={zoneHandlers(zone)}
+            compact={!!video}
           />
         ))}
         <div className="pointer-events-none absolute top-0 bottom-0 left-1/2 w-px bg-line" />
@@ -440,7 +522,14 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
             {wakeLine}
           </div>
         )}
+        {video && !video.ready && (
+          // D17: nothing counts until the file is open again (the player says how).
+          <div className="absolute inset-0 z-[29] flex items-center justify-center bg-bg/70 p-4 text-center text-lg font-semibold text-mut" data-testid="video-closed">
+            Open the video first
+          </div>
+        )}
       </div>
+      </VideoSplit>
 
       {sheet === 'menu' && (
         <Menu
@@ -465,6 +554,7 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
             onPair();
           }}
           reasons={reasons}
+          videoRows={video ? (row) => video.menuRows(row, () => setSheet('none')) : undefined}
           onRallyList={() => {
             setSheet('none');
             setListOpen(true);
@@ -498,6 +588,7 @@ function TeamZone({
   s,
   flashKey,
   handlers,
+  compact = false,
 }: {
   zone: Zone;
   team: Team;
@@ -505,6 +596,8 @@ function TeamZone({
   s: MatchState;
   flashKey: number | null;
   handlers: Record<string, unknown>;
+  /** D17: beside a video the board has a fraction of the screen; type and court boxes scale to the zone. */
+  compact?: boolean;
 }) {
   const color = config.teams[team].color;
   const serving = s.server === team;
@@ -514,21 +607,27 @@ function TeamZone({
       {...handlers}
       data-zone={zone}
       data-team={team}
-      className={`zone swap-in relative flex min-w-0 flex-1 flex-col items-center justify-center overflow-hidden ${zone === 'left' ? 'zone-left' : 'zone-right'}`}
+      className={`zone swap-in relative flex min-w-0 flex-1 flex-col items-center justify-center overflow-hidden ${zone === 'left' ? 'zone-left' : 'zone-right'} ${compact ? '[container-type:size]' : ''}`}
       style={{ background: `${color}14` }}
     >
       {flashKey !== null && <div key={flashKey} className="flash-layer pointer-events-none absolute inset-0" style={{ background: color }} />}
-      <div className="relative flex flex-col items-center">
-        <div className="max-w-full truncate px-2 text-[30px] leading-tight font-bold tracking-wide" style={{ color }}>
+      <div className={`relative flex flex-col items-center ${compact ? 'w-full' : ''}`}>
+        <div className={`max-w-full truncate px-2 leading-tight font-bold tracking-wide ${compact ? 'text-[min(22px,9cqw)]' : 'text-[30px]'}`} style={{ color }}>
           {config.teams[team].name}
           {serving && <span aria-label="serving"> {SHUTTLE}</span>}
         </div>
-        <div key={s.score[team]} className="digits pop" style={{ color }} data-testid={`score-${team}`}>
+        <div key={s.score[team]} className={`digits pop ${compact ? 'digits-compact' : ''}`} style={{ color }} data-testid={`score-${team}`}>
           {s.score[team]}
         </div>
-        <div className="h-[26px] text-lg font-bold tracking-[2px] text-amber">{flag}</div>
-        <Courts team={team} config={config} s={s} />
+        <div className={`font-bold text-amber ${compact ? 'h-5 text-[13px] tracking-[1px]' : 'h-[26px] text-lg tracking-[2px]'}`}>{flag}</div>
+        <Courts team={team} config={config} s={s} compact={compact} />
       </div>
+      {compact && (
+        // The key that scores for this side (R-VID-4), on computers only.
+        <kbd className="absolute bottom-2 hidden rounded-md border border-line bg-pan px-2 py-0.5 font-mono text-[13px] text-mut [@media(hover:hover)_and_(pointer:fine)]:block" aria-hidden>
+          {zone === 'left' ? 'A' : 'B'}
+        </kbd>
+      )}
     </div>
   );
 }
@@ -537,14 +636,14 @@ function TeamZone({
  * R-DISP-4: the team's two service courts side by side, left court on the left and right court on the right,
  * each with its player's name; the server's box carries the shuttle and the receiver's says "receives".
  */
-function Courts({ team, config, s }: { team: Team; config: MatchConfig; s: MatchState }) {
+function Courts({ team, config, s, compact = false }: { team: Team; config: MatchConfig; s: MatchState; compact?: boolean }) {
   const color = config.teams[team].color;
   const serving = s.server === team;
   const court = servingCourt(s);
   if (!s.doubles)
     return (
       <div
-        className={`mt-1 rounded-lg border px-3 py-1.5 text-lg ${serving ? 'border-current font-semibold' : 'border-dashed border-line text-[#cbd2dc]'}`}
+        className={`mt-1 rounded-lg border px-3 py-1.5 ${compact ? 'text-[min(18px,7cqw)]' : 'text-lg'} ${serving ? 'border-current font-semibold' : 'border-dashed border-line text-[#cbd2dc]'}`}
         style={serving ? { color } : undefined}
       >
         {serving ? `serves from ${court} ${SHUTTLE}` : `receives in ${court}`}
@@ -553,7 +652,7 @@ function Courts({ team, config, s }: { team: Team; config: MatchConfig; s: Match
   const rcv = receiverIdx(s);
   const order: Court[] = ['left', 'right'];
   return (
-    <div className="mt-1 flex gap-2" data-testid={`courts-${team}`}>
+    <div className={`mt-1 flex ${compact ? 'w-[94%] gap-1.5' : 'gap-2'}`} data-testid={`courts-${team}`}>
       {order.map((c) => {
         const idx = s.pos[team][c];
         const isServer = serving && s.serverIdx === idx;
@@ -562,22 +661,38 @@ function Courts({ team, config, s }: { team: Team; config: MatchConfig; s: Match
           <div
             key={c}
             data-court={c}
-            className={`flex w-[164px] min-w-0 flex-col rounded-lg border px-2.5 py-1 ${
+            className={`flex min-w-0 flex-col rounded-lg border py-1 ${compact ? 'flex-1 px-1.5' : 'w-[164px] px-2.5'} ${
               isServer ? 'border-2 border-current' : isReceiver ? 'border-2 border-dashed border-[#8a94a6]' : 'border-line'
             }`}
             style={isServer ? { color } : undefined}
           >
-            <span className="flex h-[18px] items-center justify-between text-[12px] font-semibold tracking-wide text-mut uppercase">
+            <span className={`flex h-[18px] items-center justify-between font-semibold tracking-wide text-mut uppercase ${compact ? 'text-[10px]' : 'text-[12px]'}`}>
               <span>{c}</span>
               {isServer && <span className="text-base normal-case">{SHUTTLE}</span>}
-              {isReceiver && <span className="text-[#e6eaf0] normal-case">receives</span>}
+              {isReceiver && <span className="text-[#e6eaf0] normal-case">{compact ? 'recv' : 'receives'}</span>}
             </span>
-            <span className={`truncate text-[22px] leading-tight font-semibold ${isServer ? 'text-fg' : isReceiver ? 'text-[#e6eaf0]' : 'text-mut'}`}>
+            <span className={`truncate leading-tight font-semibold ${compact ? 'text-[min(18px,6cqw)]' : 'text-[22px]'} ${isServer ? 'text-fg' : isReceiver ? 'text-[#e6eaf0]' : 'text-mut'}`}>
               {playerName(config, team, idx)}
             </span>
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * D17: the player beside the board in landscape (about 56 %), above it in portrait. Without a video the board is the
+ * whole body, as before. The overlays, popup and rally list live in the board, so they never cover the player.
+ */
+function VideoSplit({ pane, children }: { pane: ReactNode; children: ReactNode }) {
+  if (!pane) return <>{children}</>;
+  return (
+    <div className="flex min-h-0 flex-1 portrait:flex-col">
+      <div className="pad-safe-bottom flex min-h-0 shrink-0 flex-col border-line landscape:w-[56%] landscape:border-r portrait:border-b" data-testid="video-pane">
+        {pane}
+      </div>
+      {children}
     </div>
   );
 }

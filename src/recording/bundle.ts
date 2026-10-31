@@ -1,7 +1,8 @@
 // match.json, the export bundle's log (technical-design.md §8; R-EXP-1, R-BURN-1): config, every event with
 // its time on the recording, the derived state after it, and which team was on the camera's left. With point
 // reasons on (D15) also `stats`, derived from the tags in `events` like `after` is from the points; with replay
-// marks (D16) also `replays`, each window on the log's clock and on the recording.
+// marks (D16) also `replays`, each window on the log's clock and on the recording. A match scored from a saved video
+// (D17) goes through the same code with that file as its one segment, marked `recording.source: 'imported'`.
 import {
   matchStats,
   other,
@@ -36,7 +37,13 @@ export interface MatchBundle {
   config: MatchConfig | null;
   devices: { scoreboard: PeerInfo; camera?: PeerInfo };
   clock?: ClockEstimate;
-  recording?: { segments: Segment[] };
+  recording?: {
+    segments: Segment[];
+    /** D17: the video was not recorded by the app but picked from a file and scored; absent for a recording. */
+    source?: 'imported';
+    /** D17, imported only: the match's tap offset at export (ms taken off the video time of the taps after it was set). */
+    tapOffsetMs?: number;
+  };
   events: BundleEvent[];
   result: { winner: Team | null; games: Record<Team, number>; completed: Array<Record<Team, number>> };
   /** D15: why points were won, per game and for the match; absent when the match did not ask. */
@@ -97,10 +104,14 @@ export function bundleName(createdAt: number): string {
 
 export const exportFileName = (createdAt: number, file: string): string => `${bundleName(createdAt)}-${file}`;
 
-export function buildBundle(input: { meta: RecordingMeta; log: MirrorLog | null; app: string; now: number }): MatchBundle {
-  const { meta, log, app, now } = input;
+/**
+ * match.json for a recording, or (D17, `imported`) for a saved video scored in the app: then the segment keeps the
+ * file's own name, there is no camera, and `recording` says where the video came from.
+ */
+export function buildBundle(input: { meta: RecordingMeta; log: MirrorLog | null; app: string; now: number; imported?: { tapOffsetMs: number } }): MatchBundle {
+  const { meta, log, app, now, imported } = input;
   const clock = meta.clock ?? { offsetMs: 0, samples: 0, medianRttMs: 0 };
-  const segments = meta.segments.map((s) => ({ ...s, file: exportFileName(meta.createdAt, s.file) }));
+  const segments = imported ? meta.segments.map((s) => ({ ...s })) : meta.segments.map((s) => ({ ...s, file: exportFileName(meta.createdAt, s.file) }));
   const cfg = log?.config ?? null;
   const events: MatchBundle['events'] = [];
   if (log && cfg)
@@ -126,9 +137,9 @@ export function buildBundle(input: { meta: RecordingMeta; log: MirrorLog | null;
     createdAt: now,
     app,
     config: cfg,
-    devices: { scoreboard, camera: meta.camera },
+    devices: imported ? { scoreboard } : { scoreboard, camera: meta.camera },
     clock,
-    recording: { segments },
+    recording: imported ? { source: 'imported', tapOffsetMs: imported.tapOffsetMs, segments } : { segments },
     events,
     result: final
       ? { winner: final.winner, games: final.games, completed: final.completed }
