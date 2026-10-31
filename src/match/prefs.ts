@@ -17,6 +17,10 @@ export interface Prefs {
   askReasons: boolean;
   /** Seconds before an untagged popup closes by itself; 0 = never. */
   tagCloseS: TagCloseS;
+  /** D17: pause a video being scored while the why-was-this-point-won popup is open, play on when it closes. */
+  videoAutoPause: boolean;
+  /** D17: the video being scored plays without sound. */
+  videoMuted: boolean;
 }
 
 export const TAG_CLOSE_OPTIONS = [4, 6, 10, 0] as const;
@@ -60,7 +64,7 @@ export function loadLastSetup(): MatchSetup | null {
 }
 export const saveLastSetup = (s: MatchSetup) => write(KEYS.setup, s);
 
-export const DEFAULT_PREFS: Prefs = { sound: true, voice: true, lang: 'en', askReasons: true, tagCloseS: 6 };
+export const DEFAULT_PREFS: Prefs = { sound: true, voice: true, lang: 'en', askReasons: true, tagCloseS: 6, videoAutoPause: true, videoMuted: true };
 export function loadPrefs(): Prefs {
   const p = { ...DEFAULT_PREFS, ...read<Partial<Prefs>>(KEYS.prefs) };
   if (!(TAG_CLOSE_OPTIONS as readonly unknown[]).includes(p.tagCloseS)) p.tagCloseS = DEFAULT_PREFS.tagCloseS;

@@ -22,6 +22,8 @@ app, from 6 m away or with one glance at the net post.
 | S3c | scoreboard | Match over overlay | R-SCORE-2 |
 | S3d | scoreboard | Why was this point won (popup) | R-TAG-2, R-TAG-3 |
 | S3e | scoreboard | Rally list (tag later) | R-TAG-4 |
+| S3v | scoreboard | Scoring a saved video: the board with a player (D17) | R-VID-2 to R-VID-4 |
+| S3v-r | scoreboard | Open the video again after a reload | R-VID-5 |
 | S4 | scoreboard | Correction sheet | R-SCORE-7 |
 | S5 | scoreboard | Menu | R-SCORE-7, R-PAIR-6 |
 | C1 | camera | Camera setup | R-SETUP-4, R-REC-3, R-REC-4 |
@@ -36,17 +38,23 @@ app, from 6 m away or with one glance at the net post.
 +---------------------------------------------------------------+
 |                    badminton-scoreboard                       |
 |                                                               |
-|   +-----------------------+     +-----------------------+     |
-|   |      SCOREBOARD       |     |        CAMERA         |     |
-|   |  at the net post      |     |  at the back corner   |     |
-|   +-----------------------+     +-----------------------+     |
+|  +---------------+   +---------------+   +---------------+    |
+|  |  SCOREBOARD   |   |    CAMERA     |   |     VIDEO     |    |
+|  |at the net post|   | at the back   |   | score a saved |    |
+|  |               |   |    corner     |   |     video     |    |
+|  +---------------+   +---------------+   +---------------+    |
 |                                                               |
 |   Last time: Scoreboard                     Recordings (2) >  |
 +---------------------------------------------------------------+
 ```
 
-Two buttons, each half the screen. The previous role is highlighted. The
-"Recordings" link opens C4 on any phone that holds recordings.
+Three cards side by side (stacked in portrait). The previous role is
+highlighted. The "Recordings" link opens C4 on any phone that holds
+recordings. VIDEO (D17, R-VID-1) opens the file picker from its own tap
+(Photo Library or Files on the iPhone, the file picker on a Mac); a picked
+file goes to S1, whose title names it and which has no pairing chip. Picking
+does not change the remembered role. On a computer the browser note adds that
+scoring a saved video works there too.
 
 ### S1 Match setup (scoreboard)
 
@@ -280,6 +288,68 @@ they forced), A (assists, doubles), FE and UE (errors they made); per team
 longest run, points won on serve and the time. Match over offers each game
 and the whole match. Both scoreboards show the same card.
 
+### S3v Scoring a saved video (D17)
+
+```
+Landscape (Mac window, iPhone sideways)
++------------------------------------------------------------------------------+
+| ⋯  Game 1 · JOM+SAX 0–0 GOLF+NAN · best of 3          🏷 2 untagged   12:41  |
++-------------------------------------------+----------------------------------+
+|                                           |   JOM+SAX 🏸   |   GOLF+NAN       |
+|              <video>                      |      14        |      12          |
+|                                           |  L JOM | R SAX |  L NAN | R GOLF  |
+| ━━━━━|━━|━|━━━━★━━━●━━━━━━━  18:07/41:23 🔇|        [A]  ( ↶ )  [B]         |
+| ▶  ◀5 ◀1 1▶ 5▶  [0.5× 1× 2×]  Keys ?      |                                  |
++-------------------------------------------+----------------------------------+
+Portrait (iPhone upright): the player full width on top, the board below.
+```
+
+- The player is outside the board: the interval, game-over and match-over
+  overlays, the popup (S3d) and the rally list (S3e) cover the board only, so
+  the video can be rewound while the popup asks who hit the last shot, or
+  skipped through a break while the interval shows. The menu and the
+  correction sheet cover everything.
+- Player: the video (a tap plays or pauses), a seek bar with the time and the
+  duration, one tick per counted point at its place in the winner's colour and
+  ★ over a point marked for a replay, the sound button (muted by default), then
+  play/pause, back and forward 5 s and 1 s, speed 0.5× / 1× / 2×, and on a
+  computer "Keys ?" for the shortcut list. Buttons carry their key in the
+  tooltip.
+- Board: S3 at a smaller size (digits, names and court boxes scale to the
+  zone), the same tap zones, gestures, Undo disc, overlays and popup. On a
+  computer an `A` and a `B` keycap sit at the bottom of the left and right
+  zones. The top bar has no camera chip; its time is the play time on the video
+  since the match started.
+- The popup pauses the video and it plays on when the popup closes, if it was
+  playing (menu setting, on by default). The interval closes by itself once
+  the video has played past its countdown; a point closes it too.
+- Keys (R-VID-4): Space or K play/pause, ← / → 5 s, Shift+← / → 1 s, 1 / 2 / 3
+  speed, M sound, A left team's point, B or L right team's point, U undo,
+  Shift+U redo, R replay mark on the last point, T the popup for the last
+  point, E swap ends, ? the list. Score keys do nothing while a popup, list or
+  sheet is open; player keys always work.
+
+- Seeking back (R-VID-8): when the video stands before the latest change of
+  the score, the zones and the top bar show the match at that moment (score,
+  serve, courts, game) with an amber frame round the board and a banner at its
+  top: "Score at 12:03 on the video · Latest ▸". The interval, game-over and
+  match-over overlays of the latest state are hidden meanwhile. A tap or a
+  score key there is refused and the banner reads "Go back to the latest to
+  change the score"; "Latest ▸" seeks to just after the latest change, and
+  playing on past it gets there too. Undo, the popup, the rally list and replay
+  marks work as usual.
+
+### S3v-r Open the video again (D17)
+
+After a reload or a crash the board comes back with the player saying "Open
+the video again to carry on", the file's name, size and where it was, and
+"Open video…" (a file picker). The board is dimmed with "Open the video first"
+and counts nothing until the file is open. The same name and size: the video
+opens at the saved place, paused. Another name or size: "This is not the file
+the match was scored on", both files named, with "Use it anyway" (the match
+takes the new file's name and size) and "Pick another". A file the browser
+cannot play says so, with the same button.
+
 ### S4 Correction sheet
 
 ```
@@ -309,6 +379,11 @@ replays" with point reasons on); with point reasons on also "Ask why after
 each point (this phone)" and
 "Untagged popup hides after". Each item is a full-height row, at least 56 px. Paired, New match leaves the camera's match running for the
 other scoreboard until a new one starts.
+
+Scoring a saved video (D17), the camera and pairing rows and Pairing
+diagnostics give way to: "Tap offset: N ms" with − and + (100 ms steps, 0 to
+2000), "Pause the video while the popup is open: on/off", "Open a different
+file…" (the S3v-r check) and "Keyboard shortcuts". New match goes back to S0.
 
 The camera's `⋯` menu: Pair with the scoreboard… (none linked), Pair another
 scoreboard… (one linked), Unpair the scoreboard, or each one and "Unpair both

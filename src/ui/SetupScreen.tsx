@@ -114,11 +114,14 @@ export function SetupScreen({
   onStart,
   onUpdate,
   onPair,
+  video,
 }: {
   onBack: () => void;
   onStart: (s: MatchSetup) => void;
   onUpdate: (() => void) | null;
   onPair: () => void;
+  /** D17: the name of the video this match will be scored from; no pairing then. */
+  video?: string;
 }) {
   const [last] = useState(loadLastSetup);
   const [setup, setSetup] = useState<MatchSetup>(() => last ?? DEFAULT_SETUP);
@@ -131,8 +134,10 @@ export function SetupScreen({
         <button className="btn btn-ghost" onClick={onBack} aria-label="Back">
           ‹
         </button>
-        <h1 className="flex-1 text-base font-semibold text-mut">Match setup</h1>
-        <CameraStatus onPair={onPair} />
+        <h1 className="min-w-0 flex-1 truncate text-base font-semibold text-mut">
+          Match setup{video && <span className="font-normal" data-testid="setup-video"> · video: {video}</span>}
+        </h1>
+        {!video && <CameraStatus onPair={onPair} />}
         {last && (
           <button className="btn btn-ghost" onClick={() => onStart(last)}>
             Same as last

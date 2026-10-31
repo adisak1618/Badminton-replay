@@ -120,6 +120,21 @@ of the docs assume these.
   point's score tap, half speed, BWF card-spin transition, score panel frozen
   with a REPLAY ×0.5 badge, the real sound after the point), every shot
   adjustable and any point markable later (R-REP-4, next slices).
+- **D17 Score a saved video.** Captain, 2026-10-31: "รับ project AI tracker
+  เข้ามาก่อนละกัน แต่ เรายังไม่มีไฟด์ match.json จริงๆเลย
+  การจะได้ไฟด์นั้นต้องใช้แอพที่เราทำออกไปถ่าย แต่มันอาจจะทำให้การ พัฒนาแอพช้าเกินไป
+  เราสามารถ ใช้ video ใน internet และทำ เครื่องมือให้คนกดคะแนนและสร้างไฟด์
+  match.json ได้มะ หรือเราเพิ่ม feature นี้ไปในแอพปัจจุบันเลยดี
+  คือผู้ใช้เลือกได้ว่าจะถ่ายแบบ live หรือ import file video
+  มากดให้คะแนนและเหตุผลของการได้แต้ม" and "ทำโหมดให้คะแนนจากไฟล์วิดีโอเลย" (firstmate
+  recommended the mode in this app over a separate tool). Consequence: a third
+  way in on the role screen, VIDEO, scores a video file that already exists
+  (a match from the internet, a clip on the Mac or in Photos) with the same
+  scoreboard, rules, why-was-this-point-won popup (D15) and replay marks
+  (D16), and exports the same `match.json` with every event placed on that
+  file (R-VID). It is the ground truth for the AI tracker
+  (projects/badminton-ai-tracker): the score events are its input and the D15
+  tags its held-out answer key, so both come from the same app and format.
 - The captain also asked to see a rough UI before implementation starts:
   [mockup/index.html](mockup/index.html), described in ux-design.md §6.
 
@@ -504,6 +519,77 @@ not the match asks why points were won.
   while watching and adjust each shot, follow in their own PRs
   (data/badminton-replay-research/report.md section 11).
 
+### Scoring a saved video (R-VID)
+
+D17. A match scored from a video file is a match of one phone (no pairing, no
+camera); everything else about scoring is the live match's.
+
+- **R-VID-1 Way in.** The role screen's third card, VIDEO · "score a saved
+  video", opens the system file picker from its own tap (Photo Library or
+  Files on the iPhone, the file picker on a Mac); then the usual match setup,
+  which names the file and has no pairing; then the board with the video.
+  Picking it on a paired phone unpairs it first. *Accept:* a 400 MB 1080p mp4
+  picked on the Mac in Chrome and on an iPhone in Safari reaches the setup
+  screen naming the file.
+- **R-VID-2 Player beside the board.** The video sits beside the board in
+  landscape and above it in portrait, muted until its sound button is tapped,
+  with play/pause (also a tap on the picture), a seek bar with the time and
+  the duration and a tick per point in the winner's colour (★ for a replay
+  mark), back and forward 5 s and 1 s, and speed 0.5×, 1×, 2×. The board is the
+  live board at a smaller size; the interval, game-over and match-over
+  overlays, the popup and the rally list cover the board only, so the player
+  stays usable. Taps, gestures, the popup, tag later, the stats cards, the
+  replay marks and undo/redo work exactly as live; nothing counts until the
+  file is open. *Accept:* a game scored on the Mac and on an iPhone with the
+  popup on, a replay marked and a point undone, the seek bar shows each point.
+- **R-VID-3 Times on the file.** Each event's time is where the video stood
+  when it was made, less the match's tap offset (0 by default; 0 to 2000 ms in
+  100 ms steps in the menu, for the scorer's reaction; a change applies to the
+  taps after it). The popup pauses the video and it plays on after the popup
+  if it was playing (menu setting, on by default). The interval countdown, the
+  match time in the top bar and the durations on the cards run on the video.
+  *Accept:* a point tapped with the video at 5:00.2 is at 300 200 ms on the
+  file in `match.json`; with a 300 ms offset one tapped at 6:40 is at 399 700.
+- **R-VID-4 Keyboard.** On a computer: Space or K play/pause, ← / → 5 s,
+  Shift+← / → 1 s, 1 / 2 / 3 speed, M sound, A point to the team on the left of
+  the screen and B (or L) to the one on the right, U undo and Shift+U redo, R
+  replay mark on the last point, T the popup for the last point, E swap ends,
+  ? the list (also in the menu and under the player). The score keys do what a
+  tap does and are ignored while a popup, list or sheet is open; the player
+  keys always work. *Accept:* a game scored with the keyboard alone.
+- **R-VID-5 Nothing lost on a reload.** The match is saved like a live one
+  after every change, with the file's name, size, duration, size in pixels,
+  frame rate, the tap offset and where the video was (every 3 s while
+  playing, on pause and after a seek). After a reload or a crash the board
+  comes back asking for the file again (iOS keeps no handle to a picked file)
+  and seeks to where it was; a file with another name or size is pointed out
+  with "Use it anyway" and "Pick another". *Accept:* reload mid-game, pick the
+  file again: same score and position; pick another file: the warning shows.
+- **R-VID-6 match.json.** The menu's "Export this match (match.json)" gives
+  the recording's `match.json` (version 1) with the file as its one segment
+  and `recording.source: 'imported'` (technical-design.md §8): every event's
+  `tRec` and every replay's `rec` on the file. The video is never copied.
+  *Accept:* every `tRec` matches the video time at the tap; a live match
+  exports exactly as before.
+- **R-VID-8 The score at the video's moment.** Captain, 2026-10-31, on PR
+  15: "ช่วยทำให้เวลากรอ video กลับไปกลับมา scoreboard
+  แสดงคะแนนในตอนช่วงเวลาที่ video เล่นอยู่ด้วยสิ". When the video stands before the
+  latest change of the score (sought, scrubbed or played back), the board shows
+  the match as it stood there: the events up to that time on the file, undos
+  taken from the whole log (an undone point never shows), the same rule as the
+  overlay's. A banner says "Score at m:ss on the video" with "Latest ▸", which
+  seeks to just after the latest change. From a past moment the score cannot
+  change: a tap, A / B, E, a long press, Correct score, Swap ends and End match
+  are refused with "Go back to the latest to change the score", so every score
+  event stays in order on the file; undo and redo still take back the latest
+  scoring action, and tags and replay marks still work (they name their point,
+  so their time does not matter). *Accept:* with points at 0:10 and 0:20,
+  seeking to 0:15 shows 1–0 and the banner, a tap there scores nothing, playing
+  past 0:20 shows the latest score again, and "Latest ▸" does the same at once.
+- **R-VID-7 Later.** Pairing in this mode, the camera, rendering replays from
+  the file, continuing from an existing `match.json`, Thai labels, trimming or
+  re-encoding the video, keyboard picks inside the popup.
+
 ### Export (R-EXP)
 
 - **R-EXP-1 Bundle.** An export is the composited video segment(s) plus one
@@ -538,6 +624,8 @@ not the match asks why points were won.
   before 18.4, WebKit bug 254545, fixed 2025-03-31). Not supported in v1:
   Android (untested; see roadmap.md Later), Firefox, third-party browsers on
   iOS, desktop. Unsupported browsers see a message naming the supported ones.
+  Scoring a saved video (D17) also runs in Chrome or Safari on a Mac, which
+  is where most videos to score are; the message says so.
   Per-API evidence is tabulated in technical-design.md §9.
 - **N-OFFLINE-1 Offline.** After the first visit the app loads with no
   internet (service worker caches the shell) and each role works alone.

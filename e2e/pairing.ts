@@ -29,7 +29,10 @@
 // network still connects directly; the helper forgetting a session whose link is open (the link stays); a
 // scoreboard whose relay credentials fail, both phones saying why within
 // about 20 s and offering nothing more. Every ICE restart description must carry candidates. Exits non-zero on
-// the first failure.
+// the first failure. First of all, on its own page: scoring a saved video (D17: the file picked on the role screen,
+// a key tap's place on the file in match.json, the board showing the score at an earlier moment when the video is
+// sought back and refusing to score there, a reload asking for the file and coming back to the same place, a
+// different file pointed out).
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -193,7 +196,7 @@ async function newPage(b: Browser, name: string): Promise<{ ctx: BrowserContext;
   page.on('console', (m) => m.type() === 'error' && log(`  [${name} console] ${m.text()}`));
   page.on('pageerror', (e) => log(`  [${name} pageerror] ${e.message}`));
   page.on('request', (r) => {
-    if (!r.url().startsWith(BASE)) log(`  [${name}] request leaving the origin: ${r.url()}`);
+    if (!r.url().startsWith(BASE) && !r.url().startsWith(`blob:${BASE}`)) log(`  [${name}] request leaving the origin: ${r.url()}`);
     const m = /\/api\/signal\/sessions\/[0-9a-f]+\/(offer|answer)$/.exec(r.url());
     if (!m || r.method() !== 'POST') return;
     const b = JSON.parse(r.postData() ?? '{}');
@@ -387,6 +390,61 @@ async function main() {
   const netPages: Page[] = [];
   const codePages: Page[] = [];
   try {
+    await step('scoring a saved video: a key tap at 4.5 s is at 4 500 ms in match.json; sought back, the board shows that moment\'s score and does not score; a reload asks for the file and comes back there (D17)', async () => {
+      const clip = path.join(OUT, 'video-score.mp4');
+      execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30', '-t', '12', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', clip]);
+      const other = path.join(OUT, 'video-other.mp4');
+      fs.copyFileSync(clip, other);
+      const { ctx, page: v } = await newPage(camBrowser, 'video');
+      const opened = () => v.evaluate(() => (document.querySelector('video')?.readyState ?? 0) >= 1 && !document.querySelector('[data-testid=video-repick]'));
+      const seekTo = (s: number) =>
+        v.evaluate((t) => new Promise<void>((r) => {
+          const el = document.querySelector('video')!;
+          el.addEventListener('seeked', () => r(), { once: true });
+          el.currentTime = t;
+        }), s);
+      await v.goto(BASE);
+      await v.locator('[data-testid=role-video-input]').setInputFiles(clip);
+      await until('setup names the file', async () => (await text(v, '[data-testid=setup-video]')).includes('video-score.mp4'));
+      await button(v, /START MATCH/).click();
+      await until('the video open', opened, 10_000);
+      await seekTo(4.5);
+      await v.keyboard.press('a');
+      await until('the popup', async () => (await v.locator('[data-testid=tag-later]').count()) > 0, 3000);
+      await v.locator('[data-testid=tag-later]').click();
+      // R-VID-8: sought back before the point, the board shows the score there and refuses to score; Latest ▸ comes back.
+      await seekTo(2);
+      await until('the past score', async () => (await text(v, '[data-testid=score-A]')) === '0' && (await v.locator('[data-testid=video-past]').count()) > 0, 3000);
+      await v.keyboard.press('a');
+      await v.waitForTimeout(500);
+      if ((await text(v, '[data-testid=score-A]')) !== '0' || (await v.locator('[data-testid=tag-later]').count())) throw new Error('a key scored from a past moment');
+      await v.locator('[data-testid=video-latest]').click();
+      await until('the latest score', async () => (await text(v, '[data-testid=score-A]')) === '1' && (await v.locator('[data-testid=video-past]').count()) === 0, 3000);
+      await v.evaluate(() => Object.defineProperty(navigator, 'canShare', { value: undefined, configurable: true }));
+      await button(v, 'Menu').click();
+      const [download] = await Promise.all([v.waitForEvent('download'), v.locator('[data-testid=menu-export]').click()]);
+      const b = JSON.parse(fs.readFileSync(await download.path(), 'utf8'));
+      const point = b.events.find((e: { type: string }) => e.type === 'point');
+      const seg = b.recording?.segments?.[0];
+      if (b.events.filter((e: { type: string }) => e.type === 'point').length !== 1) throw new Error('the refused key left a point in the log');
+      if (b.version !== 1 || b.recording?.source !== 'imported' || point?.tRec?.ms !== 4500 || point?.tRec?.segment !== 1)
+        throw new Error(`match.json: ${JSON.stringify({ version: b.version, recording: b.recording, point })}`);
+      if (seg.file !== 'video-score.mp4' || seg.width !== 640 || seg.height !== 360 || Math.abs(seg.endedAt - seg.firstFrameAt - 12_000) > 100 || b.devices.camera)
+        throw new Error(`segment ${JSON.stringify(seg)}`);
+      await v.keyboard.press('Escape');
+      await v.reload();
+      await until('asks for the file', async () => (await v.locator('[data-testid=video-repick]').count()) > 0, 10_000);
+      await v.locator('[data-testid=video-open] input').setInputFiles(other);
+      await until('a different file pointed out', async () => (await v.locator('[data-testid=video-use-anyway]').count()) > 0, 3000);
+      await v.locator('[data-testid=video-repick] input').setInputFiles(clip);
+      await until('the video open again', opened, 10_000);
+      const at = await v.evaluate(() => document.querySelector('video')!.currentTime);
+      const score = await text(v, '[data-testid=score-A]');
+      await ctx.close();
+      if (Math.abs(at - 4.5) > 0.05 || score !== '1') throw new Error(`after the reload: at ${at} s, score ${score}`);
+      return `tRec ${point.tRec.ms} ms, ${seg.width}×${seg.height}, fps ${seg.fps}; back at ${at} s`;
+    });
+
     await step('camera role opens with a live preview', async () => {
       await cam.goto(BASE);
       await button(cam, /CAMERA/).click();
