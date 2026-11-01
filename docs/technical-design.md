@@ -906,7 +906,7 @@ Stored as `matches/<matchId>/recording.json`, updated on every segment change.
   card and the badge in the frames, and drives the app's Recordings → Replays
   video → Make video in Chrome.
 
-### 6.9 Studio (D16, `ui/camera/Studio.tsx`, `ui/camera/shots.ts`)
+### 6.9 Studio (D16, `ui/camera/Studio.tsx`, `shots.ts`, `timeline.ts`)
 
 - The camera rewrites `log.json` from its mirror of the scoreboard's log
   whenever the mirror changes, after the match too (a tag added on the
@@ -922,15 +922,38 @@ Stored as `matches/<matchId>/recording.json`, updated on every segment change.
   (`adjusted`): both ends within `REPLAY_LIMITS`, at least 1 s long, the end
   not moved giving way. Late tags count from their point in the render
   (§6.8, `retro.ts`).
+- The timeline is pure geometry in `timeline.ts`, in ms on the segment's
+  file:
+  - `blocks` gives each point from the previous tap to its own; more than
+    `BREAK_MS` (45 s) before a tap becomes a break.
+  - `bars` gives each replay window, cut at the file's start, with `starAt`
+    over its middle.
+  - `overviewHit` picks the nearest star within 16 px, else the point whose
+    block (break included) holds the moment.
+  - `focusSpan` is the lane's range for a point; `zoomSpan` keeps a zoom
+    between 5 s and 3 min inside the file.
+  - `knobAt` reaches 24 px around each end, the nearer one when both reach.
+  - `dragEdge` turns a knob's x into the replay event through `adjusted`, in
+    steps of `DRAG_STEP_MS` (100 ms).
+
+  The screen draws them on canvases and keeps a dragged knob as a draft,
+  saving one event on release.
 - Each change is written at once through a short-lived recording worker
   (`put`, in order). The video plays the segment file from a blob URL made and
-  revoked in one effect; a preview seeks to the window on the recording
-  (`replays[].rec`), plays at the replay's speed and pauses at its end.
+  revoked in one effect, and is nudged to 0.04 s once loaded so a frame shows
+  (iOS shows nothing until a seek). A preview seeks to the window on the
+  recording (`replays[].rec`), plays at the replay's speed and pauses at its
+  end.
 - Proof: `pnpm render-proof`'s Studio step (also alone with `ONLY_STUDIO=1`
-  on an earlier run's outputs) gives point 1 a replay, moves its start with
-  "]", sets ×0.75 with "2", previews, re-tags it with "T", checks
-  `studio.json`, and makes the video: it must be that replay's 3 s ÷ 0.75 +
-  0.25 s longer than the same clip with the three marks it started with.
+  on an earlier run's outputs) drives design B at 844×390:
+  - it taps point 3's star on the overview (the canvases carry their span in
+    `data-span`) and checks that point 3 opens in focus;
+  - it opens point 1 from the list, gives it a replay, moves its start with
+    "]", sets ×0.75 with "2" and drags the end knob from −1 s to −0.5 s;
+  - it previews and re-tags the point, then checks `studio.json`: five
+    replays (the drag as one) and a tag;
+  - it makes the video, which must be that replay's 3.5 s ÷ 0.75 + 0.25 s
+    longer than the same clip with its three marks.
 
 ## 7. Overlay and later re-render
 
