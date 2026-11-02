@@ -19,6 +19,11 @@ export const QUALITIES: Record<Quality, QualitySpec> = {
 };
 
 export const DEFAULT_QUALITY: Quality = '1080p';
+
+/** The back lens that records: 0.5x, 1x or the telephoto (lens.ts). */
+export type Lens = 'ultrawide' | 'wide' | 'telephoto';
+export const LENSES: readonly Lens[] = ['ultrawide', 'wide', 'telephoto'];
+
 export const AUDIO_BITS_PER_SECOND = 128_000;
 
 /** §6.3: the first one `MediaRecorder.isTypeSupported` accepts. WebM is a last resort for desktop testing only. */
@@ -38,6 +43,7 @@ export const HOLD_TO_STOP_MS = 1000; // R-REC-7
 
 export interface CameraSettings {
   quality: Quality;
+  lens: Lens;
   audio: boolean; // D7
   mirrored: boolean; // R-REC-4
   delayMs: number;
@@ -58,6 +64,7 @@ export interface CameraSettings {
 
 export const DEFAULT_CAMERA_SETTINGS: CameraSettings = {
   quality: DEFAULT_QUALITY,
+  lens: 'wide',
   audio: true,
   mirrored: false,
   delayMs: DEFAULT_OVERLAY_DELAY_MS,

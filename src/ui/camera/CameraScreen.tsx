@@ -6,7 +6,7 @@ import type { LocalSource } from '../../link/local';
 import type { SlotsSnapshot } from '../../pairing/slots';
 import { saveLogo } from '../../match/persist';
 import type { Corner, LogoSize, Motion, TablePlace } from '../../overlay';
-import { DIM_AFTER_MS, LOW_MINUTES, OVERLAY_DELAYS_MS, QUALITIES, type Quality } from '../../recording/config';
+import { DIM_AFTER_MS, LOW_MINUTES, OVERLAY_DELAYS_MS, QUALITIES, type Lens, type Quality } from '../../recording/config';
 import type { CameraController } from '../../recording/controller';
 import { LOGO_TYPES, prepareLogo } from '../../recording/logo';
 import { current, isActive, segmentMs } from '../../recording/session';
@@ -263,6 +263,11 @@ export function CameraScreen({ ctrl, demo, slots, onToggleDemo, onPair, onUnpair
           </aside>
         ) : (
           <aside className="flex w-[240px] shrink-0 flex-col gap-1.5 pb-1">
+            {snap.lensNotice && (
+              <div className="text-xs leading-snug text-amber" role="status" data-testid="lens-notice">
+                {snap.lensNotice}
+              </div>
+            )}
             <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto">
               <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1.5">
                 <Seg
@@ -271,6 +276,15 @@ export function CameraScreen({ ctrl, demo, slots, onToggleDemo, onPair, onUnpair
                   options={(Object.keys(QUALITIES) as Quality[]).map((q) => [q, q])}
                   onChange={(quality) => ctrl.setSettings({ quality })}
                 />
+                {snap.lensOptions.length > 1 && (
+                  <Seg
+                    label="Lens"
+                    value={snap.lensActive ?? settings.lens}
+                    options={snap.lensOptions.map((o) => [o.lens, o.text] as [Lens, string])}
+                    onChange={(lens) => ctrl.setSettings({ lens })}
+                    disabled={snap.camera !== 'live'}
+                  />
+                )}
                 <Seg label="Audio" value={settings.audio} options={[[true, 'On'], [false, 'Off']]} onChange={(audio) => ctrl.setSettings({ audio })} />
                 <Seg
                   label="Mirror overlay"

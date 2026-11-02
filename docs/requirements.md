@@ -209,7 +209,8 @@ Each requirement has an acceptance criterion a tester can check on real phones.
   with the previous settings in one tap; a fresh install defaults to singles,
   "A" and "B", 21 points, best of 3. *Accept:* from launch to a scoring-ready
   scoreboard in at most three taps.
-- **R-SETUP-4 Camera settings.** Quality (D8), audio on/off (D7), overlay
+- **R-SETUP-4 Camera settings.** Quality (D8), the back lens (0.5x, 1x,
+  telephoto: those the phone has, 1x by default), audio on/off (D7), overlay
   mirror toggle (R-REC-4), and the remaining recordable minutes shown before
   REC (R-REC-3). *Accept:* changing quality changes the minutes estimate.
 

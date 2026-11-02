@@ -405,7 +405,8 @@ stays on the phone unless it is copied or shared.
 |  | [ BANK / TAO | 0 ]                                     |  |
 |  |     live preview = exactly what gets recorded           |  |
 |  +---------------------------------------------------------+  |
-|  Quality (1080p*)(720p)  Audio (on*)  Mirror overlay (off*)   |
+|  Quality (1080p*)(720p)  Lens (0.5x)(1x*)(Tele)  Audio (on*)  |
+|  Mirror overlay (off*)                                        |
 |  Overlay delay (0 s*)(2 s)(3 s)   Motion (Full*)(Light)(None)  |
 |  Player stats (Off*)(NOK / PAE)(BANK / TAO)  Stats at (Auto*)(4)|
 |  Opponent line (Off)(On*)   End summary (Off*)(On)            |

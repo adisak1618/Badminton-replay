@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_CAMERA_SETTINGS } from '../recording/config';
 import { loadCameraSettings, saveCameraSettings } from './prefs';
 
-describe('camera settings: the overlay motion set (C1 "Motion")', () => {
+describe('camera settings', () => {
   const store = new Map<string, string>();
   beforeEach(() => {
     store.clear();
@@ -20,5 +20,15 @@ describe('camera settings: the overlay motion set (C1 "Motion")', () => {
     expect(loadCameraSettings().overlayMotion).toBe('light');
     store.set('bs.camera', JSON.stringify({ overlayMotion: 'fast' }));
     expect(loadCameraSettings().overlayMotion).toBe('full');
+  });
+
+  it('the lens is 1x by default and for settings saved before it existed, and a saved lens is kept', () => {
+    expect(loadCameraSettings().lens).toBe('wide');
+    store.set('bs.camera', JSON.stringify({ quality: '720p' }));
+    expect(loadCameraSettings()).toMatchObject({ quality: '720p', lens: 'wide' });
+    saveCameraSettings({ ...DEFAULT_CAMERA_SETTINGS, lens: 'ultrawide' });
+    expect(loadCameraSettings().lens).toBe('ultrawide');
+    store.set('bs.camera', JSON.stringify({ lens: 'fisheye' }));
+    expect(loadCameraSettings().lens).toBe('wide');
   });
 });
