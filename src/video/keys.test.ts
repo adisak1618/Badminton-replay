@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SHORTCUTS, isVideoAction, keyAction, typingIn, type KeyPress } from './keys';
+import { SHORTCUTS, isVideoAction, keyAction, remoteZone, shellScoreEcho, typingIn, type KeyPress } from './keys';
 
 const k = (key: string, mods: Partial<KeyPress> = {}): KeyPress => ({ key, shiftKey: false, altKey: false, ctrlKey: false, metaKey: false, ...mods });
 
@@ -55,5 +55,21 @@ describe('keyboard shortcuts when scoring a video (D17, R-VID-4)', () => {
   it('lists every key it answers to', () => {
     const listed = SHORTCUTS.map(([keys]) => keys).join(' ');
     for (const key of ['Space', 'K', '←', 'Shift', '1 / 2 / 3', 'M', 'A', 'B or L', 'U', 'R', 'T', 'E', '?']) expect(listed).toContain(key);
+  });
+});
+
+describe('the iPhone shell\'s remote on the live board', () => {
+  it('maps only the two score buttons to the sides as displayed', () => {
+    expect(remoteZone('score-left')).toBe('left');
+    expect(remoteZone('score-right')).toBe('right');
+    for (const other of ['volume-up', 'volume-down', 'play-pause', 'next', 'key:a', '', undefined, null]) expect(remoteZone(other)).toBeNull();
+  });
+
+  it('treats the keydown that comes with a score button as the same press, and no other key', () => {
+    expect(shellScoreEcho({ isTrusted: false }, 'score-left')).toBe(true);
+    expect(shellScoreEcho({ isTrusted: false }, 'score-right')).toBe(true);
+    expect(shellScoreEcho({ isTrusted: true }, 'score-left')).toBe(false); // a real key pressed after a remote press
+    expect(shellScoreEcho({ isTrusted: false }, 'key:a')).toBe(false); // a clicker's key the shell forwards
+    expect(shellScoreEcho({ isTrusted: true }, undefined)).toBe(false); // plain Safari
   });
 });

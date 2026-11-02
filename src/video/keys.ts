@@ -1,5 +1,6 @@
-// Keyboard shortcuts while scoring a saved video on a computer (D17, R-VID-4; ux-design.md S3v). Pure: a key press
-// to an action. The board does the scoring ones exactly as a tap would; the player does the rest.
+// Keyboard shortcuts while scoring a saved video on a computer (D17, R-VID-4; ux-design.md S3v), and the board's own
+// on the live scoreboard, for a keyboard-type clicker. Pure: a key press to an action. The board does the scoring ones
+// exactly as a tap would; the player does the rest.
 
 export type VideoAction = 'play' | 'back5' | 'fwd5' | 'back1' | 'fwd1' | 'slow' | 'normal' | 'fast' | 'mute' | 'help';
 export type BoardAction = 'left' | 'right' | 'undo' | 'redo' | 'replay' | 'tag' | 'ends';
@@ -92,4 +93,18 @@ export function typingIn(target: EventTarget | null): boolean {
     return !['range', 'button', 'checkbox', 'radio', 'file', 'submit', 'reset'].includes(type);
   }
   return el.isContentEditable === true;
+}
+
+/** The side a button of the iPhone shell's `shell-remote` event scores for, or null for any other button. */
+export function remoteZone(button: unknown): 'left' | 'right' | null {
+  return button === 'score-left' ? 'left' : button === 'score-right' ? 'right' : null;
+}
+
+/**
+ * The shell delivers a point twice in one go: `shell-remote`, then an a / b `keydown` for the video mode. That keydown
+ * is the same press, so the live board, which has already scored it, must not count it. It is the script's (untrusted)
+ * and the shell's last button is a score; a real key, or a clicker's key forwarded by the shell (`key:a`), is neither.
+ */
+export function shellScoreEcho(e: { isTrusted: boolean }, lastButton: unknown): boolean {
+  return !e.isTrusted && remoteZone(lastButton) !== null;
 }

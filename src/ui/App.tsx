@@ -195,6 +195,7 @@ export function App() {
         onNewMatch={newMatch}
         onUpdate={update}
         onPair={openPair}
+        covered={pair !== false}
       />,
     );
   if (screen === 'camera') return <CameraRole onLeave={() => setScreen('role')} onUpdate={update} />;

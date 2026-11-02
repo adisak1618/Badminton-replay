@@ -42,7 +42,7 @@ import { RallyList } from './reasons/RallyList';
 import { StatsCard, type SummaryControl } from './reasons/StatsCard';
 import { TagSheet } from './reasons/TagSheet';
 import { ReplayPill } from './ReplayPill';
-import { isVideoAction, keyAction, typingIn, type VideoAction } from '../video/keys';
+import { isVideoAction, keyAction, remoteZone, shellScoreEcho, typingIn, type BoardAction, type VideoAction } from '../video/keys';
 
 const REDO_WINDOW_MS = 5000;
 /** After a tap that counted, the popup rises once the flash and the new score have shown (D15). */
@@ -97,9 +97,11 @@ interface Props {
   onUpdate: (() => void) | null;
   onPair: () => void;
   video?: VideoMode;
+  /** Something outside the board covers it (the pairing screen): the keys and the remote leave the score alone. */
+  covered?: boolean;
 }
 
-export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, resumed, onContinue, onNewMatch, onUpdate, onPair, video }: Props) {
+export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, resumed, onContinue, onNewMatch, onUpdate, onPair, video, covered }: Props) {
   const camera = useCameraLink();
   const wakeLine = wakeHint(useSyncExternalStore(subscribeWake, wakeStatus));
   const [sheet, setSheet] = useState<'none' | 'menu' | 'correct'>('none');
@@ -289,14 +291,33 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
     onPopup.current?.(popupOpen);
   }, [popupOpen]);
   // Keys (R-VID-4): the player's always work; the score keys do what a tap would, never under a sheet or the list.
+  // On the live board the same keys serve a keyboard-type clicker; there is no player, so its keys are left alone.
   const onKey = useRef<(e: KeyboardEvent) => void>(undefined);
   onKey.current = (e: KeyboardEvent) => {
-    if (!video || typingIn(e.target)) return;
+    if (typingIn(e.target)) return;
     const a = keyAction(e);
     if (!a) return;
+    if (isVideoAction(a)) {
+      if (!video) return;
+      e.preventDefault();
+      return video.onKey(a);
+    }
     e.preventDefault();
-    if (isVideoAction(a)) return video.onKey(a);
-    if (sheet !== 'none' || listOpen || resumed || !video.ready) return;
+    if (!video) {
+      // A held key is one press beside the court. The shell's a / b keydown repeats a point onRemote has counted.
+      const shell = (window as { badmintonShell?: { lastButton?: unknown } }).badmintonShell;
+      if (e.repeat || shellScoreEcho(e, shell?.lastButton)) return;
+    }
+    boardAction(a);
+  };
+  // The iPhone shell's Bluetooth remote: a saved video scores from the keydown the shell also sends, so only live here.
+  const onRemote = useRef<(e: Event) => void>(undefined);
+  onRemote.current = (e: Event) => {
+    const zone = remoteZone((e as CustomEvent<{ button?: unknown } | null>).detail?.button);
+    if (zone && !video) boardAction(zone);
+  };
+  const boardAction = (a: BoardAction) => {
+    if (sheet !== 'none' || listOpen || resumed || covered || (video && !video.ready)) return;
     const last = all[all.length - 1];
     switch (a) {
       case 'left':
@@ -322,11 +343,15 @@ export function Scoreboard({ store, config, events, state: s, prefs, setPrefs, r
     }
   };
   useEffect(() => {
-    if (!video) return;
-    const h = (e: KeyboardEvent) => onKey.current?.(e);
-    addEventListener('keydown', h);
-    return () => removeEventListener('keydown', h);
-  }, [!!video]);
+    const key = (e: KeyboardEvent) => onKey.current?.(e);
+    const remote = (e: Event) => onRemote.current?.(e);
+    addEventListener('keydown', key);
+    addEventListener('shell-remote', remote);
+    return () => {
+      removeEventListener('keydown', key);
+      removeEventListener('shell-remote', remote);
+    };
+  }, []);
   const onCancel = (e: ReactPointerEvent) => {
     clearTimer(e.pointerId);
     recognizer.current.cancel(e.pointerId);
