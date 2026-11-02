@@ -445,6 +445,96 @@ async function main() {
       return `tRec ${point.tRec.ms} ms, ${seg.width}×${seg.height}, fps ${seg.fps}; back at ${at} s`;
     });
 
+    await step('the iPhone shell\'s remote: one press is one point on the live board and in a saved video, never under a popup, sheet, pairing screen or a resume, nor after the game; text fields keep their keys', async () => {
+      const { ctx, page: r } = await newPage(camBrowser, 'remote');
+      await r.addInitScript(() => {
+        (window as unknown as { badmintonShell: object }).badmintonShell = { version: 'e2e', lastButton: null };
+      });
+      // What the shell's PageBridge.dispatchScript runs for a point: the event, then the page's own key for it.
+      const press = (p: Page, side: 'left' | 'right') =>
+        p.evaluate((side) => {
+          const button = `score-${side}`;
+          const key = side === 'left' ? 'a' : 'b';
+          (window as unknown as { badmintonShell: { lastButton: string } }).badmintonShell.lastButton = button;
+          window.dispatchEvent(new CustomEvent('shell-remote', { detail: { button, source: 'volume', ts: Date.now() } }));
+          (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent('keydown', { key, code: `Key${key.toUpperCase()}`, bubbles: true, cancelable: true, composed: true }));
+        }, side);
+      const later = async (p: Page) => {
+        const b = p.locator('[data-testid=tag-later]');
+        await b.waitFor({ timeout: 3000 });
+        await b.click();
+      };
+      const held = async (p: Page, want: string, what: string) => {
+        await p.waitForTimeout(400);
+        if ((await score(p)) !== want) throw new Error(`${what}: ${await score(p)}, wanted ${want}`);
+      };
+      await r.goto(BASE);
+      await button(r, /SCOREBOARD/).click();
+      await button(r, 'START MATCH').click();
+      await until('board', async () => (await r.locator('[data-zone=left]').count()) > 0);
+      await press(r, 'left');
+      await held(r, '1-0', 'one press, left');
+      await r.locator('[data-testid=tag-later]').waitFor({ timeout: 3000 });
+      await press(r, 'left');
+      await held(r, '1-0', 'under the popup');
+      await later(r);
+      await press(r, 'right');
+      await held(r, '1-1', 'one press, right');
+      await later(r);
+      // A keyboard-type clicker in plain Safari, and a clicker's key forwarded by the shell.
+      await r.keyboard.press('a');
+      await held(r, '2-1', 'a real key');
+      await later(r);
+      await r.evaluate(() => {
+        (window as unknown as { badmintonShell: { lastButton: string } }).badmintonShell.lastButton = 'key:b';
+        window.dispatchEvent(new CustomEvent('shell-remote', { detail: { button: 'key:b', source: 'keyboard', ts: Date.now() } }));
+        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', code: 'KeyB', bubbles: true, cancelable: true }));
+      });
+      await held(r, '2-2', 'a forwarded clicker key');
+      await later(r);
+      await button(r, 'Menu').click();
+      await press(r, 'left');
+      await r.keyboard.press('a');
+      await held(r, '2-2', 'under the menu');
+      await r.keyboard.press('Escape');
+      await button(r, /Close/).click().catch(() => {});
+      await r.locator('[data-testid=pair-chip]').click();
+      await press(r, 'right');
+      await r.locator('[data-testid=pair-code]').click();
+      await r.keyboard.type('ab');
+      await held(r, '2-2', 'under the pairing screen, or typing its code');
+      await button(r, 'Close').click();
+      await r.reload();
+      await until('the resume', async () => (await r.getByRole('button', { name: 'Continue the match' }).count()) > 0);
+      await press(r, 'left');
+      await held(r, '2-2', 'resumed, not continued');
+      await r.getByRole('button', { name: 'Continue the match' }).click();
+      // On to 21 (through the interval at 11, where a press still scores), then nothing more after the game.
+      for (let a = 3; a <= 21; a++) {
+        await press(r, 'left');
+        await until(`left at ${a}`, async () => (await score(r)) === `${a}-2`, 3000);
+        await later(r);
+      }
+      await press(r, 'left');
+      await press(r, 'right');
+      await held(r, '21-2', 'after the game');
+      await ctx.close();
+
+      // A saved video scores from the keydown alone: the event must not add a second point.
+      const { ctx: vCtx, page: v } = await newPage(camBrowser, 'remote-video');
+      await v.addInitScript(() => {
+        (window as unknown as { badmintonShell: object }).badmintonShell = { version: 'e2e', lastButton: null };
+      });
+      await v.goto(BASE);
+      await v.locator('[data-testid=role-video-input]').setInputFiles(path.join(OUT, 'video-score.mp4'));
+      await button(v, /START MATCH/).click();
+      await until('the video open', () => v.evaluate(() => (document.querySelector('video')?.readyState ?? 0) >= 1), 10_000);
+      await press(v, 'left');
+      await held(v, '1-0', 'one press in a video');
+      await vCtx.close();
+      return 'one point a press, in both modes';
+    });
+
     await step('camera role opens with a live preview', async () => {
       await cam.goto(BASE);
       await button(cam, /CAMERA/).click();
