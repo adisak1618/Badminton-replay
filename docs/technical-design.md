@@ -689,6 +689,21 @@ const cam = await navigator.mediaDevices.getUserMedia({
 The phone must already be in landscape when the stream starts; iOS captures
 in the device orientation at that moment (A6).
 
+**Lens (`recording/lens.ts`).** iOS 17+ lists each back lens as its own video
+input, classified by label: "Back Ultra Wide Camera" is 0.5x, "Back Camera" 1x,
+"Back Telephoto Camera" the telephoto; dual and triple cameras are virtual and
+never chosen while a physical lens is listed. When only one camera is listed
+and its track reports a `zoom` capability, the lenses are zoom stops (0.5x, 1x,
+2x, those in its range) through `applyConstraints`. Unknown labels are 1x only.
+Labels are empty until the first permission grant, so a first open uses the
+default camera, reads the labels, stops it, and reopens with `deviceId: { exact }`
+plus the same size and rate constraints. A lens that cannot open falls back to
+the default camera with a short notice in C1; the setting is kept, so tapping it
+retries. The lens is a camera setting, locked while recording; switching reopens
+the stream and re-attaches the compositor, whose canvas (and so the recorder's
+track) stays the same. Each segment records the lens that really showed
+(`lens` in §6.6, absent in older recordings).
+
 ### 6.2 Compositing (D9)
 
 ```

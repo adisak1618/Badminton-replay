@@ -390,6 +390,111 @@ async function main() {
   const netPages: Page[] = [];
   const codePages: Page[] = [];
   try {
+    await step('lens: an iPhone with three back lenses (labels stubbed on three fake cameras): picked, kept over a reload, frames still drawn after a switch, recorded in the segment; a lens that fails falls back with a notice', async () => {
+      const lensBrowser = await launch(['--use-fake-device-for-media-stream=device-count=3']);
+      const ctx = await lensBrowser.newContext({ viewport: VIEW, permissions: ['camera', 'microphone'] });
+      await ctx.addInitScript(() => {
+        const md = navigator.mediaDevices;
+        const enumerate = md.enumerateDevices.bind(md);
+        const gum = md.getUserMedia.bind(md);
+        const labels = ['Back Camera', 'Back Ultra Wide Camera', 'Back Telephoto Camera'];
+        md.enumerateDevices = async () => {
+          let i = 0;
+          return (await enumerate()).map((d) => {
+            if (d.kind !== 'videoinput' || !d.label) return d;
+            const label = labels[i++];
+            return { kind: d.kind, deviceId: d.deviceId, groupId: d.groupId, label, toJSON: () => ({}) } as MediaDeviceInfo;
+          });
+        };
+        md.getUserMedia = async (c) => {
+          const want = ((c?.video as MediaTrackConstraints)?.deviceId as { exact?: string } | undefined)?.exact;
+          const w = window as unknown as { __failLens?: string };
+          if (want && w.__failLens) {
+            const listed = await md.enumerateDevices();
+            if (listed.find((d) => d.deviceId === want)?.label === w.__failLens) throw new DOMException('no', 'OverconstrainedError');
+          }
+          return gum(c);
+        };
+      });
+      const page = await ctx.newPage();
+      page.on('pageerror', (e) => log(`  [lens pageerror] ${e.message}`));
+      const shows = () =>
+        page.evaluate(async () => {
+          const id = ((document.querySelector('video') as HTMLVideoElement | null)?.srcObject as MediaStream | null)?.getVideoTracks()[0]?.getSettings().deviceId;
+          return (await navigator.mediaDevices.enumerateDevices()).find((d) => d.deviceId === id)?.label ?? null;
+        });
+      const pressed = (name: string) => page.getByRole('button', { name, exact: true }).getAttribute('aria-pressed');
+      const pick = async (name: string, label: string) => {
+        await page.getByRole('button', { name, exact: true }).click();
+        await until(`${label} showing`, async () => (await shows()) === label, 10_000);
+        await until(`${name} live`, async () => (await page.getByRole('button', { name, exact: true }).isEnabled()) && (await pressed(name)) === 'true', 10_000);
+      };
+      await page.goto(BASE);
+      await button(page, /CAMERA/).click();
+      await until('the lenses offered', async () => (await page.getByRole('button', { name: '0.5x', exact: true }).count()) === 1, 15_000);
+      if ((await page.getByRole('button', { name: 'Tele', exact: true }).count()) !== 1) throw new Error('no telephoto option');
+      if ((await pressed('1x')) !== 'true' || (await shows()) !== 'Back Camera') throw new Error(`default is not 1x: ${await shows()}`);
+
+      await page.getByRole('button', { name: 'Menu' }).click();
+      await page.getByRole('button', { name: /Demo score/ }).click();
+      await button(page, /Start demo match/).click();
+      await pick('0.5x', 'Back Ultra Wide Camera');
+      // The compositor keeps drawing the new track; 00-lens-ultrawide.png shows the score panel on it.
+      const frame = () =>
+        page.evaluate(() => {
+          const c = document.querySelector('canvas.preview-canvas') as HTMLCanvasElement;
+          return { w: c.width, h: c.height, data: c.toDataURL('image/jpeg', 0.5) };
+        });
+      const f1 = await frame();
+      await until('frames still advancing on the new lens', async () => (await frame()).data !== f1.data, 5000);
+      await page.screenshot({ path: path.join(OUT, '00-lens-ultrawide.png') });
+
+      await page.reload();
+      await button(page, /CAMERA/).click().catch(() => {}); // a reload may land straight back in the camera role
+      await until('the chosen lens after a reload', async () => (await shows()) === 'Back Ultra Wide Camera', 15_000);
+
+      await page.evaluate(() => void ((window as unknown as { __failLens?: string }).__failLens = 'Back Telephoto Camera'));
+      await until('picker live', () => page.getByRole('button', { name: 'Tele', exact: true }).isEnabled(), 10_000);
+      await page.getByRole('button', { name: 'Tele', exact: true }).click();
+      await until('the fallback notice', async () => /telephoto.*default camera/.test((await text(page, '[data-testid=lens-notice]')) ?? ''), 10_000);
+      await until('the camera live on the default', () => page.locator('[data-testid=rec-button]').isEnabled(), 10_000);
+      await page.screenshot({ path: path.join(OUT, '00-lens-fallback.png') });
+      await page.evaluate(() => void ((window as unknown as { __failLens?: string }).__failLens = undefined));
+
+      await pick('0.5x', 'Back Ultra Wide Camera');
+      if (await page.locator('[data-testid=lens-notice]').count()) throw new Error('the notice outlived the fallback');
+      await page.locator('[data-testid=rec-button]').click();
+      await until('recording', async () => (await page.getByRole('button', { name: /Hold to stop/ }).isEnabled()) || null, 10_000);
+      if (await page.getByRole('button', { name: '0.5x', exact: true }).count()) throw new Error('the lens picker is there while recording');
+      await page.waitForTimeout(3000);
+      const hold = (await page.getByRole('button', { name: /Hold to stop/ }).boundingBox())!;
+      await page.mouse.move(hold.x + hold.width / 2, hold.y + hold.height / 2);
+      await page.mouse.down();
+      await page.waitForTimeout(1300);
+      await page.mouse.up();
+      await until('stopped', async () => (await page.locator('[data-testid=rec-button]').count()) > 0, 10_000);
+      const seg = await until(
+        'the segment on disk',
+        () =>
+          page.evaluate(async () => {
+            const root = await navigator.storage.getDirectory();
+            const matches = await root.getDirectoryHandle('matches');
+            for await (const [, h] of (matches as unknown as { entries(): AsyncIterable<[string, FileSystemHandle]> }).entries()) {
+              if (h.kind !== 'directory') continue;
+              const dir = h as FileSystemDirectoryHandle;
+              const rec = JSON.parse(await (await (await dir.getFileHandle('recording.json')).getFile()).text());
+              const s = rec.segments.at(-1);
+              if (s?.endedAt) return { lens: s.lens, bytes: s.bytes, size: (await (await dir.getFileHandle(s.file)).getFile()).size };
+            }
+            return null;
+          }),
+        10_000,
+      );
+      if (seg.lens !== 'ultrawide' || !(seg.size > 0)) throw new Error(`segment ${JSON.stringify(seg)}`);
+      await lensBrowser.close();
+      return `segment lens ${seg.lens}, ${seg.size} bytes`;
+    });
+
     await step('scoring a saved video: a key tap at 4.5 s is at 4 500 ms in match.json; sought back, the board shows that moment\'s score and does not score; a reload asks for the file and comes back there (D17)', async () => {
       const clip = path.join(OUT, 'video-score.mp4');
       execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30', '-t', '12', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', clip]);

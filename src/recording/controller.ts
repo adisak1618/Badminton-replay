@@ -35,7 +35,9 @@ import {
   TIMESLICE_MS,
   minutesLeft,
   type CameraSettings,
+  type Lens,
 } from './config';
+import { lensOptions, openLens, zoomRange, type LensOption } from './lens';
 import { LOG_FILE, MATCHES_DIR, RECORDING_FILE, newMeta, recordingId, type RecordingMeta } from './meta';
 import { current, initialSession, isActive, sessionReduce, type EndReason, type Session, type SessionAction } from './session';
 import { findRecording, opfsSupported, requestPersistence, storageFigures, type StorageFigures } from './storage';
@@ -47,6 +49,10 @@ export interface CameraSnapshot {
   settings: CameraSettings;
   camera: CameraState;
   cameraError: string | null;
+  /** The lenses this phone offers (known once the camera has opened), the one showing, and why it is not as asked. */
+  lensOptions: LensOption[];
+  lensActive: Lens | null;
+  lensNotice: string | null;
   opfs: 'checking' | 'ok' | 'unavailable';
   session: Session;
   recId: string | null;
@@ -134,6 +140,9 @@ export class CameraController {
       settings,
       camera: 'off',
       cameraError: null,
+      lensOptions: [],
+      lensActive: null,
+      lensNotice: null,
       opfs: 'checking',
       session: initialSession,
       recId: null,
@@ -191,6 +200,7 @@ export class CameraController {
     document.addEventListener('visibilitychange', this.onVisibility);
     document.fonts?.addEventListener?.('loadingdone', () => this.fontsEpoch++);
     void overlayFonts().then(() => this.fontsEpoch++);
+    navigator.mediaDevices?.addEventListener?.('devicechange', () => void this.refreshLenses());
     setInterval(() => this.tick(), 1000);
     void this.checkOpfs();
     void this.refreshStorage();
@@ -305,7 +315,9 @@ export class CameraController {
       const q = QUALITIES[settings.quality];
       this.compositor.setSize(q.width, q.height);
     }
-    if ((settings.quality !== prev.quality || settings.audio !== prev.audio) && this.stream) void this.startCamera();
+    // Tapping the lens already asked for retries it after a fallback; the lens already showing is left alone.
+    const lensTapped = patch.lens !== undefined && (patch.lens !== prev.lens || patch.lens !== this.snap.lensActive);
+    if ((settings.quality !== prev.quality || settings.audio !== prev.audio || lensTapped) && this.stream) void this.startCamera();
   }
 
   async startCamera(): Promise<void> {
@@ -313,26 +325,25 @@ export class CameraController {
     this.wantCamera = true;
     this.releaseStream();
     this.set({ camera: 'starting', cameraError: null });
-    const { quality, audio } = this.snap.settings;
+    const { quality, audio, lens } = this.snap.settings;
     const q = QUALITIES[quality];
-    let stream: MediaStream;
+    let opened: Awaited<ReturnType<typeof openLens>>;
     try {
       // §6.1; the phone must already be in landscape (A6).
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: q.width }, height: { ideal: q.height }, frameRate: { ideal: q.fps } },
-        audio: audio ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false } : false,
-      });
+      opened = await openLens(navigator.mediaDevices, lens, q, audio);
     } catch (err) {
       const e = cameraErrorText(err);
       this.set({ camera: e.state, cameraError: e.text });
       return;
     }
+    const { stream } = opened;
     if (!this.wantCamera) {
       // The user left the camera screen while the permission prompt was up.
       for (const t of stream.getTracks()) t.stop();
       return this.set({ camera: 'off' });
     }
     this.stream = stream;
+    this.set({ lensOptions: opened.options, lensActive: opened.active, lensNotice: opened.notice });
     for (const t of stream.getTracks()) {
       t.addEventListener('ended', () => this.onTrackLost(stream));
       t.addEventListener('mute', () => this.onTrackLost(stream));
@@ -340,12 +351,21 @@ export class CameraController {
     this.compositor.setSize(q.width, q.height);
     await this.compositor.attach(stream);
     this.set({ camera: 'live' });
+    if (this.snap.settings.lens !== lens) return this.startCamera(); // chosen while this one was opening
     keepScreenOn(true); // the camera waits for a remote REC (D11), so it must not sleep in C1 either
     if (!this.snap.persistAsked) {
       this.set({ persistAsked: true });
       await requestPersistence();
       void this.refreshStorage(true);
     }
+  }
+
+  /** A camera appeared or went away, or the labels became known: the picker follows, the open stream stays. */
+  private async refreshLenses(): Promise<void> {
+    const stream = this.stream;
+    if (!stream) return;
+    const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+    if (stream === this.stream) this.set({ lensOptions: lensOptions(devices, zoomRange(stream.getVideoTracks()[0])) });
   }
 
   private releaseStream(): void {
@@ -494,6 +514,7 @@ export class CameraController {
         width,
         height,
         fps: q.fps,
+        lens: this.snap.lensActive ?? settings.lens,
         startLatencyMs: START_LATENCY_MS,
         overlay: {
           box: layout.score ?? { x: 0, y: 0, w: 0, h: 0 },

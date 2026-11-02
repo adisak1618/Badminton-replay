@@ -4,7 +4,7 @@ import { DEFAULT_SETUP, PALETTE, type MatchSetup } from '../engine';
 import { randomId } from '../engine';
 import { CORNERS, LOGO_SIZES, TABLE_PLACES, type Corner, type LogoSize, type TablePlace } from '../overlay/layout';
 import { MOTIONS, type Motion } from '../overlay/motion';
-import { DEFAULT_CAMERA_SETTINGS, OVERLAY_DELAYS_MS, QUALITIES, type CameraSettings } from '../recording/config';
+import { DEFAULT_CAMERA_SETTINGS, LENSES, OVERLAY_DELAYS_MS, QUALITIES, type CameraSettings } from '../recording/config';
 import type { Lang } from '../speech/phrases';
 
 export type Role = 'scoreboard' | 'camera';
@@ -93,6 +93,7 @@ export function loadCameraSettings(): CameraSettings {
     ...DEFAULT_CAMERA_SETTINGS,
     ...s,
     quality,
+    lens: s.lens && LENSES.includes(s.lens) ? s.lens : DEFAULT_CAMERA_SETTINGS.lens,
     delayMs,
     scoreCorner: corner(s.scoreCorner, DEFAULT_CAMERA_SETTINGS.scoreCorner),
     logoCorner: corner(s.logoCorner, DEFAULT_CAMERA_SETTINGS.logoCorner),

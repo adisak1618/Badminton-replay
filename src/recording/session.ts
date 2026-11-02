@@ -2,6 +2,7 @@
 // controller feeds it what the browser reports; the UI and the `rec` report are read from it.
 import type { Team } from '../engine';
 import type { Box, Corner, LogoSize, Motion, PanelSize, TablePlace } from '../overlay';
+import type { Lens } from './config';
 
 export type EndReason = 'user' | 'interrupted' | 'quota' | 'error';
 
@@ -13,6 +14,8 @@ export interface Segment {
   width: number;
   height: number;
   fps: number;
+  /** The back lens that shot this segment (absent in older recordings). */
+  lens?: Lens;
   startedAt: number; // camera wall clock at the recorder 'start' event
   startLatencyMs: number; // A8, default 0
   /**
